@@ -55,6 +55,17 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
+  cloud:
+    aws:
+      s3:
+        endpoint: http://localhost:9000
+        path-style-access-enabled: true
+      region:
+        static: us-east-1
+      credentials:
+        access-key: admin
+        secret-key: password
+
 management:
   endpoints:
     web:
