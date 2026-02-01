@@ -99,7 +99,7 @@ public class CategoryService {
         Category parent = null;
         if(request.parentId() != null){
             if(request.parentId().equals(categoryId)){
-                throw new DomainException(DomainExceptionCode.CATEGORY_SAME_PARENT);
+                throw new DomainException(DomainExceptionCode.DUPLICATE_PARENT);
             }
             parent = categoryRepository.findById(request.parentId())
                     .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_CATEGORY));

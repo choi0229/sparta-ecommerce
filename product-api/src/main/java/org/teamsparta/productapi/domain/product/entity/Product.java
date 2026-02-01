@@ -36,7 +36,7 @@ public class Product {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
-    Status status = Status.ACTIVE;
+    Status status;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "category_id", nullable = false)
@@ -56,11 +56,15 @@ public class Product {
     @OneToMany(mappedBy = "product", fetch = FetchType.LAZY, cascade = CascadeType.ALL, orphanRemoval = true)
     List<ProductImage> productImages = new ArrayList<>();
 
+    @OneToMany(mappedBy = "product", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
+    List<ProductVariant> productVariants = new ArrayList<>();
+
     @Builder
-    public Product(String name, String brandName, Category category, String description) {
+    public Product(String name, String brandName, Category category, String description, Status status) {
         this.name = name;
         this.brandName = brandName;
         this.category = category;
         this.description = description;
+        this.status = status;
     }
 }

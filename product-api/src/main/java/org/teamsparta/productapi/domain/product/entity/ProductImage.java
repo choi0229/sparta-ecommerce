@@ -62,4 +62,8 @@ public class ProductImage {
         this.sortOrder = sortOrder;
         this.isPrimary = isPrimary;
     }
+
+    public void updatePrimary(Boolean isPrimary){
+        this.isPrimary = isPrimary;
+    }
 }

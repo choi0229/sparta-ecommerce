@@ -60,6 +60,7 @@ spring:
       s3:
         endpoint: http://localhost:9000
         path-style-access-enabled: true
+        bucket: product-images
       region:
         static: us-east-1
       credentials:
