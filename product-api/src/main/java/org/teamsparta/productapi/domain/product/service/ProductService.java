@@ -2,6 +2,9 @@ package org.teamsparta.productapi.domain.product.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.productapi.domain.category.entity.Category;
@@ -9,10 +12,12 @@ import org.teamsparta.productapi.domain.category.repository.CategoryRepository;
 import org.teamsparta.productapi.domain.product.dto.request.ProductCreateRequest;
 import org.teamsparta.productapi.domain.product.dto.request.ProductImageAddRequest;
 import org.teamsparta.productapi.domain.product.dto.response.ProductDetailResponse;
+import org.teamsparta.productapi.domain.product.dto.response.ProductSummaryResponse;
 import org.teamsparta.productapi.domain.product.entity.Product;
 import org.teamsparta.productapi.domain.product.entity.ProductImage;
 import org.teamsparta.productapi.domain.product.entity.ProductVariant;
 import org.teamsparta.productapi.domain.product.repository.ProductRepository;
+import org.teamsparta.productapi.domain.product.repository.ProductSpecs;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
 import org.teamsparta.productapi.global.enums.ImageType;
 import org.teamsparta.productapi.global.enums.Status;
@@ -125,12 +130,27 @@ public class ProductService {
 
     @Transactional(readOnly = true)
     public ProductDetailResponse getProductDetail(Long productId){
-        Product product = productRepository.findByWithAllById()
+        Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_PRODUCT));
+        
+        return ProductDetailResponse.from(product);
+    }
 
-        return ProductDetailResponse.builder()
-                .id(product.getId())
-                .build();
+    @Transactional(readOnly = true)
+    public Page<ProductSummaryResponse> searchProducts(
+            String keyword,
+            String brandName,
+            Long categoryId,
+            Status status,
+            Pageable pageable
+    ){
+        Specification<Product> spec = Specification.where(ProductSpecs.nameLike(keyword))
+                .and(ProductSpecs.brandLike(brandName))
+                .and(ProductSpecs.categoryEq(categoryId))
+                .and(ProductSpecs.statusEq(status));
+
+        Page<Product> productPage = productRepository.findAll(spec, pageable);
+        return productPage.map(ProductSummaryResponse::from);
     }
 
 }

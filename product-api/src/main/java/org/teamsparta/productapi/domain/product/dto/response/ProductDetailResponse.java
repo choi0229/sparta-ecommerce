@@ -9,7 +9,6 @@ import java.time.ZonedDateTime;
 import java.util.Comparator;
 import java.util.List;
 
-@Builder
 public record ProductDetailResponse(Long id,
                                     String name,
                                     String brandName,
