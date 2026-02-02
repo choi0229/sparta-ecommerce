@@ -132,7 +132,7 @@ public class ProductService {
     public ProductDetailResponse getProductDetail(Long productId){
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_PRODUCT));
-        
+
         return ProductDetailResponse.from(product);
     }
 
