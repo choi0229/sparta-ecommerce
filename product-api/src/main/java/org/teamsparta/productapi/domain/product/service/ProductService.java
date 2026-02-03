@@ -16,10 +16,9 @@ import org.teamsparta.productapi.domain.product.dto.response.ProductSummaryRespo
 import org.teamsparta.productapi.domain.product.entity.Product;
 import org.teamsparta.productapi.domain.product.entity.ProductImage;
 import org.teamsparta.productapi.domain.product.entity.ProductVariant;
+import org.teamsparta.productapi.domain.product.repository.ProductQueryRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductRepository;
-import org.teamsparta.productapi.domain.product.repository.ProductSpecs;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
-import org.teamsparta.productapi.global.enums.ImageType;
 import org.teamsparta.productapi.global.enums.Status;
 import org.teamsparta.productapi.global.exception.DomainException;
 import org.teamsparta.productapi.global.exception.DomainExceptionCode;
@@ -35,6 +34,7 @@ public class ProductService {
     private final ProductRepository productRepository;
     private final CategoryRepository categoryRepository;
     private final ProductVariantRepository productVariantRepository;
+    private final ProductQueryRepository productQueryRepository;
 
     @Transactional
     public void createProduct(ProductCreateRequest request) {
@@ -144,12 +144,7 @@ public class ProductService {
             Status status,
             Pageable pageable
     ){
-        Specification<Product> spec = Specification.where(ProductSpecs.nameLike(keyword))
-                .and(ProductSpecs.brandLike(brandName))
-                .and(ProductSpecs.categoryEq(categoryId))
-                .and(ProductSpecs.statusEq(status));
-
-        Page<Product> productPage = productRepository.findAll(spec, pageable);
+        Page<Product> productPage = productQueryRepository.searchProducts(keyword, brandName, categoryId, status, pageable);
         return productPage.map(ProductSummaryResponse::from);
     }
 
