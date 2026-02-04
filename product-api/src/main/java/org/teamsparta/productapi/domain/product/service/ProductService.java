@@ -7,6 +7,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.teamsparta.productapi.domain.category.entity.Category;
 import org.teamsparta.productapi.domain.category.repository.CategoryRepository;
 import org.teamsparta.productapi.domain.product.dto.request.ProductCreateRequest;
@@ -16,6 +18,8 @@ import org.teamsparta.productapi.domain.product.dto.response.ProductSummaryRespo
 import org.teamsparta.productapi.domain.product.entity.Product;
 import org.teamsparta.productapi.domain.product.entity.ProductImage;
 import org.teamsparta.productapi.domain.product.entity.ProductVariant;
+import org.teamsparta.productapi.domain.product.event.ProductVariantEvent;
+import org.teamsparta.productapi.domain.product.event.ProductVariantPublisher;
 import org.teamsparta.productapi.domain.product.repository.ProductQueryRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
@@ -35,6 +39,7 @@ public class ProductService {
     private final CategoryRepository categoryRepository;
     private final ProductVariantRepository productVariantRepository;
     private final ProductQueryRepository productQueryRepository;
+    private final ProductVariantPublisher productVariantPublisher;
 
     @Transactional
     public void createProduct(ProductCreateRequest request) {
@@ -84,10 +89,22 @@ public class ProductService {
                 product.getProductVariants().add(variant);
             }
         }
+        Product saved = productRepository.save(product);
 
         // TODO : kafka 재고 등록 퍼블리셔 추가하기
 
-        Product saved = productRepository.save(product);
+        // order에 product projection 만들기 위한 전송
+        // TODO : outbox로 전환
+        List<ProductVariantEvent> events = saved.getProductVariants().stream()
+                .map(variant -> ProductVariantEvent.from(saved, variant))
+                .toList();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                events.forEach(productVariantPublisher::publisherVariantUpserted);
+            }
+        });
+
     }
 
     @Transactional
