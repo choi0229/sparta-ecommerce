@@ -5,8 +5,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.teamsparta.orderapi.domain.order.dto.request.CreateOrderRequest;
 import org.teamsparta.orderapi.domain.order.dto.response.CreateOrderResponse;
+import org.teamsparta.orderapi.domain.order.entity.IdempotencyRecord;
 import org.teamsparta.orderapi.domain.order.entity.OrderItem;
 import org.teamsparta.orderapi.domain.order.entity.Orders;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
@@ -37,9 +40,10 @@ public class OrderService {
     private final OrderEventPublisher orderEventPublisher;
     private final ProductProjectionRepository productProjectionRepository;
     private final ObjectMapper objectMapper;
+    private final IdempotencyService idempotencyService;
 
     @Transactional
-    public CreateOrderResponse createOrder(CreateOrderRequest request) {
+    public CreateOrderResponse createOrder(CreateOrderRequest request, String idemKey) {
         if(request.items() == null || request.items().isEmpty()){
             throw new DomainException(DomainExceptionCode.NOT_FOUND_ITEMS);
         }
@@ -55,6 +59,15 @@ public class OrderService {
 
         if(skus.size() != items.size()){
             throw new DomainException(DomainExceptionCode.INVALID_SKU);
+        }
+
+        String requestHash = hashRequest(request);
+        IdempotencyRecord idemRecord = idempotencyService.startOrThrow(idemKey, requestHash);
+
+        if("COMPLETED".equals(idemRecord.getStatus().name()) && idemRecord.getOrderId() != null){
+            Orders existing = orderRepository.findById(idemRecord.getOrderId())
+                    .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+            return new CreateOrderResponse(existing.getId(), existing.getOrderNo(), existing.getStatus());
         }
 
         List<ProductProjection> projections = productProjectionRepository.findBySkuIn(skus);
@@ -73,7 +86,7 @@ public class OrderService {
 
         String orderNo = generateOrderNo();
         Orders order = Orders.createNew(orderNo, request.userId());
-        order = orderRepository.save(order);
+        Orders savedOrder = orderRepository.save(order);
 
         // TODO:saga_state
 
@@ -86,7 +99,7 @@ public class OrderService {
 
             ProductProjection productProjection = bySku.get(item.sku());
 
-            if(!"AVTIVE".equals(productProjection.getStatus().name())){
+            if(!"ACTIVE".equals(productProjection.getStatus().name())){
                 throw new DomainException(DomainExceptionCode.PRODUCT_INACTIVE);
             }
 
@@ -97,7 +110,7 @@ public class OrderService {
             Map<String, Object> optionJsonSnapShot = productProjection.getOptionJson();
 
             OrderItem orderItem = OrderItem.of(
-                    order.getId(),
+                    savedOrder.getId(),
                     productProjection.getSku(),
                     item.quantity(),
                     unitPrice,
@@ -106,15 +119,31 @@ public class OrderService {
                     optionJsonSnapShot,
                     productProjection.getCategoryPath()
             );
-
-            orderItemRepository.saveAll(orderItems);
-
-            // TODO : 재고 처리 및 결제 후 outbox
+            orderItems.add(orderItem);
         }
+        orderItemRepository.saveAll(orderItems);
+
+        // TODO : 재고 처리 및 결제 후 outbox
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                idempotencyService.complete(idemKey, savedOrder.getId());
+            }
+        });
         return null;
     }
 
     private String generateOrderNo() {
         return "O" + System.currentTimeMillis();
+    }
+
+    // TODO : SHA-256으로 교체
+    private String hashRequest(CreateOrderRequest request) {
+        String raw = request.userId() + "|" + request.items().stream()
+                .map(i -> i.sku() + ":" + i.quantity())
+                .sorted()
+                .collect(Collectors.joining(","));
+        return Integer.toHexString(raw.hashCode());
     }
 }
