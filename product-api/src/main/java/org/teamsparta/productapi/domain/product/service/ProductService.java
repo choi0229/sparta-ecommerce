@@ -83,7 +83,7 @@ public class ProductService {
                 ProductVariant variant = ProductVariant.builder()
                         .product(product)
                         .sku(v.sku())
-                        .price(BigDecimal.valueOf(v.price()))
+                        .price(v.price())
                         .optionJson(v.optionJson())
                         .build();
                 product.getProductVariants().add(variant);
