@@ -89,8 +89,31 @@ COUPON_POLICY ||--o{ COUPON_SCOPE : applies_to
 COUPON_POLICY ||--o{ USER_COUPON : issued
 USER_COUPON ||--o{ COUPON_RESERVATION : reserved_by
 ```
+---
 
+## 6. 진행상황
 
+### 인프라 (docker-compose)
+- PostgreSQL: productdb
+- Kafka/Zookeeper
+- MinIO: bucket init(product-images)
+- Observability: Prometheus/Grafana
+- Search/Log: Elasticsearch/Kibana/Logstash
 
+### DB (Flyway, product-api)
+- category: parent_id 기반 트리 구조
+- product
+- product_variant: SKU, option_json(jsonb)
+- product_image: storage_key, url, type, sort_order, is_primary
 
+### 구현 완료 (product-api)
+- Category: 트리 조회 / 생성·수정·삭제(soft delete)
+- Product(Admin): 상품 등록(Product+Variant+Image 메타), SKU 중복 검증, 이미지 추가(대표 이미지 규칙)
+- Image: 업로드 → MinIO 저장 → storageKey/url 반환
 
+### 서비스 연동 (Kafka)
+- product-api → order-api: 상품 등록 시 ProductVariant 이벤트 발행
+- order-api: 이벤트 수신 후 product_projection 적재(주문 스냅샷 기반)
+
+### 진행 중 (order-api)
+- 주문 생성/사가(Order–Inventory) 구현 중
