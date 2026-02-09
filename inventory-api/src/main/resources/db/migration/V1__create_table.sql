@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS inventory_stock (
 CREATE TABLE IF NOT EXISTS inventory_reservation (
     id         UUID        PRIMARY KEY,
     order_id   BIGINT      NOT NULL UNIQUE,
+    saga_id    UUID        NOT NULL,
     status     VARCHAR(16) NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

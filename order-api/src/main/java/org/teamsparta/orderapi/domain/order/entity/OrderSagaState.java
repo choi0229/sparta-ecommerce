@@ -45,4 +45,18 @@ public class OrderSagaState {
     @Column(name = "updated_at", nullable = false)
     @UpdateTimestamp
     ZonedDateTime updatedAt;
+
+    public static OrderSagaState start(UUID saga_id, Long order_id) {
+        OrderSagaState orderSagaState = new OrderSagaState();
+        orderSagaState.saga_id = saga_id;
+        orderSagaState.order_id = order_id;
+        orderSagaState.state = SagaState.STARTED;
+        orderSagaState.lastError = null;
+        return orderSagaState;
+    }
+
+    public void update(SagaState state, String lastError) {
+        this.state = state;
+        this.lastError = lastError;
+    }
 }

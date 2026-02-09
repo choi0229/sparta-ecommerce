@@ -11,21 +11,21 @@ import org.teamsparta.orderapi.domain.order.dto.request.CreateOrderRequest;
 import org.teamsparta.orderapi.domain.order.dto.response.CreateOrderResponse;
 import org.teamsparta.orderapi.domain.order.entity.IdempotencyRecord;
 import org.teamsparta.orderapi.domain.order.entity.OrderItem;
+import org.teamsparta.orderapi.domain.order.entity.OrderSagaState;
 import org.teamsparta.orderapi.domain.order.entity.Orders;
+import org.teamsparta.orderapi.domain.order.event.OrderCreatedEvent;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
 import org.teamsparta.orderapi.domain.order.repository.OrderItemRepository;
 import org.teamsparta.orderapi.domain.order.repository.OrderRepository;
 import org.teamsparta.orderapi.domain.order.repository.OrderSagaStateRepository;
 import org.teamsparta.orderapi.domain.productProjection.entity.ProductProjection;
 import org.teamsparta.orderapi.domain.productProjection.repository.ProductProjectionRepository;
+import org.teamsparta.orderapi.global.enums.SagaState;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -89,6 +89,8 @@ public class OrderService {
         Orders savedOrder = orderRepository.save(order);
 
         // TODO:saga_state
+        OrderSagaState sagaState = OrderSagaState.start(order.getSagaId(), savedOrder.getId());
+        sagaStateRepository.save(sagaState);
 
         BigDecimal total = BigDecimal.ZERO;
         List<OrderItem> orderItems = new ArrayList<>();
@@ -122,16 +124,22 @@ public class OrderService {
             orderItems.add(orderItem);
         }
         orderItemRepository.saveAll(orderItems);
-
+        sagaState.update(SagaState.INVENTORY_RESERVE_REQUESTED, null);
+        sagaStateRepository.save(sagaState);
         // TODO : 재고 처리 및 결제 후 outbox
 
+        OrderCreatedEvent orderCreatedEvent = OrderCreatedEvent.from(order, orderItems);
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
+                orderEventPublisher.publisherOrderCreated(orderCreatedEvent);
                 idempotencyService.complete(idemKey, savedOrder.getId());
+                sagaState.update(SagaState.INVENTORY_RESERVE, null);
+                sagaStateRepository.save(sagaState);
             }
         });
-        return null;
+
+        return new CreateOrderResponse(savedOrder.getId(), savedOrder.getOrderNo(), savedOrder.getStatus());
     }
 
     private String generateOrderNo() {
