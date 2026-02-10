@@ -38,4 +38,12 @@ public class InventoryReservationItem {
     @Column(name = "created_at", nullable = false)
     @CreationTimestamp
     ZonedDateTime createdAt;
+
+    public static InventoryReservationItem create(UUID reservationId, String sku, Integer quantity) {
+        InventoryReservationItem item = new InventoryReservationItem();
+        item.reservationId = reservationId;
+        item.sku = sku;
+        item.quantity = quantity;
+        return item;
+    }
 }

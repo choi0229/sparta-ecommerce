@@ -9,6 +9,8 @@ import lombok.experimental.FieldDefaults;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.teamsparta.inventoryapi.global.exception.DomainException;
+import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
 
 import java.time.ZonedDateTime;
 
@@ -37,4 +39,11 @@ public class InventoryStock {
     @Column(name = "updated_at", nullable = false)
     @UpdateTimestamp
     ZonedDateTime updatedAt;
+
+    public void increaseReserved(Integer quantity) {
+        if (totalQuantity - reservedQuantity < quantity) {
+            throw new DomainException(DomainExceptionCode.OUT_OF_STOCK);
+        }
+        this.reservedQuantity += quantity;
+    }
 }

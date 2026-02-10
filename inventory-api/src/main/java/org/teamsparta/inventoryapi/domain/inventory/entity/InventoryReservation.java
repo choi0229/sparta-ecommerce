@@ -47,4 +47,13 @@ public class InventoryReservation {
     @Column(name = "updated_at", nullable = false)
     @UpdateTimestamp
     private ZonedDateTime updatedAt;
+
+    public static InventoryReservation create(Long orderId, UUID sagaId, ReservationStatus status, ZonedDateTime expiresAt) {
+        InventoryReservation inventoryReservation = new InventoryReservation();
+        inventoryReservation.orderId = orderId;
+        inventoryReservation.sagaId = sagaId;
+        inventoryReservation.status = status;
+        inventoryReservation.expiresAt = expiresAt;
+        return inventoryReservation;
+    }
 }
