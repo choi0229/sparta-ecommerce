@@ -77,4 +77,8 @@ public class Orders {
         return order;
     }
 
+    public void updateStatus(Status status) {
+        this.status = status;
+    }
+
 }

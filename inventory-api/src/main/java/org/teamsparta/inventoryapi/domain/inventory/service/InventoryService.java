@@ -4,9 +4,13 @@ import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.teamsparta.inventoryapi.domain.inventory.entity.InventoryReservation;
 import org.teamsparta.inventoryapi.domain.inventory.entity.InventoryReservationItem;
 import org.teamsparta.inventoryapi.domain.inventory.entity.InventoryStock;
+import org.teamsparta.inventoryapi.domain.inventory.event.InventoryEventPublisher;
+import org.teamsparta.inventoryapi.domain.inventory.event.InventoryReservedEvent;
 import org.teamsparta.inventoryapi.domain.inventory.event.dto.OrderCreateResult;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationItemRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationRepository;
@@ -15,13 +19,11 @@ import org.teamsparta.inventoryapi.global.enums.ReservationStatus;
 import org.teamsparta.inventoryapi.global.exception.DomainException;
 import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
+import java.time.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -32,6 +34,7 @@ public class InventoryService {
     private final InventoryStockRepository inventoryStockRepository;
     private final InventoryReservationRepository inventoryReservationRepository;
     private final InventoryReservationItemRepository inventoryReservationItemRepository;
+    private final InventoryEventPublisher inventoryEventPublisher;
 
     @Transactional
     public void reserveInventory(OrderCreateResult request) {
@@ -90,7 +93,7 @@ public class InventoryService {
         Instant instant = Instant.now().plus(Duration.ofMinutes(30));
         ZonedDateTime expiresAt = instant.atZone(ZoneId.systemDefault());
         InventoryReservation reservation = InventoryReservation.create(request.orderId(), request.sagaId(), ReservationStatus.RESERVED, expiresAt);
-        inventoryReservationRepository.save(reservation);
+        InventoryReservation savedReservation = inventoryReservationRepository.save(reservation);
 
         // 6 reserved 증가 + item insert
         List<InventoryReservationItem> items = new ArrayList<>();
@@ -104,5 +107,17 @@ public class InventoryService {
 
         inventoryStockRepository.saveAll(stocks);
         inventoryReservationItemRepository.saveAll(items);
+
+        List<InventoryReservedEvent.Item> eventItems = items.stream()
+                        .map(item -> new InventoryReservedEvent.Item(item.getSku(), item.getQuantity()))
+                        .toList();
+        InventoryReservedEvent event = InventoryReservedEvent.from(savedReservation.getOrderId(), savedReservation.getSagaId(), savedReservation.getId(), expiresAt, eventItems);
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                inventoryEventPublisher.publisherInventoryReserved(event);
+            }
+        });
     }
 }
