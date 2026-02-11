@@ -46,4 +46,11 @@ public class InventoryStock {
         }
         this.reservedQuantity += quantity;
     }
+
+    public void decreaseReserved(Integer quantity) {
+        if (totalQuantity - reservedQuantity < quantity) {
+            throw new DomainException(DomainExceptionCode.OUT_OF_STOCK);
+        }
+        this.reservedQuantity -= quantity;
+    }
 }

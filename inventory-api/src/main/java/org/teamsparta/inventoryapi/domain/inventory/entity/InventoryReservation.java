@@ -56,4 +56,8 @@ public class InventoryReservation {
         inventoryReservation.expiresAt = expiresAt;
         return inventoryReservation;
     }
+
+    public void updateStatus(ReservationStatus status) {
+        this.status = status;
+    }
 }

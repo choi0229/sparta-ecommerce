@@ -26,10 +26,10 @@ import java.util.UUID;
 public class OrderSagaState {
     @Id
     @Column(name = "saga_id", nullable = false)
-    UUID saga_id;
+    UUID sagaId;
 
     @Column(name = "order_id", nullable = false, unique = true)
-    Long order_id;
+    Long orderId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "state", nullable = false)
@@ -37,6 +37,9 @@ public class OrderSagaState {
 
     @Column(name = "last_error")
     String lastError;
+
+    @Column(name = "reservation_id")
+    UUID reservationId;
 
     @Column(name = "created_at", updatable = false)
     @CreationTimestamp
@@ -48,15 +51,16 @@ public class OrderSagaState {
 
     public static OrderSagaState start(UUID saga_id, Long order_id) {
         OrderSagaState orderSagaState = new OrderSagaState();
-        orderSagaState.saga_id = saga_id;
-        orderSagaState.order_id = order_id;
+        orderSagaState.sagaId = saga_id;
+        orderSagaState.orderId = order_id;
         orderSagaState.state = SagaState.STARTED;
         orderSagaState.lastError = null;
         return orderSagaState;
     }
 
-    public void update(SagaState state, String lastError) {
+    public void updateState(SagaState state, String lastError, UUID reservationId) {
         this.state = state;
         this.lastError = lastError;
+        this.reservationId = reservationId;
     }
 }

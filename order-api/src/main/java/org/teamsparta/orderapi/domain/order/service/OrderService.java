@@ -124,7 +124,7 @@ public class OrderService {
             orderItems.add(orderItem);
         }
         orderItemRepository.saveAll(orderItems);
-        sagaState.update(SagaState.INVENTORY_RESERVE_REQUESTED, null);
+        sagaState.updateState(SagaState.INVENTORY_RESERVE_REQUESTED, null, null);
         sagaStateRepository.save(sagaState);
         // TODO : 재고 처리 및 결제 후 outbox
 
@@ -134,8 +134,6 @@ public class OrderService {
             public void afterCommit() {
                 orderEventPublisher.publisherOrderCreated(orderCreatedEvent);
                 idempotencyService.complete(idemKey, savedOrder.getId());
-                sagaState.update(SagaState.INVENTORY_RESERVE, null);
-                sagaStateRepository.save(sagaState);
             }
         });
 

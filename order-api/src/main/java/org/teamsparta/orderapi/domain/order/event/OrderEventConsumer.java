@@ -5,8 +5,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
+import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
+import org.teamsparta.orderapi.domain.order.event.dto.InventoryReserveFailedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservedResult;
 import org.teamsparta.orderapi.domain.order.service.OrderSagaService;
+import org.teamsparta.orderapi.domain.payment.event.PaymentFailedEvent;
+import org.teamsparta.orderapi.domain.payment.event.PaymentSucceededEvent;
 
 @Component
 @RequiredArgsConstructor
@@ -24,6 +28,50 @@ public class OrderEventConsumer {
             orderSagaService.onInventoryReserved(inventoryReservedResult);
         }catch(Exception e){
             log.error("Error parsing inventory-reserved-event message: {}", message, e);
+        }
+    }
+
+    @KafkaListener(topics = "inventory-failed-event", groupId = "${spring.application.name}")
+    public void InventoryReserveFailedEvent(String message){
+        log.info("Received inventory-failed-event message: {}", message);
+        try{
+            InventoryReserveFailedResult inventoryReservedResult = objectMapper.readValue(message, InventoryReserveFailedResult.class);
+            orderSagaService.onInventoryReserveFailed(inventoryReservedResult);
+        }catch(Exception e){
+            log.error("Error parsing inventory-failed-event message: {}", message, e);
+        }
+    }
+
+    @KafkaListener(topics = "payment-succeeded-event", groupId = "${spring.application.name}")
+    public void PaymentRequestSucceededEvent(String message){
+        log.info("Received payment-succeeded-event message: {}", message);
+        try{
+            PaymentSucceededEvent paymentSucceededEvent = objectMapper.readValue(message, PaymentSucceededEvent.class);
+            orderSagaService.onPaymentSucceeded(paymentSucceededEvent);
+        }catch(Exception e){
+            log.error("Error parsing payment-succeeded-event message: {}", message, e);
+        }
+    }
+
+    @KafkaListener(topics = "payment-failed-event", groupId = "${spring.application.name}")
+    public void PaymentRequestFailedEvent(String message){
+        log.info("Received payment-failed-event message: {}", message);
+        try{
+            PaymentFailedEvent paymentFailedEvent = objectMapper.readValue(message, PaymentFailedEvent.class);
+            orderSagaService.onPaymentFailed(paymentFailedEvent);
+        }catch(Exception e){
+            log.error("Error parsing payment-succeeded-event message: {}", message, e);
+        }
+    }
+
+    @KafkaListener(topics = "inventory-confirm-event", groupId = "${spring.application.name}")
+    public void InventoryConfirmedEvent(String message){
+        log.info("Received inventory-confirm-event message: {}", message);
+        try{
+            InventoryConfirmedResult inventoryConfirmedResult = objectMapper.readValue(message, InventoryConfirmedResult.class);
+            orderSagaService.onInventoryConfirmed(inventoryConfirmedResult);
+        }catch(Exception e){
+            log.error("Error parsing inventory-confirm-event message: {}", message, e);
         }
     }
 }
