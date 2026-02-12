@@ -34,7 +34,8 @@ public enum DomainExceptionCode {
     IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST(HttpStatus.BAD_REQUEST, "동일한 멱등키에 대해 다른 요청 내용이 감지되었습니다."),
     IDEMPOTENCY_IN_PROGRESS(HttpStatus.CONFLICT, "동일한 요청이 현재 처리 중입니다."),
     EVENT_PUBLISH_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "kafka 이벤트 발행과정에서 오류가 발생했습니다."),
-    NOT_FOUND_SAGA(HttpStatus.NOT_FOUND, "SAGA를 찾을 수 없습니다.")
+    NOT_FOUND_SAGA(HttpStatus.NOT_FOUND, "SAGA를 찾을 수 없습니다."),
+    EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "EVENT를 찾을 수 없습니다.")
     ;
 
     final HttpStatus status;

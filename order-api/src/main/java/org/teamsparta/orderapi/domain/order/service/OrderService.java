@@ -9,15 +9,10 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.teamsparta.orderapi.domain.order.dto.request.CreateOrderRequest;
 import org.teamsparta.orderapi.domain.order.dto.response.CreateOrderResponse;
-import org.teamsparta.orderapi.domain.order.entity.IdempotencyRecord;
-import org.teamsparta.orderapi.domain.order.entity.OrderItem;
-import org.teamsparta.orderapi.domain.order.entity.OrderSagaState;
-import org.teamsparta.orderapi.domain.order.entity.Orders;
+import org.teamsparta.orderapi.domain.order.entity.*;
 import org.teamsparta.orderapi.domain.order.event.OrderCreatedEvent;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
-import org.teamsparta.orderapi.domain.order.repository.OrderItemRepository;
-import org.teamsparta.orderapi.domain.order.repository.OrderRepository;
-import org.teamsparta.orderapi.domain.order.repository.OrderSagaStateRepository;
+import org.teamsparta.orderapi.domain.order.repository.*;
 import org.teamsparta.orderapi.domain.productProjection.entity.ProductProjection;
 import org.teamsparta.orderapi.domain.productProjection.repository.ProductProjectionRepository;
 import org.teamsparta.orderapi.global.enums.SagaState;
@@ -41,6 +36,8 @@ public class OrderService {
     private final ProductProjectionRepository productProjectionRepository;
     private final ObjectMapper objectMapper;
     private final IdempotencyService idempotencyService;
+    private final OutboxQueryRepository outboxQueryRepository;
+    private final OutboxEventRepository outboxEventRepository;
 
     @Transactional
     public CreateOrderResponse createOrder(CreateOrderRequest request, String idemKey) {
@@ -126,16 +123,16 @@ public class OrderService {
         orderItemRepository.saveAll(orderItems);
         sagaState.updateState(SagaState.INVENTORY_RESERVE_REQUESTED, null, null);
         sagaStateRepository.save(sagaState);
-        // TODO : 재고 처리 및 결제 후 outbox
 
         OrderCreatedEvent orderCreatedEvent = OrderCreatedEvent.from(order, orderItems);
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                orderEventPublisher.publisherOrderCreated(orderCreatedEvent);
-                idempotencyService.complete(idemKey, savedOrder.getId());
-            }
-        });
+        String payload;
+        try{
+            payload = objectMapper.writeValueAsString(orderCreatedEvent);
+        }catch(Exception e){
+            throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
+        }
+        outboxEventRepository.save(OutboxEvent.pending("Orders", savedOrder.getId().toString(), "order.create.requested", payload));
+        idempotencyService.complete(idemKey, savedOrder.getId());
 
         return new CreateOrderResponse(savedOrder.getId(), savedOrder.getOrderNo(), savedOrder.getStatus());
     }
