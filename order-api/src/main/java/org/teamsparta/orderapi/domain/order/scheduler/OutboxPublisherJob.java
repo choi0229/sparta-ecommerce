@@ -36,7 +36,9 @@ public class OutboxPublisherJob {
         for (OutboxEvent event : batch) {
             try{
                 String topicName = switch(event.getEventType()){
-                    case "order.create.requested" -> "order-create-event";
+                    case "order-create-event" -> "order-create-event";
+                    case "payment-request-event" -> "payment-request-event";
+                    case "order-confirm-event" -> "order-confirm-event";
                     default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
                 };
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())

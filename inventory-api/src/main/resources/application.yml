@@ -37,7 +37,8 @@ spring:
       matching-strategy: ant_path_matcher
 
   kafka:
-    bootstrap-servers: kafka:29092  # ??? ??? ??
+    #bootstrap-servers: kafka:29092  # ??? ??? ??
+    bootstrap-servers: localhost:9092
 
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer   # ??? key? String -> bytes? ???
@@ -73,5 +74,7 @@ logging:
     com.example: DEBUG
     #    org.apache.kafka: DEBUG
     org.apache.kafka: INFO
-    org.springframework.kafka: DEBUG
-    org.springframework.transaction: DEBUG
+    #org.springframework.kafka: DEBUG
+    org.springframework.kafka: INFO
+    #org.springframework.transaction: DEBUG
+    org.springframework.transaction: INFO

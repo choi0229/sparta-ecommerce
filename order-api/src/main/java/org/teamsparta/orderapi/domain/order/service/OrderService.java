@@ -131,7 +131,7 @@ public class OrderService {
         }catch(Exception e){
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
-        outboxEventRepository.save(OutboxEvent.pending("Orders", savedOrder.getId().toString(), "order.create.requested", payload));
+        outboxEventRepository.save(OutboxEvent.pending("Orders", savedOrder.getId().toString(), "order-create-event", payload));
         idempotencyService.complete(idemKey, savedOrder.getId());
 
         return new CreateOrderResponse(savedOrder.getId(), savedOrder.getOrderNo(), savedOrder.getStatus());

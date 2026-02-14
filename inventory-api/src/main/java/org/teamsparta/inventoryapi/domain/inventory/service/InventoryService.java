@@ -1,5 +1,6 @@
 package org.teamsparta.inventoryapi.domain.inventory.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -9,6 +10,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.teamsparta.inventoryapi.domain.inventory.entity.InventoryReservation;
 import org.teamsparta.inventoryapi.domain.inventory.entity.InventoryReservationItem;
 import org.teamsparta.inventoryapi.domain.inventory.entity.InventoryStock;
+import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
 import org.teamsparta.inventoryapi.domain.inventory.event.InventoryConfirmedEvent;
 import org.teamsparta.inventoryapi.domain.inventory.event.InventoryEventPublisher;
 import org.teamsparta.inventoryapi.domain.inventory.event.InventoryReserveFailedEvent;
@@ -18,6 +20,7 @@ import org.teamsparta.inventoryapi.domain.inventory.event.dto.OrderCreateResult;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationItemRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryStockRepository;
+import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxEventRepository;
 import org.teamsparta.inventoryapi.global.enums.ReservationStatus;
 import org.teamsparta.inventoryapi.global.exception.DomainException;
 import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
@@ -37,6 +40,8 @@ public class InventoryService {
     private final InventoryReservationRepository inventoryReservationRepository;
     private final InventoryReservationItemRepository inventoryReservationItemRepository;
     private final InventoryEventPublisher inventoryEventPublisher;
+    private final OutboxEventRepository outboxEventRepository;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public void reserveInventory(OrderCreateResult request) {
@@ -115,15 +120,24 @@ public class InventoryService {
                     .toList();
             InventoryReservedEvent event = InventoryReservedEvent.from(savedReservation.getOrderId(), savedReservation.getSagaId(), savedReservation.getId(), expiresAt, eventItems);
 
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    inventoryEventPublisher.publisherInventoryReserved(event);
-                }
-            });
+            String payload;
+            try{
+                payload = objectMapper.writeValueAsString(event);
+            }catch(Exception ex){
+                throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
+            }
+
+            outboxEventRepository.save(OutboxEvent.pending("Inventory", event.getOrderId().toString(), "inventory-reserved-event", payload));
         }catch (Exception e){
             InventoryReserveFailedEvent failedEvent = InventoryReserveFailedEvent.from(request.sagaId(), request.orderId(), e.getMessage());
-            inventoryEventPublisher.publisherInventoryReservedFailed(failedEvent);
+            // inventoryEventPublisher.publisherInventoryReservedFailed(failedEvent);
+            String payload;
+            try{
+                payload = objectMapper.writeValueAsString(failedEvent);
+            }catch(Exception ex){
+                throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
+            }
+            outboxEventRepository.save(OutboxEvent.pending("Inventory", failedEvent.getOrderId().toString(), "inventory-failed-event", payload));
         }
     }
 
@@ -152,11 +166,14 @@ public class InventoryService {
         // 3. 예약 상태 변경 및 결과 이벤트 발행
         reservation.updateStatus(ReservationStatus.CONFIRMED);
         InventoryConfirmedEvent inventoryConfirmedEvent = InventoryConfirmedEvent.from(event.orderId(), event.sagaId());
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                inventoryEventPublisher.publishInventoryConfirmed(inventoryConfirmedEvent);
-            }
-        });
+
+        String payload;
+        try{
+            payload = objectMapper.writeValueAsString(inventoryConfirmedEvent);
+        }catch(Exception e){
+            throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
+        }
+
+        outboxEventRepository.save(OutboxEvent.pending("Inventory", inventoryConfirmedEvent.getOrderId().toString(), "inventory-confirm-event", payload));
     }
 }
