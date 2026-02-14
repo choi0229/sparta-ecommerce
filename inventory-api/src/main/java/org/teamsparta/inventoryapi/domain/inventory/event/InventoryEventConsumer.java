@@ -8,6 +8,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.teamsparta.inventoryapi.domain.inventory.event.dto.OrderConfirmResult;
 import org.teamsparta.inventoryapi.domain.inventory.event.dto.OrderCreateResult;
+import org.teamsparta.inventoryapi.domain.inventory.event.dto.VariantCreatResult;
 import org.teamsparta.inventoryapi.domain.inventory.service.InventoryService;
 import org.teamsparta.inventoryapi.global.exception.DomainException;
 import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
@@ -44,6 +45,20 @@ public class InventoryEventConsumer {
             log.error("Fatal: Invalid JSON format. Message: {}", message, e); // 재시도 무의미
         }catch(Exception e){
             log.error("Error parsing order-create-event message: {}",message,e);
+            throw new DomainException(DomainExceptionCode.EVENT_CONSUME_ERROR);
+        }
+    }
+
+    @KafkaListener(topics = "variant-created-event", groupId = "${spring.application.name}")
+    public void VariantCreatedEvent(String message){
+        log.info("Received variant-created-event message: {}", message);
+        try{
+            VariantCreatResult variantCreatResult = objectMapper.readValue(message, VariantCreatResult.class);
+            inventoryService.createInventory(variantCreatResult);
+        }catch(JsonProcessingException e){
+            log.error("Fatal: Invalid JSON format. Message: {}", message, e); // 재시도 무의미
+        }catch(Exception e){
+            log.error("Error parsing variant-created-event message: {}",message,e);
             throw new DomainException(DomainExceptionCode.EVENT_CONSUME_ERROR);
         }
     }

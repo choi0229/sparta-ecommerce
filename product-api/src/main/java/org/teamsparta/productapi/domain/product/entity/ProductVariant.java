@@ -57,6 +57,11 @@ public class ProductVariant {
         this.sku = sku;
         this.product = product;
         this.price = price;
+        this.status = Status.INACTIVE;
         this.optionJson = optionJson;
+    }
+
+    public void activeStatus(){
+        this.status = Status.ACTIVE;
     }
 }

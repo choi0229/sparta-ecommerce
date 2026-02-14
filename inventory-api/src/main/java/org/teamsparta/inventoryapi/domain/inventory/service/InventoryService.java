@@ -11,12 +11,10 @@ import org.teamsparta.inventoryapi.domain.inventory.entity.InventoryReservation;
 import org.teamsparta.inventoryapi.domain.inventory.entity.InventoryReservationItem;
 import org.teamsparta.inventoryapi.domain.inventory.entity.InventoryStock;
 import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
-import org.teamsparta.inventoryapi.domain.inventory.event.InventoryConfirmedEvent;
-import org.teamsparta.inventoryapi.domain.inventory.event.InventoryEventPublisher;
-import org.teamsparta.inventoryapi.domain.inventory.event.InventoryReserveFailedEvent;
-import org.teamsparta.inventoryapi.domain.inventory.event.InventoryReservedEvent;
+import org.teamsparta.inventoryapi.domain.inventory.event.*;
 import org.teamsparta.inventoryapi.domain.inventory.event.dto.OrderConfirmResult;
 import org.teamsparta.inventoryapi.domain.inventory.event.dto.OrderCreateResult;
+import org.teamsparta.inventoryapi.domain.inventory.event.dto.VariantCreatResult;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationItemRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryStockRepository;
@@ -42,6 +40,23 @@ public class InventoryService {
     private final InventoryEventPublisher inventoryEventPublisher;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
+
+    @Transactional
+    public void createInventory(VariantCreatResult request){
+        inventoryStockRepository.findById(request.sku())
+                .ifPresentOrElse(
+                        stock -> log.info("SKU {} already exists. No action taken.", request.sku()),
+                        () -> inventoryStockRepository.save(InventoryStock.create(request.sku(), request.totalQuantity()))
+                );
+        InventoryCreatedEvent inventoryCreatedEvent = InventoryCreatedEvent.from(request.sku());
+        String payload;
+        try{
+            payload = objectMapper.writeValueAsString(inventoryCreatedEvent);
+            outboxEventRepository.save(OutboxEvent.pending("Inventory", request.sku(), "inventory-created-event", payload));
+        }catch(Exception e){
+            throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
+        }
+    }
 
     @Transactional
     public void reserveInventory(OrderCreateResult request) {

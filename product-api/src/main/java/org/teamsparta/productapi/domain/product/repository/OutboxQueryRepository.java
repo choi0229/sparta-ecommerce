@@ -1,17 +1,17 @@
-package org.teamsparta.inventoryapi.domain.inventory.repository;
+package org.teamsparta.productapi.domain.product.repository;
 
 import com.querydsl.core.types.dsl.BooleanExpression;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
-import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
-import org.teamsparta.inventoryapi.global.enums.OutboxStatus;
+import org.teamsparta.productapi.domain.product.entity.OutboxEvent;
+import org.teamsparta.productapi.global.enums.OutboxStatus;
 
 import java.time.ZonedDateTime;
 import java.util.List;
 
-import static org.teamsparta.inventoryapi.domain.inventory.entity.QOutboxEvent.outboxEvent;
+import static org.teamsparta.productapi.domain.product.entity.QOutboxEvent.outboxEvent;
 
 @Repository
 @RequiredArgsConstructor
@@ -29,6 +29,7 @@ public class OutboxQueryRepository {
                 .orderBy(outboxEvent.createdAt.asc())
                 .limit(batchSize)
                 .setLockMode(LockModeType.PESSIMISTIC_WRITE)
+                // TODO: ? '3000' 대신 '-2'를 넣으면 대부분의 dialect에서 'SKIP LOCKED'로 해석
                 .setHint("javax.persistence.lock.timeout", 3000)
                 .fetch();
     }

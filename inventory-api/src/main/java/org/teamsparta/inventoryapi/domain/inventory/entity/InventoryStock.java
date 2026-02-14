@@ -1,10 +1,7 @@
 package org.teamsparta.inventoryapi.domain.inventory.entity;
 
 import jakarta.persistence.*;
-import lombok.AccessLevel;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
+import lombok.*;
 import lombok.experimental.FieldDefaults;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
@@ -52,5 +49,16 @@ public class InventoryStock {
             throw new DomainException(DomainExceptionCode.OUT_OF_STOCK);
         }
         this.reservedQuantity -= quantity;
+    }
+
+    @Builder
+    public static InventoryStock create(String sku, Integer totalQuantity) {
+        return new InventoryStock(
+                sku,
+                totalQuantity,
+                0,
+                null,
+                null
+        );
     }
 }

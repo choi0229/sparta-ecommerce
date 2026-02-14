@@ -23,9 +23,11 @@ public enum DomainExceptionCode {
     DUPLICATE_PARENT(HttpStatus.BAD_REQUEST, "자기 자신을 부모카테고리로 설정할 수 없습니다,"),
 
     NOT_FOUND_PRODUCT(HttpStatus.NOT_FOUND, "상품을 찾을 수 없습니다."),
+    NOT_FOUND_VARIANT(HttpStatus.NOT_FOUND, "상품을 찾을 수 없습니다."),
     DUPLICATE_SKU(HttpStatus.BAD_REQUEST, "sku가 이미 존재합니다."),
 
-    EVENT_PUBLISH_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "kafka 이벤트 발행과정에서 오류가 발생했습니다.")
+    EVENT_PUBLISH_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "kafka 이벤트 발행과정에서 오류가 발생했습니다."),
+    EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "EVENT를 찾을 수 없습니다.")
 
     ;
 

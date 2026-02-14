@@ -28,7 +28,8 @@ public enum DomainExceptionCode {
     INVALID_SKU(HttpStatus.BAD_REQUEST, "유효하지 않은 sku입니다."),
     STOCK_NOT_FOUND(HttpStatus.NOT_FOUND, "재고를 찾지 못했습니다."),
     OUT_OF_STOCK(HttpStatus.BAD_REQUEST, "재고가 부족합니다."),
-    RESERVATION_NOT_FOUND(HttpStatus.NOT_FOUND, "예약된 재고를 찾을 수 없습니다.")
+    RESERVATION_NOT_FOUND(HttpStatus.NOT_FOUND, "예약된 재고를 찾을 수 없습니다."),
+    EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "EVENT를 찾을 수 없습니다.")
     ;
 
     final HttpStatus status;

@@ -1,5 +1,6 @@
 package org.teamsparta.productapi.domain.product.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -15,11 +16,14 @@ import org.teamsparta.productapi.domain.product.dto.request.ProductCreateRequest
 import org.teamsparta.productapi.domain.product.dto.request.ProductImageAddRequest;
 import org.teamsparta.productapi.domain.product.dto.response.ProductDetailResponse;
 import org.teamsparta.productapi.domain.product.dto.response.ProductSummaryResponse;
+import org.teamsparta.productapi.domain.product.entity.OutboxEvent;
 import org.teamsparta.productapi.domain.product.entity.Product;
 import org.teamsparta.productapi.domain.product.entity.ProductImage;
 import org.teamsparta.productapi.domain.product.entity.ProductVariant;
+import org.teamsparta.productapi.domain.product.event.ProductInventoryEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantPublisher;
+import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductQueryRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
@@ -28,6 +32,7 @@ import org.teamsparta.productapi.global.exception.DomainException;
 import org.teamsparta.productapi.global.exception.DomainExceptionCode;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
@@ -40,6 +45,8 @@ public class ProductService {
     private final ProductVariantRepository productVariantRepository;
     private final ProductQueryRepository productQueryRepository;
     private final ProductVariantPublisher productVariantPublisher;
+    private final ObjectMapper objectMapper;
+    private final OutboxEventRepository outboxEventRepository;
 
     @Transactional
     public void createProduct(ProductCreateRequest request) {
@@ -76,28 +83,32 @@ public class ProductService {
                 product.getProductImages().add(entity);
             }
         }
-
+        Product saved = productRepository.save(product);
+        List<OutboxEvent> outboxEvents = new ArrayList<>();
         // variants
         if(request.variants() != null) {
             for(var v : request.variants()) {
                 ProductVariant variant = ProductVariant.builder()
-                        .product(product)
+                        .product(saved)
                         .sku(v.sku())
                         .price(v.price())
                         .optionJson(v.optionJson())
                         .build();
                 product.getProductVariants().add(variant);
-            }
-        }
-        Product saved = productRepository.save(product);
 
-        // TODO : kafka 재고 등록 퍼블리셔 추가하기
+                ProductInventoryEvent productInventoryEvent = ProductInventoryEvent.from(v.sku(), v.stockQuantity());
+                outboxEvents.add(createOutboxEvent(v.sku(), productInventoryEvent));
+            }
+            productVariantRepository.saveAll(product.getProductVariants());
+        }
+        outboxEventRepository.saveAll(outboxEvents);
 
         // order에 product projection 만들기 위한 전송
         // TODO : outbox로 전환
         List<ProductVariantEvent> events = saved.getProductVariants().stream()
                 .map(variant -> ProductVariantEvent.from(saved, variant))
                 .toList();
+
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
@@ -105,6 +116,16 @@ public class ProductService {
             }
         });
 
+    }
+
+    private OutboxEvent createOutboxEvent(String sku, ProductInventoryEvent event) {
+        String payload;
+        try{
+            payload = objectMapper.writeValueAsString(event);
+        }catch(Exception e){
+            throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
+        }
+        return OutboxEvent.pending("Product", sku, "variant-created-event", payload);
     }
 
     @Transactional

@@ -1,18 +1,17 @@
-package org.teamsparta.orderapi.domain.order.scheduler;
+package org.teamsparta.inventoryapi.domain.inventory.scheduler;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.SendResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
-import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
-import org.teamsparta.orderapi.domain.order.repository.OutboxQueryRepository;
-import org.teamsparta.orderapi.global.exception.DomainException;
-import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
+import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
+import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxEventRepository;
+import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxQueryRepository;
+import org.teamsparta.inventoryapi.global.exception.DomainException;
+import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
 
 import java.time.Duration;
 import java.time.ZonedDateTime;
@@ -35,9 +34,10 @@ public class OutboxPublisherJob {
         for (OutboxEvent event : batch) {
             try{
                 String topicName = switch(event.getEventType()){
-                    case "order-create-event" -> "order-create-event";
-                    case "payment-request-event" -> "payment-request-event";
-                    case "order-confirm-event" -> "order-confirm-event";
+                    case "inventory-reserved-event" -> "inventory-reserved-event";
+                    case "inventory-failed-event" -> "inventory-failed-event";
+                    case "inventory-confirm-event" -> "inventory-confirm-event";
+                    case "inventory-created-event" -> "inventory-created-event";
                     default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
                 };
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())

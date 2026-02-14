@@ -1,18 +1,17 @@
-package org.teamsparta.orderapi.domain.order.scheduler;
+package org.teamsparta.productapi.domain.product.scheduler;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.SendResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
-import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
-import org.teamsparta.orderapi.domain.order.repository.OutboxQueryRepository;
-import org.teamsparta.orderapi.global.exception.DomainException;
-import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
+import org.teamsparta.productapi.domain.product.entity.OutboxEvent;
+import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
+import org.teamsparta.productapi.domain.product.repository.OutboxQueryRepository;
+import org.teamsparta.productapi.global.exception.DomainException;
+import org.teamsparta.productapi.global.exception.DomainExceptionCode;
 
 import java.time.Duration;
 import java.time.ZonedDateTime;
@@ -35,9 +34,7 @@ public class OutboxPublisherJob {
         for (OutboxEvent event : batch) {
             try{
                 String topicName = switch(event.getEventType()){
-                    case "order-create-event" -> "order-create-event";
-                    case "payment-request-event" -> "payment-request-event";
-                    case "order-confirm-event" -> "order-confirm-event";
+                    case "variant-created-event" -> "variant-created-event";
                     default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
                 };
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())
@@ -67,3 +64,4 @@ public class OutboxPublisherJob {
         event.markFailedAndScheduleRetry(5, Duration.ofMinutes(1));
     }
 }
+
