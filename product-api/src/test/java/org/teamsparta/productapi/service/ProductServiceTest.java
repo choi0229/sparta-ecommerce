@@ -1,30 +1,259 @@
 package org.teamsparta.productapi.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.productapi.domain.category.entity.Category;
+import org.teamsparta.productapi.domain.category.repository.CategoryRepository;
 import org.teamsparta.productapi.domain.product.dto.request.ProductCreateRequest;
+import org.teamsparta.productapi.domain.product.dto.request.ProductImageAddRequest;
+import org.teamsparta.productapi.domain.product.dto.request.ProductImageCreateRequest;
 import org.teamsparta.productapi.domain.product.dto.request.ProductVariantRequest;
+import org.teamsparta.productapi.domain.product.entity.OutboxEvent;
+import org.teamsparta.productapi.domain.product.entity.Product;
+import org.teamsparta.productapi.domain.product.entity.ProductImage;
+import org.teamsparta.productapi.domain.product.entity.ProductVariant;
+import org.teamsparta.productapi.domain.product.event.ProductVariantPublisher;
+import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
+import org.teamsparta.productapi.domain.product.repository.ProductRepository;
+import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
+import org.teamsparta.productapi.domain.product.service.ProductService;
+import org.teamsparta.productapi.global.enums.ImageType;
 import org.teamsparta.productapi.global.enums.Status;
+import org.teamsparta.productapi.global.exception.DomainException;
+import org.teamsparta.productapi.global.exception.DomainExceptionCode;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+
+@ExtendWith(MockitoExtension.class)
 public class ProductServiceTest {
 
+    @InjectMocks
+    private ProductService productService;
+
+    @Mock
+    private ProductRepository productRepository;
+    @Mock
+    private CategoryRepository categoryRepository;
+    @Mock
+    private ProductVariantRepository productVariantRepository;
+    @Mock
+    private OutboxEventRepository outboxEventRepository;
+    @Mock
+    private ObjectMapper objectMapper;
+    @Mock
+    private ProductVariantPublisher productVariantPublisher;
+
+    private List<ProductVariantRequest> variants;
+    private List<ProductImageCreateRequest> images;
+
+    @BeforeEach
+    void setUp(){
+        variants = List.of(
+                new ProductVariantRequest("SKU-1", new BigDecimal("1000"), 100, Map.of("color", "black")),
+                new ProductVariantRequest("SKU-2", new BigDecimal("2000"), 100, Map.of("color", "white"))
+        );
+        images = List.of(
+                new ProductImageCreateRequest("img1", "url1", ImageType.THUMBNAIL, 0, true)
+        );
+    }
+
     @Test
-    @DisplayName("상품 생성 성공 - SKU 중복이 없고 카테고리가 존재할 때")
-    void createProduct_Success(){
+    @DisplayName("상품 생성 성공 - outbox 저장 확인")
+    void createProduct_Success()throws Exception{
         // given
-        Long categoryId = 1L;
-        ProductVariantRequest variantRequest = new ProductVariantRequest("TEST-SKU-001", BigDecimal.valueOf(10000), 10, Map.of("color", "black"));
-        ProductCreateRequest productCreateRequest = new ProductCreateRequest("TEST", "Brand-Test", categoryId, "설명", List.of(variantRequest), null);
+        ProductCreateRequest request = new ProductCreateRequest("테스트상품", "브랜드", 1L, "설명", variants, images);
+
         Category category = Category.builder()
-                .name("테스트 카테고리")
-                .status(Status.ACTIVE)
+                .name("category").parent(null).status(Status.ACTIVE).sortOrder(1).build();
+        ReflectionTestUtils.setField(category, "id", 1L);
+
+        given(categoryRepository.findById(1L)).willReturn(Optional.of(category));
+        given(productVariantRepository.existsBySku(any())).willReturn(false);
+
+        given(productRepository.save(any(Product.class)))
+                .willAnswer(inv -> inv.getArgument(0));
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        // when
+        productService.createProduct(request);
+
+        // then
+        then(productRepository).should(times(1)).save(any(Product.class));
+
+        ArgumentCaptor<List<ProductVariant>> variantCaptor = ArgumentCaptor.forClass(List.class);
+        then(productVariantRepository).should(times(1)).saveAll(variantCaptor.capture());
+        assertThat(variantCaptor.getValue()).hasSize(2);
+        assertThat(variantCaptor.getValue())
+                .extracting(ProductVariant::getSku)
+                .containsExactlyInAnyOrder("SKU-1", "SKU-2");
+
+        ArgumentCaptor<List<OutboxEvent>> outboxCaptor = ArgumentCaptor.forClass(List.class);
+        then(outboxEventRepository).should(times(1)).saveAll(outboxCaptor.capture());
+        assertThat(outboxCaptor.getValue()).hasSize(4);
+        List<OutboxEvent> capturedEvents = outboxCaptor.getValue();
+        assertThat(capturedEvents)
+                .extracting(OutboxEvent::getAggregateType)
+                .containsOnly("Inventory", "ProductProjection");
+
+        then(objectMapper).should(times(4)).writeValueAsString(any());
+    }
+
+    @Test
+    @DisplayName("상품 생성 성공 - variant/image가 null이어도 저장")
+    void createProduct_Success_null()throws Exception{
+        // given
+        ProductCreateRequest request = new ProductCreateRequest("테스트상품", "브랜드", 1L, "설명", null, null);
+
+        Category category = Category.builder().name("category").parent(null).status(Status.ACTIVE).sortOrder(1).build();
+        ReflectionTestUtils.setField(category, "id", 1L);
+
+        given(categoryRepository.findById(1L)).willReturn(Optional.of(category));
+        given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
+
+        // when
+        productService.createProduct(request);
+
+        // then
+        then(productRepository).should(times(1)).save(any(Product.class));
+        then(productVariantRepository).should(never()).saveAll(any());
+        then(outboxEventRepository).should(never()).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("상품 생성 실패 - 카테고리 없음")
+    void createProduct_fail_categoryNotfound(){
+        // given
+        ProductCreateRequest request = new ProductCreateRequest("테스트 상품", "브랜드", 1L, "설명", variants, images);
+        given(categoryRepository.findById(1L)).willReturn(Optional.empty());
+
+        // when & then
+        DomainException exception = assertThrows(DomainException.class,() ->
+                productService.createProduct(request));
+        assertThat(exception.getMessage()).isEqualTo(DomainExceptionCode.NOT_FOUND_CATEGORY.getMessage());
+
+        then(productRepository).shouldHaveNoInteractions();
+        then(productVariantRepository).should(never()).saveAll(any());
+        then(outboxEventRepository).should(never()).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("상품 생성 실패 - 중복된 SKU 존재")
+    void createProduct_fail_duplicateSku() {
+        // given
+        ProductCreateRequest request = new ProductCreateRequest("테스트상품", "브랜드", 1L, "설명", variants, images);
+        given(categoryRepository.findById(any())).willReturn(Optional.of(Category.builder().build()));
+        given(productVariantRepository.existsBySku(any())).willReturn(true);
+
+        // when & then
+        DomainException exception = assertThrows(DomainException.class, () ->
+                productService.createProduct(request));
+        assertThat(exception.getMessage()).isEqualTo(DomainExceptionCode.DUPLICATE_SKU.getMessage());
+    }
+
+    @Test
+    @DisplayName("상품 생성 실패 - 이벤트 직렬화 실패")
+    void createProduct_fail_eventSerialize()throws Exception {
+        // given
+        ProductCreateRequest request = new ProductCreateRequest("테스트상품", "브랜드", 1L, "설명", variants, images);
+        Category category = Category.builder().name("category").status(Status.ACTIVE).sortOrder(1).build();
+        ReflectionTestUtils.setField(category, "id", 1L);
+
+        given(categoryRepository.findById(1L)).willReturn(Optional.of(category));
+        given(productVariantRepository.existsBySku(any())).willReturn(false);
+        given(productRepository.save(any())).willAnswer(inv -> inv.getArgument(0));
+
+        given(objectMapper.writeValueAsString(any())).willThrow(new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR));
+
+        // when
+        DomainException exception = assertThrows(DomainException.class,() ->
+                productService.createProduct(request));
+        assertThat(exception.getMessage()).isEqualTo(DomainExceptionCode.EVENT_PUBLISH_ERROR.getMessage());
+
+        then(outboxEventRepository).should(never()).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("이미지 추가 - 대표 지정 없이 추가 시 순서가 빠른 것이 자동 대표")
+    void addImages_autoPrimary_success() {
+        // given
+        Product product = Product.builder().name("상품").build();
+        given(productRepository.findById(any())).willReturn(Optional.of(product));
+
+        List<ProductImageAddRequest> newImages = List.of(
+                new ProductImageAddRequest("key1", "url1", ImageType.THUMBNAIL, 2, false),
+                new ProductImageAddRequest("key2", "url2", ImageType.THUMBNAIL, 1, false)
+        );
+
+        // when
+        productService.addImages(1L, newImages);
+
+        // then
+        ProductImage primaryImage = product.getProductImages().stream()
+                .filter(ProductImage::getIsPrimary)
+                .findFirst().orElseThrow();
+        assertThat(primaryImage.getStorageKey()).isEqualTo("key2");
+    }
+
+    @Test
+    @DisplayName("이미지 추가 - 대표 지정이 들어오면 기존 대표는 해제")
+    void addImages_updatePrimary_success() {
+        // given
+        Product product = Product.builder().name("상품").build();
+        ProductImage oldPrimary = ProductImage.builder()
+                .product(product).storageKey("old").url("oldUrl")
+                .type(ImageType.THUMBNAIL)
                 .sortOrder(0)
-                .parent(null)
+                .isPrimary(true)
                 .build();
+        product.getProductImages().add(oldPrimary);
+
+        given(productRepository.findById(any())).willReturn(Optional.of(product));
+
+        List<ProductImageAddRequest> newImages = List.of(
+                new ProductImageAddRequest("newKey", "newUrl", ImageType.THUMBNAIL, 1, true)
+        );
+
+        // when
+        productService.addImages(1L, newImages);
+
+        // then
+        assertThat(oldPrimary.getIsPrimary()).isFalse();
+        assertThat(product.getProductImages().stream()
+                .filter(ProductImage::getIsPrimary).count()).isEqualTo(1);
+        assertThat(product.getProductImages().stream()
+                .filter(ProductImage::getIsPrimary).findFirst().orElseThrow().getStorageKey())
+                .isEqualTo("newKey");
+    }
+
+    @Test
+    @DisplayName("이미지 추가 실패 - 상품 없음")
+    void addImages_fail_notFoundProduct() {
+        // given
+        given(productRepository.findById(any())).willReturn(Optional.empty());
+
+        // when & then
+        DomainException exception = assertThrows(DomainException.class, () ->
+                productService.addImages(1L, List.of(new ProductImageAddRequest("k","u", ImageType.DETAIL, 0, false))));
+
+        assertThat(exception.getMessage()).isEqualTo(DomainExceptionCode.NOT_FOUND_PRODUCT.getMessage());
     }
 }

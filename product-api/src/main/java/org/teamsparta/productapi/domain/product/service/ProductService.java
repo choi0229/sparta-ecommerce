@@ -104,7 +104,9 @@ public class ProductService {
             }
             productVariantRepository.saveAll(product.getProductVariants());
         }
-        outboxEventRepository.saveAll(outboxEvents);
+        if (!outboxEvents.isEmpty()) {
+            outboxEventRepository.saveAll(outboxEvents);
+        }
     }
 
     private OutboxEvent createOutboxEvent(String aggregateType, String aggregateId, String eventType, Object event) {

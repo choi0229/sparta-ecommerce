@@ -201,7 +201,7 @@ public class CategoryServiceTest {
     }
 
     @Test
-    @DisplayName("카테고리 삭제 - 성공")
+    @DisplayName("카테고리 삭제 - soft delete 성공")
     void delete_success(){
         // given
         Long categoryId = 1L;
