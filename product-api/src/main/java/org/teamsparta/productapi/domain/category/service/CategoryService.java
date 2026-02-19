@@ -113,7 +113,7 @@ public class CategoryService {
         Category category = categoryRepository.findById(categoryId)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_CATEGORY));
 
-        if(categoryRepository.existsByParent_Id(categoryId)){
+        if(categoryRepository.existsByParentId(categoryId)){
             throw new DomainException(DomainExceptionCode.CATEGORY_HAS_CHILDREN);
         }
         category.updateStatus(Status.DELETED);

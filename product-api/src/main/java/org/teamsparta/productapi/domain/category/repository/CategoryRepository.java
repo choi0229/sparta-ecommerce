@@ -9,7 +9,7 @@ import java.util.List;
 
 @Repository
 public interface CategoryRepository extends JpaRepository<Category, Long> {
-    Boolean existsByParent_Id(Long id);
+    Boolean existsByParentId(Long id);
 
     List<Category> findAllByStatusOrderBySortOrderAscIdAsc(Status status);
 }
