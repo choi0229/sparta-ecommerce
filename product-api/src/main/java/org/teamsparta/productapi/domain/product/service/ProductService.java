@@ -97,35 +97,24 @@ public class ProductService {
                 product.getProductVariants().add(variant);
 
                 ProductInventoryEvent productInventoryEvent = ProductInventoryEvent.from(v.sku(), v.stockQuantity());
-                outboxEvents.add(createOutboxEvent(v.sku(), productInventoryEvent));
+                outboxEvents.add(createOutboxEvent("Inventory", v.sku(), "inventory-init-event", productInventoryEvent));
+
+                ProductVariantEvent projectionEvent = ProductVariantEvent.from(saved, variant);
+                outboxEvents.add(createOutboxEvent("ProductProjection", v.sku(), "product-variant-event", projectionEvent));
             }
             productVariantRepository.saveAll(product.getProductVariants());
         }
         outboxEventRepository.saveAll(outboxEvents);
-
-        // order에 product projection 만들기 위한 전송
-        // TODO : outbox로 전환
-        List<ProductVariantEvent> events = saved.getProductVariants().stream()
-                .map(variant -> ProductVariantEvent.from(saved, variant))
-                .toList();
-
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                events.forEach(productVariantPublisher::publisherVariantUpserted);
-            }
-        });
-
     }
 
-    private OutboxEvent createOutboxEvent(String sku, ProductInventoryEvent event) {
+    private OutboxEvent createOutboxEvent(String aggregateType, String aggregateId, String eventType, Object event) {
         String payload;
         try{
             payload = objectMapper.writeValueAsString(event);
         }catch(Exception e){
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
-        return OutboxEvent.pending("Product", sku, "variant-created-event", payload);
+        return OutboxEvent.pending(aggregateType, aggregateId, eventType, payload);
     }
 
     @Transactional
