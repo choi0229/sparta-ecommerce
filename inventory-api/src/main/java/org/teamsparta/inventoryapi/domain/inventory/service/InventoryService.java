@@ -27,6 +27,7 @@ import java.time.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -43,11 +44,14 @@ public class InventoryService {
 
     @Transactional
     public void createInventory(VariantCreatResult request){
-        inventoryStockRepository.findById(request.sku())
-                .ifPresentOrElse(
-                        stock -> log.info("SKU {} already exists. No action taken.", request.sku()),
-                        () -> inventoryStockRepository.save(InventoryStock.create(request.sku(), request.totalQuantity()))
-                );
+        Optional<InventoryStock> existingStock = inventoryStockRepository.findById(request.sku());
+
+        if (existingStock.isPresent()) {
+            log.info("SKU {} already exists. No action taken.", request.sku());
+            return;
+        }
+        inventoryStockRepository.save(InventoryStock.create(request.sku(), request.totalQuantity()));
+
         InventoryCreatedEvent inventoryCreatedEvent = InventoryCreatedEvent.from(request.sku());
         String payload;
         try{

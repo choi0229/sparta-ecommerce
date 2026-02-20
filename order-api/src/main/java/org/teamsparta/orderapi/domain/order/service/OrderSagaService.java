@@ -54,7 +54,7 @@ public class OrderSagaService {
 
         // 결제 요청
         PaymentRequestedEvent paymentRequest = PaymentRequestedEvent.from(saga.getOrderId(), saga.getSagaId(), order.getUserId(), order.getPayAmount());
-        saga.updateState(SagaState.PAYMENT_REQUESTED, null, null);
+        saga.updateState(SagaState.PAYMENT_REQUESTED, null, event.reservationId());
 
         String payload;
         try{
@@ -95,7 +95,6 @@ public class OrderSagaService {
 
         // 재고 감소 및 확정 요청
         InventoryConfirmRequestedEvent inventoryConfirmRequestedEvent = InventoryConfirmRequestedEvent.from(saga.getOrderId(), saga.getSagaId(), saga.getReservationId());
-        saga.updateState(SagaState.PAYMENT_REQUESTED, null, null);
 
         String payload;
         try{

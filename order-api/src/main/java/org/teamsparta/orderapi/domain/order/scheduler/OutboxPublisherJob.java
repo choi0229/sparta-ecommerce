@@ -56,6 +56,7 @@ public class OutboxPublisherJob {
         OutboxEvent event = outboxEventRepository.findById(id)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
         event.markSent();
+        outboxEventRepository.save(event);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
