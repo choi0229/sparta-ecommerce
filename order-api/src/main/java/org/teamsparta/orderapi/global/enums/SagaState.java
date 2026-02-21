@@ -7,5 +7,6 @@ public enum SagaState {
     FAILED,
     PAYMENT_REQUESTED,
     COMPLETED,
-    PAYMENT_COMPLETED
+    PAYMENT_COMPLETED,
+    EXPIRED
 }

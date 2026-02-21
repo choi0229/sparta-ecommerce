@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
+import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservationExpiredResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReserveFailedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservedResult;
 import org.teamsparta.orderapi.domain.order.service.OrderSagaService;
@@ -72,6 +73,17 @@ public class OrderEventConsumer {
             orderSagaService.onInventoryConfirmed(inventoryConfirmedResult);
         }catch(Exception e){
             log.error("Error parsing inventory-confirm-event message: {}", message, e);
+        }
+    }
+
+    @KafkaListener(topics = "inventory-expired-event", groupId = "${spring.application.name}")
+    public void InventoryExpiredEvent(String message){
+        log.info("Received inventory-expired-event message: {}", message);
+        try{
+            InventoryReservationExpiredResult inventoryExpiredResult = objectMapper.readValue(message, InventoryReservationExpiredResult.class);
+            orderSagaService.onInventoryExpired(inventoryExpiredResult);
+        }catch(Exception e){
+            log.error("Error parsing inventory-expired-event message: {}", message, e);
         }
     }
 }

@@ -38,6 +38,7 @@ public class OutboxPublisherJob {
                     case "inventory-failed-event" -> "inventory-failed-event";
                     case "inventory-confirm-event" -> "inventory-confirm-event";
                     case "inventory-created-event" -> "inventory-created-event";
+                    case "inventory-expired-event" -> "inventory-expired-event";
                     default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
                 };
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())

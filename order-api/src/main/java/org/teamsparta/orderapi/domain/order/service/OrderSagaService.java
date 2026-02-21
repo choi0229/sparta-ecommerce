@@ -13,6 +13,7 @@ import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
 import org.teamsparta.orderapi.domain.order.event.InventoryConfirmRequestedEvent;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
+import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservationExpiredResult;
 import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
 import org.teamsparta.orderapi.domain.payment.event.PaymentFailedEvent;
 import org.teamsparta.orderapi.domain.payment.event.PaymentRequestedEvent;
@@ -84,8 +85,10 @@ public class OrderSagaService {
 
     @Transactional
     public void onPaymentSucceeded(PaymentSucceededEvent event){
-        Orders order = orderRepository.findById(event.orderId()).orElseThrow();
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId()).orElseThrow();
+        Orders order = orderRepository.findById(event.orderId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
 
         if (saga.getState() == SagaState.COMPLETED) return;
 
@@ -108,8 +111,10 @@ public class OrderSagaService {
 
     @Transactional
     public void onPaymentFailed(PaymentFailedEvent event){
-        Orders order = orderRepository.findById(event.orderId()).orElseThrow();
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId()).orElseThrow();
+        Orders order = orderRepository.findById(event.orderId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
 
         if (saga.getState() == SagaState.FAILED) return;
 
@@ -119,13 +124,35 @@ public class OrderSagaService {
 
     @Transactional
     public void onInventoryConfirmed(InventoryConfirmedResult event) {
-        Orders order = orderRepository.findById(event.orderId()).orElseThrow();
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId()).orElseThrow();
+        Orders order = orderRepository.findById(event.orderId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
 
         // 최종 완료 처리
         saga.updateState(SagaState.COMPLETED, null, saga.getReservationId());
         order.updateStatus(Status.COMPLETED);
 
         log.info("Saga Fully Completed for Order: {}", order.getId());
+    }
+
+    @Transactional
+    public void onInventoryExpired(InventoryReservationExpiredResult event){
+        Orders order = orderRepository.findById(event.orderId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+
+        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
+
+        if(saga.getState() == SagaState.COMPLETED || saga.getState() == SagaState.FAILED || saga.getState() == SagaState.EXPIRED){
+            return;
+        }
+
+        if(saga.getReservationId() != null && !saga.getReservationId().equals(event.reservationId())){
+            throw new DomainException(DomainExceptionCode.INVALID_RESERVATION_ID);
+        }
+
+        saga.updateState(SagaState.EXPIRED, "TTL_EXPIRED", event.reservationId());
+        order.updateStatus(Status.EXPIRED);
     }
 }

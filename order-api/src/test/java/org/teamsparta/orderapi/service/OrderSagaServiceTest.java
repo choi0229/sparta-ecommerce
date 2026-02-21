@@ -15,6 +15,7 @@ import org.teamsparta.orderapi.domain.order.entity.Orders;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
 import org.teamsparta.orderapi.domain.order.event.InventoryConfirmRequestedEvent;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
+import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservationExpiredResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReserveFailedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservedResult;
 import org.teamsparta.orderapi.domain.order.repository.OrderRepository;
@@ -185,6 +186,29 @@ public class OrderSagaServiceTest {
         // then
         assertThat(sagaState.getState()).isEqualTo(SagaState.COMPLETED);
         assertThat(order.getStatus()).isEqualTo(Status.COMPLETED);
+        verify(outboxEventRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("재고 만료 성공 - EXPIRED 전이 + 주문 EXPIRED")
+    void onInventoryReservationExpired_success(){
+        // given
+        ReflectionTestUtils.setField(sagaState, "reservationId", RESERVATION_ID);
+        ReflectionTestUtils.setField(sagaState, "state", SagaState.PAYMENT_COMPLETED);
+
+        InventoryReservationExpiredResult event = new InventoryReservationExpiredResult(
+                UUID.randomUUID(), "inventory.expired", ORDER_ID, SAGA_ID, RESERVATION_ID
+        );
+        given(orderRepository.findById(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
+
+        // when
+        orderSagaService.onInventoryExpired(event);
+
+        // then
+        assertThat(sagaState.getState()).isEqualTo(SagaState.EXPIRED);
+        assertThat(order.getStatus()).isEqualTo(Status.EXPIRED);
+        assertThat(sagaState.getLastError()).isEqualTo("TTL_EXPIRED");
         verify(outboxEventRepository, never()).save(any());
     }
 }
