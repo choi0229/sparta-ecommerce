@@ -17,20 +17,20 @@ services:
       retries: 5
       start_period: 20s
 
-#  product-api:
-#    build: ./product-api
-#    ports:
-#      - "8081:8081"
-#    depends_on:
-#      product-db:
-#        condition: service_healthy
-#    environment:
-#      SERVER_PORT: 8081
-#      SPRING_DATASOURCE_URL: jdbc:postgresql://product-db:5432/productdb
-#      SPRING_DATASOURCE_USERNAME: root
-#      SPRING_DATASOURCE_PASSWORD: rootpassword
-#    networks:
-#      - ecommerce-network
+  product-api:
+    build: ./product-api
+    ports:
+      - "8081:8081"
+    depends_on:
+      product-db:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8081
+      SPRING_DATASOURCE_URL: jdbc:postgresql://product-db:5432/productdb
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: rootpassword
+    networks:
+      - ecommerce-network
 
   inventory-db:
     image: postgres:16
@@ -50,20 +50,20 @@ services:
       retries: 5
       start_period: 20s
 
-#  inventory-api:
-#    build: ./inventory-api
-#    ports:
-#      - "8082:8082"
-#    depends_on:
-#      inventory-db:
-#        condition: service_healthy
-#    environment:
-#      SERVER_PORT: 8082
-#      SPRING_DATASOURCE_URL: jdbc:postgresql://inventory-db:5432/inventorydb
-#      SPRING_DATASOURCE_USERNAME: root
-#      SPRING_DATASOURCE_PASSWORD: rootpassword
-#    networks:
-#      - ecommerce-network
+  inventory-api:
+    build: ./inventory-api
+    ports:
+      - "8082:8082"
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8082
+      SPRING_DATASOURCE_URL: jdbc:postgresql://inventory-db:5432/inventorydb
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: rootpassword
+    networks:
+      - ecommerce-network
 
   order-db:
     image: postgres:16
@@ -83,20 +83,20 @@ services:
       retries: 5
       start_period: 20s
 
-#  order-api:
-#    build: ./order-api
-#    ports:
-#      - "8083:8083"
-#    depends_on:
-#      order-db:
-#        condition: service_healthy
-#    environment:
-#      SERVER_PORT: 8083
-#      SPRING_DATASOURCE_URL: jdbc:postgresql://order-db:5432/orderdb
-#      SPRING_DATASOURCE_USERNAME: root
-#      SPRING_DATASOURCE_PASSWORD: rootpassword
-#    networks:
-#      - ecommerce-network
+  order-api:
+    build: ./order-api
+    ports:
+      - "8083:8083"
+    depends_on:
+      order-db:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8083
+      SPRING_DATASOURCE_URL: jdbc:postgresql://order-db:5432/orderdb
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: rootpassword
+    networks:
+      - ecommerce-network
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.0
