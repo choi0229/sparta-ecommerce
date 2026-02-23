@@ -3,6 +3,7 @@ package org.teamsparta.orderapi.domain.order.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -12,6 +13,9 @@ import org.teamsparta.orderapi.domain.order.dto.response.CreateOrderResponse;
 import org.teamsparta.orderapi.domain.order.entity.*;
 import org.teamsparta.orderapi.domain.order.event.OrderCreatedEvent;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
+import org.teamsparta.orderapi.domain.order.event.ProductSnapShotRequestEvent;
+import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult;
+import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult.ProductSnapshotItem;
 import org.teamsparta.orderapi.domain.order.repository.*;
 import org.teamsparta.orderapi.domain.productProjection.entity.ProductProjection;
 import org.teamsparta.orderapi.domain.productProjection.repository.ProductProjectionRepository;
@@ -21,6 +25,8 @@ import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
@@ -38,6 +44,8 @@ public class OrderService {
     private final IdempotencyService idempotencyService;
     private final OutboxQueryRepository outboxQueryRepository;
     private final OutboxEventRepository outboxEventRepository;
+    private final ProductSnapshotPendingStore productSnapshotPendingStore;
+    private final KafkaTemplate<String, String> kafkaTemplate;
 
     @Transactional
     public CreateOrderResponse createOrder(CreateOrderRequest request, String idemKey) {
@@ -67,17 +75,16 @@ public class OrderService {
             return new CreateOrderResponse(existing.getId(), existing.getOrderNo(), existing.getStatus());
         }
 
-        List<ProductProjection> projections = productProjectionRepository.findBySkuIn(skus);
-        Map<String, ProductProjection> bySku = projections.stream()
-                .collect(Collectors.toMap(ProductProjection::getSku, p -> p));
+//        List<ProductProjection> projections = productProjectionRepository.findBySkuIn(skus);
+//        Map<String, ProductProjection> bySku = projections.stream()
+//                .collect(Collectors.toMap(ProductProjection::getSku, p -> p));
+        Map<String, ProductSnapshotItem> bySku = fetchBySkus(skus, UUID.randomUUID());
 
         List<String> missing = skus.stream()
                 .filter(sku -> !bySku.containsKey(sku))
                 .distinct()
                 .toList();
-
-        if (!missing.isEmpty()) {
-            // TODO: 실패 처리 + "잠시 후 다시 시도"
+        if(!missing.isEmpty()){
             throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
         }
 
@@ -96,27 +103,23 @@ public class OrderService {
                 throw new DomainException(DomainExceptionCode.INVALID_QUANTITY);
             }
 
-            ProductProjection productProjection = bySku.get(item.sku());
+            ProductSnapshotItem snap = bySku.get(item.sku());
 
-            if(!"ACTIVE".equals(productProjection.getStatus().name())){
-                throw new DomainException(DomainExceptionCode.PRODUCT_INACTIVE);
-            }
-
-            BigDecimal unitPrice = productProjection.getPrice();
+            BigDecimal unitPrice = snap.price();
             BigDecimal lineAmount = unitPrice.multiply(BigDecimal.valueOf(item.quantity()));
             total = total.add(lineAmount);
 
-            Map<String, Object> optionJsonSnapShot = productProjection.getOptionJson();
+            Map<String, Object> optionJsonSnapShot = snap.optionJson();
 
             OrderItem orderItem = OrderItem.of(
                     savedOrder.getId(),
-                    productProjection.getSku(),
+                    snap.sku(),
                     item.quantity(),
                     unitPrice,
-                    productProjection.getProductName(),
+                    snap.productName(),
                     null,
                     optionJsonSnapShot,
-                    productProjection.getCategoryPath()
+                    snap.productId().toString()
             );
             orderItems.add(orderItem);
         }
@@ -148,5 +151,31 @@ public class OrderService {
                 .sorted()
                 .collect(Collectors.joining(","));
         return Integer.toHexString(raw.hashCode());
+    }
+
+    private Map<String, ProductSnapshotItem> fetchBySkus(List<String> skus, UUID requestId){
+        ProductSnapShotRequestEvent request = ProductSnapShotRequestEvent.from(requestId, skus);
+        CompletableFuture<ProductSnapshotReplyResult> future = productSnapshotPendingStore.register(requestId);
+
+        try{
+            kafkaTemplate.send("productSnapshot-requested-event", requestId.toString(), objectMapper.writeValueAsString(request));
+            ProductSnapshotReplyResult reply = future.get(800, TimeUnit.MILLISECONDS);
+
+            if (!reply.success()) {
+                throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
+            }
+
+            Map<String, ProductSnapshotItem> bySku = reply.items().stream()
+                    .collect(Collectors.toMap(ProductSnapshotItem::sku, it -> it));
+
+            List<String> missing = skus.stream().filter(s -> !bySku.containsKey(s)).distinct().toList();
+            if (!missing.isEmpty()) {
+                throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
+            }
+            return bySku;
+        }catch(Exception e){
+            productSnapshotPendingStore.timeout(requestId);
+            throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
+        }
     }
 }

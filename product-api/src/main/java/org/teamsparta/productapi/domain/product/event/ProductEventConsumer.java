@@ -6,7 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.teamsparta.productapi.domain.product.event.dto.InventoryCreateResult;
-import org.teamsparta.productapi.domain.product.service.ProductService;
+import org.teamsparta.productapi.domain.product.event.dto.ProductSnapshotRequestResult;
 import org.teamsparta.productapi.domain.product.service.ProductVariantService;
 
 @Component
@@ -25,6 +25,17 @@ public class ProductEventConsumer {
             productVariantService.activeProductVariant(inventoryCreateResult);
         }catch(Exception e){
             log.error("Error parsing inventory-created-event message: {}", message, e);
+        }
+    }
+
+    @KafkaListener(topics = "productSnapshot-requested-event", groupId = "${spring.application.name}")
+    public void ProductSnapshotRequestedEvent(String message){
+        log.info("Received productSnapshot-requested-event message: {}", message);
+        try{
+            ProductSnapshotRequestResult productSnapshotRequestResult = objectMapper.readValue(message, ProductSnapshotRequestResult.class);
+            productVariantService.replyProductSnapshot(productSnapshotRequestResult);
+        }catch(Exception e){
+            log.error("Error parsing productSnapshot-requested-event message: {}", message, e);
         }
     }
 }

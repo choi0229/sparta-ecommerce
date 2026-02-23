@@ -5,11 +5,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
-import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
-import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservationExpiredResult;
-import org.teamsparta.orderapi.domain.order.event.dto.InventoryReserveFailedResult;
-import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservedResult;
+import org.teamsparta.orderapi.domain.order.event.dto.*;
 import org.teamsparta.orderapi.domain.order.service.OrderSagaService;
+import org.teamsparta.orderapi.domain.order.service.ProductSnapshotPendingStore;
 import org.teamsparta.orderapi.domain.payment.event.PaymentFailedEvent;
 import org.teamsparta.orderapi.domain.payment.event.PaymentSucceededEvent;
 
@@ -20,6 +18,7 @@ public class OrderEventConsumer {
 
     private final ObjectMapper objectMapper;
     private final OrderSagaService orderSagaService;
+    private final ProductSnapshotPendingStore productSnapshotPendingStore;
 
     @KafkaListener(topics = "inventory-reserved-event", groupId = "${spring.application.name}")
     public void InventoryReservedEvent(String message){
@@ -84,6 +83,17 @@ public class OrderEventConsumer {
             orderSagaService.onInventoryExpired(inventoryExpiredResult);
         }catch(Exception e){
             log.error("Error parsing inventory-expired-event message: {}", message, e);
+        }
+    }
+
+    @KafkaListener(topics = "productSnapshot-reply-event", groupId = "order-api")
+    public void ProductSnapshotReplyEvent(String message){
+        log.info("Received product-snapshot-reply-event message: {}", message);
+        try{
+            ProductSnapshotReplyResult productSnapshotReplyResult = objectMapper.readValue(message, ProductSnapshotReplyResult.class);
+            productSnapshotPendingStore.complete(productSnapshotReplyResult);
+        }catch(Exception e){
+            log.error("Error parsing product-snapshot-reply-event message: {}", message, e);
         }
     }
 }
