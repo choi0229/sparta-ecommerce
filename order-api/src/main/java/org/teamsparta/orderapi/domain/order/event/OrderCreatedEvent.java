@@ -17,6 +17,7 @@ public class OrderCreatedEvent {
     private Long userId;
     private List<Item> items;
 
+    @Data
     public static class Item{
         private String sku;
         private Integer quantity;

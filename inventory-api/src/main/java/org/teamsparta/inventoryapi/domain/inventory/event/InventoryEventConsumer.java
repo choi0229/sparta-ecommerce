@@ -49,16 +49,16 @@ public class InventoryEventConsumer {
         }
     }
 
-    @KafkaListener(topics = "variant-created-event", groupId = "${spring.application.name}")
+    @KafkaListener(topics = "inventory-init-event", groupId = "${spring.application.name}")
     public void VariantCreatedEvent(String message){
-        log.info("Received variant-created-event message: {}", message);
+        log.info("Received inventory-init-event message: {}", message);
         try{
             VariantCreatResult variantCreatResult = objectMapper.readValue(message, VariantCreatResult.class);
             inventoryService.createInventory(variantCreatResult);
         }catch(JsonProcessingException e){
             log.error("Fatal: Invalid JSON format. Message: {}", message, e); // 재시도 무의미
         }catch(Exception e){
-            log.error("Error parsing variant-created-event message: {}",message,e);
+            log.error("Error parsing inventory-init-event message: {}",message,e);
             throw new DomainException(DomainExceptionCode.EVENT_CONSUME_ERROR);
         }
     }
