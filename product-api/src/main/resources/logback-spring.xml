@@ -2,13 +2,14 @@
 <configuration>
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
-    <property name="LOG_FILE" value="logs/application.log"/>
+    <appender name="LOGSTASH" class="net.logstash.logback.appender.LogstashTcpSocketAppender">
+        <destination>logstash.ecommerce.svc.cluster.local:5001</destination>
 
-    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
-        <file>${LOG_FILE}</file>
+        <reconnectionDelay>5 second</reconnectionDelay>
+
         <encoder class="net.logstash.logback.encoder.LogstashEncoder">
             <includeMdc>true</includeMdc>
-        </encoder>
+            <customFields>{"app_name":"product-api"}</customFields> </encoder>
     </appender>
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
@@ -18,7 +19,6 @@
     </appender>
 
     <root level="INFO">
-        <appender-ref ref="FILE"/>
         <appender-ref ref="STDOUT"/>
-    </root>
+        <appender-ref ref="LOGSTASH"/> </root>
 </configuration>

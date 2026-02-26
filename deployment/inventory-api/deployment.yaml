@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: inventory-api
-          image: inventory-api:v1
+          image: sparta-msa-final-project-inventory-api:latest
           imagePullPolicy: Never
           ports:
             - containerPort: 8082
@@ -26,7 +26,7 @@ spec:
                 name: db-secret
           env:
             - name: SERVER_PORT
-              value: "8081"
+              value: "8082"
             - name: SPRING_DATASOURCE_URL
               value: "jdbc:postgresql://inventory-db:5432/inventorydb"
               #value: "jdbc:postgresql://localhost:5434/inventorydb"
@@ -41,4 +41,4 @@ spec:
                   name: db-secret
                   key: DB_PASSWORD
             - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
-              value: "kafka:9092"
+              value: "kafka.ecommerce.svc.cluster.local:9092"

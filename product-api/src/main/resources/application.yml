@@ -6,8 +6,8 @@ spring:
     name: product-api
 
   datasource:
-    #url: jdbc:postgresql://product-db:5433/productdb
-    url: jdbc:postgresql://localhost:5433/productdb
+    url: jdbc:postgresql://product-db:5433/productdb
+    #url: jdbc:postgresql://localhost:5433/productdb
     username: root
     password: rootpassword
     driver-class-name: org.postgresql.Driver
@@ -37,8 +37,8 @@ spring:
       matching-strategy: ant_path_matcher
 
   kafka:
-    #bootstrap-servers: kafka:29092  # ??? ??? ??
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: kafka:29092  # ??? ??? ??
+    #bootstrap-servers: localhost:9092
 
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer   # ??? key? String -> bytes? ???
@@ -80,11 +80,11 @@ management:
     tags:
       application: ${spring.application.name}
 
-logging:
-  level:
-    root: INFO
-    com.example: DEBUG
+#logging:
+#  level:
+#    root: INFO
+#    com.example: DEBUG
 #    org.apache.kafka: DEBUG
-    org.apache.kafka: INFO
-    org.springframework.kafka: DEBUG
-    org.springframework.transaction: DEBUG
+#    org.apache.kafka: INFO
+#    org.springframework.kafka: DEBUG
+#    org.springframework.transaction: DEBUG

@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: order-api
-          image: order-api:v1
+          image: sparta-msa-final-project-order-api:latest
           imagePullPolicy: Never
           ports:
             - containerPort: 8083
@@ -41,4 +41,4 @@ spec:
                   name: db-secret
                   key: DB_PASSWORD
             - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
-              value: "kafka:9092"
+              value: "kafka.ecommerce.svc.cluster.local:9092"

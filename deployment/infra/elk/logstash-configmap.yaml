@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: ecommerce
+data:
+  logstash.conf: |
+    input {
+      tcp { port => 5001 codec => json_lines }
+      udp { port => 5001 codec => json }
+    }
+
+    filter {
+      # timestamp 필드가 ISO8601이면 자동 파싱 (없어도 동작함)
+      if [timestamp] {
+        date {
+          match => ["timestamp", "ISO8601"]
+          target => "@timestamp"
+        }
+      }
+    }
+
+    output {
+      elasticsearch {
+        hosts => ["http://elasticsearch:9200"]
+        index => "spring-logs-%{+YYYY.MM.dd}"
+      }
+      stdout { codec => rubydebug }
+    }
