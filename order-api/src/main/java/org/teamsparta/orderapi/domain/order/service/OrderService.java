@@ -46,15 +46,14 @@ public class OrderService {
     private final OutboxEventRepository outboxEventRepository;
     private final ProductSnapshotPendingStore productSnapshotPendingStore;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final OrderTransactionalService orderTransactionalService;
 
-    @Transactional
-    public CreateOrderResponse createOrder(CreateOrderRequest request, String idemKey) {
+    public CreateOrderResponse createOrder(CreateOrderRequest request, String idemKey){
         if(request.items() == null || request.items().isEmpty()){
             throw new DomainException(DomainExceptionCode.NOT_FOUND_ITEMS);
         }
 
         List<CreateOrderRequest.Item> items = request.items();
-
         List<String> skus = items.stream()
                 .map(CreateOrderRequest.Item::sku)
                 .filter(Objects::nonNull)
@@ -66,92 +65,105 @@ public class OrderService {
             throw new DomainException(DomainExceptionCode.INVALID_SKU);
         }
 
-        String requestHash = hashRequest(request);
-        IdempotencyRecord idemRecord = idempotencyService.startOrThrow(idemKey, requestHash);
-
-        if("COMPLETED".equals(idemRecord.getStatus().name()) && idemRecord.getOrderId() != null){
-            Orders existing = orderRepository.findById(idemRecord.getOrderId())
-                    .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
-            return new CreateOrderResponse(existing.getId(), existing.getOrderNo(), existing.getStatus());
-        }
-
-//        List<ProductProjection> projections = productProjectionRepository.findBySkuIn(skus);
-//        Map<String, ProductProjection> bySku = projections.stream()
-//                .collect(Collectors.toMap(ProductProjection::getSku, p -> p));
         Map<String, ProductSnapshotItem> bySku = fetchBySkus(skus, UUID.randomUUID());
 
-        List<String> missing = skus.stream()
-                .filter(sku -> !bySku.containsKey(sku))
-                .distinct()
-                .toList();
-        if(!missing.isEmpty()){
-            throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
-        }
-
-        String orderNo = generateOrderNo();
-        Orders order = Orders.createNew(orderNo, request.userId());
-        Orders savedOrder = orderRepository.save(order);
-
-        // TODO:saga_state
-        OrderSagaState sagaState = OrderSagaState.start(order.getSagaId(), savedOrder.getId());
-        sagaStateRepository.save(sagaState);
-
-        BigDecimal total = BigDecimal.ZERO;
-        List<OrderItem> orderItems = new ArrayList<>();
-        for(CreateOrderRequest.Item item : items){
-            if(item.quantity() == null || item.quantity() <= 0){
-                throw new DomainException(DomainExceptionCode.INVALID_QUANTITY);
-            }
-
-            ProductSnapshotItem snap = bySku.get(item.sku());
-
-            BigDecimal unitPrice = snap.price();
-            BigDecimal lineAmount = unitPrice.multiply(BigDecimal.valueOf(item.quantity()));
-            total = total.add(lineAmount);
-
-            Map<String, Object> optionJsonSnapShot = snap.optionJson();
-
-            OrderItem orderItem = OrderItem.of(
-                    savedOrder.getId(),
-                    snap.sku(),
-                    item.quantity(),
-                    unitPrice,
-                    snap.productName(),
-                    null,
-                    optionJsonSnapShot,
-                    snap.productId().toString()
-            );
-            orderItems.add(orderItem);
-        }
-        orderItemRepository.saveAll(orderItems);
-        sagaState.updateState(SagaState.INVENTORY_RESERVE_REQUESTED, null, null);
-        sagaStateRepository.save(sagaState);
-
-        OrderCreatedEvent orderCreatedEvent = OrderCreatedEvent.from(order, orderItems);
-        String payload;
-        try{
-            payload = objectMapper.writeValueAsString(orderCreatedEvent);
-        }catch(Exception e){
-            throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
-        }
-        outboxEventRepository.save(OutboxEvent.pending("Orders", savedOrder.getId().toString(), "order-create-event", payload));
-        idempotencyService.complete(idemKey, savedOrder.getId());
-
-        return new CreateOrderResponse(savedOrder.getId(), savedOrder.getOrderNo(), savedOrder.getStatus());
+        return orderTransactionalService.createOrderInternal(request, idemKey, bySku);
     }
 
-    private String generateOrderNo() {
-        return "O" + System.currentTimeMillis();
-    }
+//    @Transactional
+//    public CreateOrderResponse createOrder(CreateOrderRequest request, String idemKey) {
+//        if(request.items() == null || request.items().isEmpty()){
+//            throw new DomainException(DomainExceptionCode.NOT_FOUND_ITEMS);
+//        }
+//
+//        List<CreateOrderRequest.Item> items = request.items();
+//
+//        List<String> skus = items.stream()
+//                .map(CreateOrderRequest.Item::sku)
+//                .filter(Objects::nonNull)
+//                .map(String::trim)
+//                .filter(s -> !s.isEmpty())
+//                .toList();
+//
+//        if(skus.size() != items.size()){
+//            throw new DomainException(DomainExceptionCode.INVALID_SKU);
+//        }
+//
+//        String requestHash = hashRequest(request);
+//        IdempotencyRecord idemRecord = idempotencyService.startOrThrow(idemKey, requestHash);
+//
+//        if("COMPLETED".equals(idemRecord.getStatus().name()) && idemRecord.getOrderId() != null){
+//            Orders existing = orderRepository.findById(idemRecord.getOrderId())
+//                    .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+//            return new CreateOrderResponse(existing.getId(), existing.getOrderNo(), existing.getStatus());
+//        }
+//
+////        List<ProductProjection> projections = productProjectionRepository.findBySkuIn(skus);
+////        Map<String, ProductProjection> bySku = projections.stream()
+////                .collect(Collectors.toMap(ProductProjection::getSku, p -> p));
+//        Map<String, ProductSnapshotItem> bySku = fetchBySkus(skus, UUID.randomUUID());
+//
+//        List<String> missing = skus.stream()
+//                .filter(sku -> !bySku.containsKey(sku))
+//                .distinct()
+//                .toList();
+//        if(!missing.isEmpty()){
+//            throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
+//        }
+//
+//        String orderNo = generateOrderNo();
+//        Orders order = Orders.createNew(orderNo, request.userId());
+//        Orders savedOrder = orderRepository.save(order);
+//
+//        // TODO:saga_state
+//        OrderSagaState sagaState = OrderSagaState.start(order.getSagaId(), savedOrder.getId());
+//        sagaStateRepository.save(sagaState);
+//
+//        BigDecimal total = BigDecimal.ZERO;
+//        List<OrderItem> orderItems = new ArrayList<>();
+//        for(CreateOrderRequest.Item item : items){
+//            if(item.quantity() == null || item.quantity() <= 0){
+//                throw new DomainException(DomainExceptionCode.INVALID_QUANTITY);
+//            }
+//
+//            ProductSnapshotItem snap = bySku.get(item.sku());
+//
+//            BigDecimal unitPrice = snap.price();
+//            BigDecimal lineAmount = unitPrice.multiply(BigDecimal.valueOf(item.quantity()));
+//            total = total.add(lineAmount);
+//
+//            Map<String, Object> optionJsonSnapShot = snap.optionJson();
+//
+//            OrderItem orderItem = OrderItem.of(
+//                    savedOrder.getId(),
+//                    snap.sku(),
+//                    item.quantity(),
+//                    unitPrice,
+//                    snap.productName(),
+//                    null,
+//                    optionJsonSnapShot,
+//                    snap.productId().toString()
+//            );
+//            orderItems.add(orderItem);
+//        }
+//        orderItemRepository.saveAll(orderItems);
+//        sagaState.updateState(SagaState.INVENTORY_RESERVE_REQUESTED, null, null);
+//        sagaStateRepository.save(sagaState);
+//
+//        OrderCreatedEvent orderCreatedEvent = OrderCreatedEvent.from(order, orderItems);
+//        String payload;
+//        try{
+//            payload = objectMapper.writeValueAsString(orderCreatedEvent);
+//        }catch(Exception e){
+//            throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
+//        }
+//        outboxEventRepository.save(OutboxEvent.pending("Orders", savedOrder.getId().toString(), "order-create-event", payload));
+//        idempotencyService.complete(idemKey, savedOrder.getId());
+//
+//        return new CreateOrderResponse(savedOrder.getId(), savedOrder.getOrderNo(), savedOrder.getStatus());
+//    }
 
-    // TODO : SHA-256으로 교체
-    private String hashRequest(CreateOrderRequest request) {
-        String raw = request.userId() + "|" + request.items().stream()
-                .map(i -> i.sku() + ":" + i.quantity())
-                .sorted()
-                .collect(Collectors.joining(","));
-        return Integer.toHexString(raw.hashCode());
-    }
+
 
     private Map<String, ProductSnapshotItem> fetchBySkus(List<String> skus, UUID requestId){
         ProductSnapShotRequestEvent request = ProductSnapShotRequestEvent.from(requestId, skus);

@@ -41,6 +41,10 @@ spec:
           env:
             - name: KAFKA_HEAP_OPTS
               value: "-Xms512m -Xmx512m"
+            - name: KAFKA_ZOOKEEPER_SESSION_TIMEOUT_MS
+              value: "60000"
+            - name: KAFKA_ZOOKEEPER_CONNECTION_TIMEOUT_MS
+              value: "60000"
             - name: KAFKA_BROKER_ID
               value: "1"
             - name: KAFKA_ZOOKEEPER_CONNECT

@@ -6,8 +6,8 @@ spring:
     name: order-api
 
   datasource:
-    url: jdbc:postgresql://order-db:5435/orderdb
-    #url: jdbc:postgresql://localhost:5435/orderdb
+    #url: jdbc:postgresql://order-db:5435/orderdb
+    url: jdbc:postgresql://localhost:5435/orderdb
     username: root
     password: rootpassword
     driver-class-name: org.postgresql.Driver
@@ -37,8 +37,8 @@ spring:
       matching-strategy: ant_path_matcher
 
   kafka:
-    bootstrap-servers: kafka:29092  # ??? ??? ??
-    #bootstrap-servers: localhost:9092
+    #bootstrap-servers: kafka:29092  # ??? ??? ??
+    bootstrap-servers: localhost:9092
 
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer   # ??? key? String -> bytes? ???

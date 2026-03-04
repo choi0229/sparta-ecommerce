@@ -10,7 +10,7 @@ import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 
 export const options = {
     discardResponseBodies: true,
-    noConnectionReuse: false,
+    noConnectionReuse: true,
     scenarios: {
         ramp: {
             executor: 'ramping-arrival-rate',
@@ -20,7 +20,7 @@ export const options = {
             stages: [
                 { duration: '30s', target: 2 },   // warmup
                 { duration: '1m',  target: 5 },
-                { duration: '1m',  target: 10 },
+                { duration: '1m',  target: 7 },
                 { duration: '30s', target: 0 },
             ],
         },

@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecommerce-config
+  namespace: ecommerce
+data:
+  SPRING_PROFILES_ACTIVE: "prod"
+  KAFKA_TOPIC_PRODUCT: "product-topic"
+  KAFKA_TOPIC_ORDER: "order-topic"
+  KAFKA_TOPIC_INVENTORY: "inventory-topic"
