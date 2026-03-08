@@ -133,7 +133,7 @@ public class OrderTransactionalService {
     }
 
     private String generateOrderNo() {
-        return "O" + System.currentTimeMillis();
+        return "O" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
 

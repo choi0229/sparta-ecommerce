@@ -10,7 +10,7 @@ import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 
 export const options = {
     discardResponseBodies: true,
-    noConnectionReuse: true,
+    noConnectionReuse: false,
     scenarios: {
         ramp: {
             executor: 'ramping-arrival-rate',
@@ -18,9 +18,10 @@ export const options = {
             preAllocatedVUs: 50,
             maxVUs: 300,
             stages: [
-                { duration: '30s', target: 2 },   // warmup
-                { duration: '1m',  target: 5 },
-                { duration: '1m',  target: 7 },
+                { duration: '30s', target: 5 },    // warmup
+                { duration: '1m',  target: 10 },
+                { duration: '1m',  target: 20 },
+                { duration: '1m',  target: 30 },
                 { duration: '30s', target: 0 },
             ],
         },
@@ -39,8 +40,8 @@ export default function () {
     const payload = JSON.stringify({
         userId: 1,
         items: [
-            { sku: 'MBA-M3-08GB', quantity: 1 },
-            { sku: 'MBA-M3-16GB', quantity: 1 },
+            { sku: 'MBA-M5-08GB', quantity: 1 },
+            { sku: 'MBA-M5-16GB', quantity: 1 },
         ],
     });
 
