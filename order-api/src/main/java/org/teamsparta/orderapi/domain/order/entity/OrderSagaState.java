@@ -53,7 +53,7 @@ public class OrderSagaState {
         OrderSagaState orderSagaState = new OrderSagaState();
         orderSagaState.sagaId = saga_id;
         orderSagaState.orderId = order_id;
-        orderSagaState.state = SagaState.STARTED;
+        orderSagaState.state = SagaState.INVENTORY_RESERVE_REQUESTED;
         orderSagaState.lastError = null;
         return orderSagaState;
     }

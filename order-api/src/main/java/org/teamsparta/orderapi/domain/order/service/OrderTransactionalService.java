@@ -47,13 +47,14 @@ public class OrderTransactionalService {
     private final KafkaTemplate<String, String> kafkaTemplate;
 
     @Transactional
-    public CreateOrderResponse createOrderInternal(CreateOrderRequest request, String idemKey, Map<String, ProductSnapshotItem> bySku) {
-        List<CreateOrderRequest.Item> items = request.items();
-        List<String> skus = items.stream()
-                .map(CreateOrderRequest.Item::sku)
+    public CreateOrderResponse createOrderInternal(ProductSnapshotReplyResult result, String idemKey) {
+        Map<String, ProductSnapshotItem> bySku = result.items().stream()
+                .collect(Collectors.toMap(ProductSnapshotItem::sku, it -> it));
+        List<String> skus = result.requestItem().stream()
+                .map(ProductSnapshotReplyResult.Item::sku)
                 .toList();
 
-        String requestHash = hashRequest(request);
+        String requestHash = hashRequest(result);
         IdempotencyRecord idemRecord = idempotencyService.startOrThrow(idemKey, requestHash);
 
         if("COMPLETED".equals(idemRecord.getStatus().name()) && idemRecord.getOrderId() != null){
@@ -71,7 +72,7 @@ public class OrderTransactionalService {
         }
 
         String orderNo = generateOrderNo();
-        Orders order = Orders.createNew(orderNo, request.userId());
+        Orders order = Orders.createNew(orderNo, result.userId());
         Orders savedOrder = orderRepository.save(order);
 
         OrderSagaState sagaState = OrderSagaState.start(order.getSagaId(), savedOrder.getId());
@@ -79,7 +80,7 @@ public class OrderTransactionalService {
 
         BigDecimal total = BigDecimal.ZERO;
         List<OrderItem> orderItems = new ArrayList<>();
-        for(CreateOrderRequest.Item item : items){
+        for(ProductSnapshotReplyResult.Item item : result.requestItem()){
             if(item.quantity() == null || item.quantity() <= 0){
                 throw new DomainException(DomainExceptionCode.INVALID_QUANTITY);
             }
@@ -124,8 +125,8 @@ public class OrderTransactionalService {
 
 
     // TODO : SHA-256으로 교체
-    private String hashRequest(CreateOrderRequest request) {
-        String raw = request.userId() + "|" + request.items().stream()
+    private String hashRequest(ProductSnapshotReplyResult result) {
+        String raw = result.userId() + "|" + result.requestItem().stream()
                 .map(i -> i.sku() + ":" + i.quantity())
                 .sorted()
                 .collect(Collectors.joining(","));
@@ -133,7 +134,7 @@ public class OrderTransactionalService {
     }
 
     private String generateOrderNo() {
-        return "O" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
+        return "O" + System.currentTimeMillis();
     }
 
 

@@ -12,7 +12,10 @@ public record ProductSnapshotReplyResult(
         String eventType,
         boolean success,
         String error,
-        List<ProductSnapshotItem> items
+        List<ProductSnapshotItem> items,
+        List<Item> requestItem,
+        String idemKey,
+        Long userId
 ) {
     public record ProductSnapshotItem(
             String sku,
@@ -21,6 +24,11 @@ public record ProductSnapshotReplyResult(
             Long productId,
             BigDecimal price,
             Map<String, Object> optionJson
+    ){}
+
+    public record Item(
+            String sku,
+            Integer quantity
     ){}
 }
 

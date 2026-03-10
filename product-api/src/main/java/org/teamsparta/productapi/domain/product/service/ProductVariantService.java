@@ -48,7 +48,9 @@ public class ProductVariantService {
 
     @Transactional
     public void replyProductSnapshot(ProductSnapshotRequestResult event){
-        List<String> skus = event.skus();
+        List<String> skus = event.items().stream()
+                .map(ProductSnapshotRequestResult.Item::sku)
+                .toList();
         if(skus == null || skus.isEmpty()){
             saveReplyOutbox(ProductSnapShotReplyEvent.error(event.requestId(), "EMPTY_SKUS"));
             return;
@@ -81,7 +83,7 @@ public class ProductVariantService {
 
         }).toList();
 
-        saveReplyOutbox(ProductSnapShotReplyEvent.ok(event.requestId(), items));
+        saveReplyOutbox(ProductSnapShotReplyEvent.ok(event.requestId(), items, event.items(), event.idemKey(), event.userId()));
     }
 
     private void saveReplyOutbox(ProductSnapShotReplyEvent event){

@@ -7,6 +7,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.teamsparta.orderapi.domain.order.event.dto.*;
 import org.teamsparta.orderapi.domain.order.service.OrderSagaService;
+import org.teamsparta.orderapi.domain.order.service.OrderTransactionalService;
 import org.teamsparta.orderapi.domain.order.service.ProductSnapshotPendingStore;
 import org.teamsparta.orderapi.domain.payment.event.PaymentFailedEvent;
 import org.teamsparta.orderapi.domain.payment.event.PaymentSucceededEvent;
@@ -19,6 +20,7 @@ public class OrderEventConsumer {
     private final ObjectMapper objectMapper;
     private final OrderSagaService orderSagaService;
     private final ProductSnapshotPendingStore productSnapshotPendingStore;
+    private final OrderTransactionalService orderTransactionalService;
 
     @KafkaListener(topics = "inventory-reserved-event", groupId = "${spring.application.name}")
     public void InventoryReservedEvent(String message){
@@ -91,7 +93,8 @@ public class OrderEventConsumer {
         log.info("Received product-snapshot-reply-event message: {}", message);
         try{
             ProductSnapshotReplyResult productSnapshotReplyResult = objectMapper.readValue(message, ProductSnapshotReplyResult.class);
-            productSnapshotPendingStore.complete(productSnapshotReplyResult);
+            // productSnapshotPendingStore.complete(productSnapshotReplyResult);
+            orderTransactionalService.createOrderInternal(productSnapshotReplyResult, productSnapshotReplyResult.idemKey());
         }catch(Exception e){
             log.error("Error parsing product-snapshot-reply-event message: {}", message, e);
         }

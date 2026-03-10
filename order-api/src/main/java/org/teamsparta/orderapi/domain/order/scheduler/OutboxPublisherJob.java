@@ -38,6 +38,7 @@ public class OutboxPublisherJob {
                     case "order-create-event" -> "order-create-event";
                     case "payment-request-event" -> "payment-request-event";
                     case "order-confirm-event" -> "order-confirm-event";
+                    case "productSnapshot-requested-event" -> "productSnapshot-requested-event";
                     default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
                 };
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())

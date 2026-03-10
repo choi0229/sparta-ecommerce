@@ -10,6 +10,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.teamsparta.orderapi.domain.order.dto.request.CreateOrderRequest;
 import org.teamsparta.orderapi.domain.order.dto.response.CreateOrderResponse;
+import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
 import org.teamsparta.orderapi.domain.order.entity.*;
 import org.teamsparta.orderapi.domain.order.event.OrderCreatedEvent;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
@@ -47,27 +48,35 @@ public class OrderService {
     private final ProductSnapshotPendingStore productSnapshotPendingStore;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final OrderTransactionalService orderTransactionalService;
+    private final IdempotencyRepository idempotencyRepository;
 
-    public CreateOrderResponse createOrder(CreateOrderRequest request, String idemKey){
+    public void createOrder(CreateOrderRequest request, String idemKey){
         if(request.items() == null || request.items().isEmpty()){
             throw new DomainException(DomainExceptionCode.NOT_FOUND_ITEMS);
         }
 
-        List<CreateOrderRequest.Item> items = request.items();
-        List<String> skus = items.stream()
-                .map(CreateOrderRequest.Item::sku)
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .toList();
+        ProductSnapShotRequestEvent event = ProductSnapShotRequestEvent.from(UUID.randomUUID(), request.items(), idemKey, request.userId());
+        String payload;
 
-        if(skus.size() != items.size()){
-            throw new DomainException(DomainExceptionCode.INVALID_SKU);
+        try{
+            payload = objectMapper.writeValueAsString(event);
+            outboxEventRepository.save(OutboxEvent.pending("Orders", UUID.randomUUID().toString(), "productSnapshot-requested-event", payload));
+        }catch(Exception e){
+            throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
+    }
 
-        Map<String, ProductSnapshotItem> bySku = fetchBySkus(skus, UUID.randomUUID());
-
-        return orderTransactionalService.createOrderInternal(request, idemKey, bySku);
+    public OrderStatusResponse getOrderStatus(String idemKey) {
+        Optional<IdempotencyRecord> recordOpt = idempotencyRepository.findById(idemKey);
+        if(recordOpt.isEmpty()){
+            return new OrderStatusResponse(idemKey, "PENDING", null);
+        }
+        IdempotencyRecord record = recordOpt.get();
+        return new OrderStatusResponse(
+                record.getIdemKey(),
+                record.getStatus().name(),
+                record.getOrderId()
+        );
     }
 
 //    @Transactional
@@ -165,29 +174,29 @@ public class OrderService {
 
 
 
-    private Map<String, ProductSnapshotItem> fetchBySkus(List<String> skus, UUID requestId){
-        ProductSnapShotRequestEvent request = ProductSnapShotRequestEvent.from(requestId, skus);
-        CompletableFuture<ProductSnapshotReplyResult> future = productSnapshotPendingStore.register(requestId);
-
-        try{
-            kafkaTemplate.send("productSnapshot-requested-event", requestId.toString(), objectMapper.writeValueAsString(request));
-            ProductSnapshotReplyResult reply = future.get(800, TimeUnit.MILLISECONDS);
-
-            if (!reply.success()) {
-                throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
-            }
-
-            Map<String, ProductSnapshotItem> bySku = reply.items().stream()
-                    .collect(Collectors.toMap(ProductSnapshotItem::sku, it -> it));
-
-            List<String> missing = skus.stream().filter(s -> !bySku.containsKey(s)).distinct().toList();
-            if (!missing.isEmpty()) {
-                throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
-            }
-            return bySku;
-        }catch(Exception e){
-            productSnapshotPendingStore.timeout(requestId);
-            throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
-        }
-    }
+//    private void fetchBySkus(List<String> skus, UUID requestId, CreateOrderRequest orderRequest, String idemKey){
+//        ProductSnapShotRequestEvent request = ProductSnapShotRequestEvent.from(requestId, skus, orderRequest, idemKey);
+//        // CompletableFuture<ProductSnapshotReplyResult> future = productSnapshotPendingStore.register(requestId);
+//
+//        try{
+//            // kafkaTemplate.send("productSnapshot-requested-event", requestId.toString(), objectMapper.writeValueAsString(request));
+//            // ProductSnapshotReplyResult reply = future.get(800, TimeUnit.MILLISECONDS);
+//            outboxEventRepository.save(OutboxEvent.pending("Orders",  requestId.toString(), "productSnapshot-requested-event", objectMapper.writeValueAsString(request)));
+////            if (!reply.success()) {
+////                throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
+////            }
+////
+////            Map<String, ProductSnapshotItem> bySku = reply.items().stream()
+////                    .collect(Collectors.toMap(ProductSnapshotItem::sku, it -> it));
+////
+////            List<String> missing = skus.stream().filter(s -> !bySku.containsKey(s)).distinct().toList();
+////            if (!missing.isEmpty()) {
+////                throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
+////            }
+////            return bySku;
+//        }catch(Exception e){
+//            productSnapshotPendingStore.timeout(requestId);
+//            throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
+//        }
+//    }
 }

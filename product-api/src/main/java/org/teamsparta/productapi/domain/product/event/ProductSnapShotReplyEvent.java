@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.teamsparta.productapi.domain.product.event.dto.ProductSnapshotRequestResult;
 import org.teamsparta.productapi.global.enums.Status;
 
 import java.math.BigDecimal;
@@ -18,13 +19,19 @@ public class ProductSnapShotReplyEvent {
     private boolean success;
     private String error;
     private List<ProductSnapshotItem> items;
+    private List<ProductSnapshotRequestResult.Item> requestItem;
+    private String idemKey;
+    private Long userId;
 
-    public static ProductSnapShotReplyEvent ok(UUID requestId, List<ProductSnapshotItem> items){
+    public static ProductSnapShotReplyEvent ok(UUID requestId, List<ProductSnapshotItem> items, List<ProductSnapshotRequestResult.Item> requestItem, String idemKey, Long userId){
         ProductSnapShotReplyEvent event = new ProductSnapShotReplyEvent();
         event.setRequestId(requestId);
         event.setSuccess(true);
         event.setError(null);
         event.setItems(items);
+        event.setRequestItem(requestItem);
+        event.setIdemKey(idemKey);
+        event.setUserId(userId);
         return event;
     }
 

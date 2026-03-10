@@ -6,6 +6,12 @@ import java.util.UUID;
 public record ProductSnapshotRequestResult(
         UUID requestId,
         String eventType,
-        List<String> skus
+        List<Item> items,
+        String idemKey,
+        Long userId
 ) {
+    public record Item(
+            String sku,
+            Integer quantity
+    ) {}
 }
