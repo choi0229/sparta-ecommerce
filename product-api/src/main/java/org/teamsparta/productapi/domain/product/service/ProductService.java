@@ -20,6 +20,7 @@ import org.teamsparta.productapi.domain.product.entity.OutboxEvent;
 import org.teamsparta.productapi.domain.product.entity.Product;
 import org.teamsparta.productapi.domain.product.entity.ProductImage;
 import org.teamsparta.productapi.domain.product.entity.ProductVariant;
+import org.teamsparta.productapi.domain.product.event.ProductEsSyncEvent;
 import org.teamsparta.productapi.domain.product.event.ProductInventoryEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantPublisher;
@@ -35,6 +36,8 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.util.StringUtils;
 
 @Service
 @Slf4j
@@ -104,6 +107,8 @@ public class ProductService {
             }
             productVariantRepository.saveAll(product.getProductVariants());
         }
+        ProductEsSyncEvent esSyncEvent = ProductEsSyncEvent.from(saved, "CREATE");
+        outboxEvents.add(createOutboxEvent("ProductEs", saved.getId().toString(), "es-sync-event", esSyncEvent));
         if (!outboxEvents.isEmpty()) {
             outboxEventRepository.saveAll(outboxEvents);
         }
@@ -177,4 +182,36 @@ public class ProductService {
         return productPage.map(ProductSummaryResponse::from);
     }
 
+    // FTS 검색 추가
+    @Transactional(readOnly = true)
+    public Page<ProductSummaryResponse> searchProductsFts(
+            String keyword,
+            String brandName,
+            Long categoryId,
+            Status status,
+            Pageable pageable
+    ) {
+        String tsquery = toTsQuery(keyword);
+        String brandTsquery = toTsQuery(brandName);
+        String statusStr = status != null ? status.name() : null;
+
+        List<Product> content = productRepository.searchByFts(
+                keyword, tsquery,
+                brandName, brandTsquery,
+                categoryId, statusStr,
+                pageable.getPageSize(), pageable.getOffset()
+        );
+        Long total = productRepository.countByFts(
+                keyword, tsquery,
+                brandName, brandTsquery,
+                categoryId, statusStr
+        );
+        return new PageImpl<>(content, pageable, total != null ? total : 0)
+                .map(ProductSummaryResponse::from);
+    }
+
+    private String toTsQuery(String keyword) {
+        if (!StringUtils.hasText(keyword)) return null;
+        return keyword.trim().replaceAll("\\s+", " & ");
+    }
 }

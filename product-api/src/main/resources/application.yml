@@ -32,9 +32,9 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
-  mvc:
-    pathmatch:
-      matching-strategy: ant_path_matcher
+  #mvc:
+    #pathmatch:
+      #matching-strategy: ant_path_matcher
 
   kafka:
     bootstrap-servers: kafka:29092  # ??? ??? ??
@@ -67,6 +67,9 @@ spring:
       credentials:
         access-key: admin
         secret-key: password
+
+  elasticsearch:
+    uris: http://elasticsearch:9200
 
 management:
   endpoints:

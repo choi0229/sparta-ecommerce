@@ -1,25 +1,18 @@
 package org.teamsparta.productapi.domain.product.repository;
 
-import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import org.teamsparta.productapi.domain.product.entity.Product;
+import org.teamsparta.productapi.domain.product.entity.ProductPlain;
 
 import java.util.List;
-import java.util.Optional;
 
 @Repository
-public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpecificationExecutor<Product> {
-
-    @EntityGraph(attributePaths = {"category", "productImages", "productVariants"})
-    Optional<Product> findById(Long id);
-
+public interface ProductPlainRepository extends JpaRepository<ProductPlain, Long> {
     @Query(
             value = """
-        SELECT * FROM product p
+        SELECT * FROM product_plain p
         WHERE (:keyword IS NULL OR p.name_tsv @@ to_tsquery('simple', :tsquery))
           AND (:brandName IS NULL OR p.brand_tsv @@ to_tsquery('simple', :brandTsquery))
           AND (:categoryId IS NULL OR p.category_id = :categoryId)
@@ -29,7 +22,7 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
         """,
             nativeQuery = true
     )
-    List<Product> searchByFts(
+    List<ProductPlain> searchByFts(
             @Param("keyword") String keyword,
             @Param("tsquery") String tsquery,
             @Param("brandName") String brandName,
@@ -42,7 +35,7 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
 
     @Query(
             value = """
-        SELECT COUNT(*) FROM product p
+        SELECT COUNT(*) FROM product_plain p
         WHERE (:keyword IS NULL OR p.name_tsv @@ to_tsquery('simple', :tsquery))
           AND (:brandName IS NULL OR p.brand_tsv @@ to_tsquery('simple', :brandTsquery))
           AND (:categoryId IS NULL OR p.category_id = :categoryId)

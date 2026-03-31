@@ -38,6 +38,7 @@ public class OutboxPublisherJob {
                     case "product-variant-event" -> "product-variant-event";
                     case "productSnapshot-reply-event" -> "productSnapshot-reply-event";
                     case "inventory-init-event" -> "inventory-init-event";
+                    case "es-sync-event" -> "es-sync-event";
                     default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
                 };
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())
