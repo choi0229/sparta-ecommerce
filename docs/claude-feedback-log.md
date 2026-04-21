@@ -123,3 +123,31 @@ README.md · `.claude/settings.json` 같은 문서·설정 파일은 스캔 대�
 **재발 방지**
 - 새로운 문서·설정 파일에 위험 명령 예시를 추가할 경우 위 제외 패턴에 경로를 함께 추가
 - guardrails 오탐 발생 시 제외 패턴 확인을 첫 번째 디버깅 단계로 삼음
+
+---
+
+### 6. Guardrails Markdown 문서 오탐 개선
+
+README와 하네스 평가 문서에 위험 명령어를 설명 목적으로 작성했으나, guardrails가 이를 실제 위험 명령으로 오탐지했다.  
+이에 따라 위험 명령 문자열 검사 대상에서 Markdown 문서를 제외하고, Java/YAML/SQL/Shell 등 실제 코드 및 설정 파일 중심으로 검사하도록 개선했다.
+
+---
+
+### 7. Minikube 배포 검증 — NodePort 직접 접근 불가 (Docker Desktop 환경)
+
+**발견 경로**
+Minikube 배포 후 `http://$(minikube ip):30084` 로 접근 시 응답 없음.
+
+**영향**
+NodePort로 접근이 안 되면 배포 검증 자체를 진행할 수 없을 것으로 오해할 수 있습니다.
+
+**원인**
+Docker Desktop 기반 Minikube는 VM 네트워크와 호스트 네트워크가 격리되어 있어 NodePort IP가 호스트에서 직접 라우팅되지 않습니다. 이는 서비스나 Pod의 문제가 아닙니다.
+
+**수정**
+`kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce` 로 우회하여 `localhost:8084` 접근.
+Service와 Endpoint는 정상적으로 구성되어 있었고 모든 API 검증을 완료했습니다.
+
+**재발 방지**
+- Docker Desktop 기반 Minikube 환경에서는 NodePort 직접 접근 대신 `port-forward` 또는 `minikube service` 사용
+- 배포 검증 체크리스트에 환경별 접근 방법 분기 추가 (위 내용은 `docs/` 배포 가이드에 반영)

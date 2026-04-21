@@ -16,11 +16,11 @@
 | permissions boundary | 3 / 5 | 개선 필요 |
 | guardrails script | 3 / 5 | 개선 필요 |
 | GitHub Actions CI Gate | 4 / 5 | 양호 |
-| 테스트/빌드 검증 | 3 / 5 | 개선 필요 |
+| 테스트/빌드 검증 | 4 / 5 | 양호 |
 | 기존 서비스 보호 | 4 / 5 | 양호 |
 | 피드백 루프 | 3 / 5 | 개선 필요 |
 
-**전체 평균: 3.7 / 5**
+**전체 평균: 3.8 / 5**
 
 ---
 
@@ -128,12 +128,18 @@
 
 ---
 
-### 8. 테스트/빌드 검증 — 3 / 5
+### 8. 테스트/빌드 검증 — 4 / 5
 
 **근거**
 - `LogisticsTransactionalServiceTest`: 5개 단위 테스트, DB 불필요, `@ExtendWith(MockitoExtension.class)`
 - 멱등성 4개 케이스 + 중복 orderId 케이스 커버
 - `ReflectionTestUtils.setField()`로 private id 주입하여 NPE 회피
+- **Minikube 클러스터에서 배포 후 실제 API 동작 검증 완료**
+  - `POST /shipments` 201 Created, `status: READY`
+  - `GET /shipments/1` 200 OK
+  - 상태 전이 4단계 (`READY → SHIPPED → IN_TRANSIT → DELIVERED`) 정상 확인
+  - 잘못된 전이 (`DELIVERED → FAILED`) 400 Bad Request + `INVALID_SHIPMENT_STATUS_TRANSITION` 확인
+  - `/actuator/health` DB UP 포함 확인
 
 **남은 개선점**
 - `OutboxPublisherJob`, `OutboxEventTransactionalService` 단위 테스트 부재

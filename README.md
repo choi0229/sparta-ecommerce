@@ -315,13 +315,6 @@ Guardrails 검사 항목은 다음과 같습니다.
 ```bash
 cd logistics-api
 ./gradlew test
-```
-
-```text
-BUILD SUCCESSFUL
-```
-
-```bash
 ./gradlew bootJar -x test
 ```
 
@@ -329,7 +322,33 @@ BUILD SUCCESSFUL
 BUILD SUCCESSFUL
 ```
 
-또한 GitHub Actions에서 `Claude CI Gate` workflow가 정상 실행되는 것을 확인했습니다.
+GitHub Actions에서 `Claude CI Gate` workflow가 정상 실행되는 것을 확인했습니다.
+
+Minikube 클러스터에서도 배포 및 API 동작을 검증했습니다.
+
+```bash
+kubectl get pod -n ecommerce -l app=logistics-api
+# NAME                            READY   STATUS    RESTARTS   AGE
+# logistics-api-xxxxxxxxx-xxxxx   2/2     Running   0          ...
+# logistics-api-xxxxxxxxx-xxxxx   2/2     Running   0          ...
+```
+
+```bash
+kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce
+curl http://localhost:8084/actuator/health
+# {"status":"UP", ...}  — DB health UP 포함
+```
+
+| API | 결과 |
+|---|---|
+| `POST /shipments` | 201 Created, `status: READY` |
+| `GET /shipments/1` | 200 OK |
+| `PATCH /shipments/1/status` (READY→SHIPPED) | 200 OK |
+| `PATCH /shipments/1/status` (SHIPPED→IN_TRANSIT) | 200 OK |
+| `PATCH /shipments/1/status` (IN_TRANSIT→DELIVERED) | 200 OK |
+| `PATCH /shipments/1/status` (DELIVERED→FAILED) | 400 Bad Request, `errorCode: INVALID_SHIPMENT_STATUS_TRANSITION` |
+
+NodePort 30084는 Docker Desktop 기반 Minikube 환경에서 직접 접근이 되지 않아 `kubectl port-forward`로 검증했습니다. Service와 Endpoint는 정상적으로 구성되어 있으며, 이는 서비스/Pod 문제가 아니라 로컬 Minikube 외부 접근 방식의 차이입니다.
 
 ---
 
@@ -396,7 +415,7 @@ Claude guardrails passed.
 
 ## 10. 향후 개선 과제
 
-- 실제 Minikube/Kubernetes 환경에서 `logistics-api` 배포 검증
+- ~~실제 Minikube/Kubernetes 환경에서 `logistics-api` 배포 검증~~ (완료)
 - `shipment-event`를 `order-api`가 수신해 주문 배송 상태에 반영하는 흐름 추가
 - 배송지 정보 처리 방식 결정
   - 주문 이벤트 확장
@@ -413,7 +432,7 @@ Claude guardrails passed.
   - Outbox 발행 실패 수
   - Kafka Consumer 처리 실패 수
 - Claude Code 하네스 고도화
-  - `.claude/settings.json` 권한 경계 추가
+  - ~~`.claude/settings.json` 권한 경계 추가~~ (완료)
   - hooks 기반 자동 guardrail 추가
   - 전체 서비스 테스트 matrix CI 확장
-  - `docs/claude-feedback-log.md` 기반 피드백 루프 기록
+  - ~~`docs/claude-feedback-log.md` 기반 피드백 루프 기록~~ (완료)
