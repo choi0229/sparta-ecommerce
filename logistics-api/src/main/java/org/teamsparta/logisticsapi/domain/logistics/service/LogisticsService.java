@@ -1,0 +1,46 @@
+package org.teamsparta.logisticsapi.domain.logistics.service;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
+import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentStatusUpdateRequest;
+import org.teamsparta.logisticsapi.domain.logistics.dto.response.ShipmentResponse;
+import org.teamsparta.logisticsapi.domain.logistics.entity.Shipment;
+import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentRepository;
+import org.teamsparta.logisticsapi.global.exception.DomainException;
+import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class LogisticsService {
+
+    private final ShipmentRepository shipmentRepository;
+    private final LogisticsTransactionalService transactionalService;
+
+    public ShipmentResponse createShipment(ShipmentCreateRequest request) {
+        if (shipmentRepository.existsByOrderId(request.orderId())) {
+            throw new DomainException(DomainExceptionCode.DUPLICATE_SHIPMENT);
+        }
+        Shipment shipment = transactionalService.createShipment(request);
+        log.info("Shipment created. shipmentId={}, orderId={}", shipment.getId(), shipment.getOrderId());
+        return ShipmentResponse.from(shipment);
+    }
+
+    @Transactional(readOnly = true)
+    public ShipmentResponse getShipment(Long shipmentId) {
+        Shipment shipment = shipmentRepository.findById(shipmentId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.SHIPMENT_NOT_FOUND));
+        return ShipmentResponse.from(shipment);
+    }
+
+    public ShipmentResponse updateStatus(Long shipmentId, ShipmentStatusUpdateRequest request) {
+        Shipment shipment = transactionalService.updateStatus(
+                shipmentId, request.status(), request.description(), null
+        );
+        log.info("Shipment status updated. shipmentId={}, status={}", shipment.getId(), shipment.getStatus());
+        return ShipmentResponse.from(shipment);
+    }
+}

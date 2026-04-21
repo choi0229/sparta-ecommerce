@@ -41,4 +41,4 @@ CLAUDE.md
 .env
 
 ### QueryDSL ###
-/src/main/generated/
+/src/main/generated/.DS_Store
