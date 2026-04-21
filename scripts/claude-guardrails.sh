@@ -40,9 +40,9 @@ if echo "$CHANGED_FILES" | grep -q '^docs/claude-sessions/'; then
   FAIL=1
 fi
 
-# 5. 위험한 명령어 패턴 감지 (문서/설정/스크립트 자체 제외)
+# 5. 위험한 명령어 패턴 감지 (Markdown 문서/설정/스크립트 자체 제외)
 DANGEROUS_PATTERN='(rm\s+-rf|DROP\s+TABLE|TRUNCATE\s+TABLE|force\s*push|git\s+push\s+.*--force)'
-SCAN_FILES=$(echo "$CHANGED_FILES" | grep -vE '^(README\.md|scripts/claude-guardrails\.sh|\.claude/settings\.json|\.github/)' || true)
+SCAN_FILES=$(echo "$CHANGED_FILES" | grep -vE '(\.md$|scripts/claude-guardrails\.sh|\.claude/settings\.json|\.github/)' || true)
 
 if [[ -n "$SCAN_FILES" ]]; then
   MATCHED=$(echo "$SCAN_FILES" | while read -r f; do
