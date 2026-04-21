@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch*)",
+      "Bash(ls*)",
+      "Bash(find * -type f*)",
+      "Bash(*/gradlew test*)",
+      "Bash(*/gradlew bootJar*)",
+      "Bash(*/gradlew build*)",
+      "Bash(bash scripts/claude-guardrails.sh*)"
+    ],
+    "deny": [
+      "Bash(rm -rf*)",
+      "Bash(rm -r *)",
+      "Bash(kubectl delete*)",
+      "Bash(docker system prune*)",
+      "Bash(* DROP TABLE*)",
+      "Bash(* TRUNCATE *)",
+      "Bash(* TRUNCATE;*)",
+      "Bash(cat *.env*)",
+      "Bash(cat .env*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/secrets/**)"
+    ]
+  }
+}
