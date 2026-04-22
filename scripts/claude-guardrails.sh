@@ -41,12 +41,12 @@ if echo "$CHANGED_FILES" | grep -q '^docs/claude-sessions/'; then
 fi
 
 # 5. 위험한 명령어 패턴 감지 (Markdown 문서/설정/스크립트 자체 제외)
-DANGEROUS_PATTERN='(rm\s+-rf|DROP\s+TABLE|TRUNCATE\s+TABLE|force\s*push|git\s+push\s+.*--force)'
+DANGEROUS_PATTERN='(rm[[:space:]]+-rf|DROP[[:space:]]+TABLE|TRUNCATE[[:space:]]+TABLE|force[[:space:]]*push|git[[:space:]]+push[[:space:]]+.*--force)'
 SCAN_FILES=$(echo "$CHANGED_FILES" | grep -vE '(\.md$|scripts/claude-guardrails\.sh|\.claude/settings\.json|\.github/)' || true)
 
 if [[ -n "$SCAN_FILES" ]]; then
   MATCHED=$(echo "$SCAN_FILES" | while read -r f; do
-    [[ -f "$f" ]] && grep -lP "$DANGEROUS_PATTERN" "$f" 2>/dev/null || true
+    [[ -f "$f" ]] && grep -lE "$DANGEROUS_PATTERN" "$f" 2>/dev/null || true
   done)
   if [[ -n "$MATCHED" ]]; then
     echo "[FAIL] 위험한 명령어 패턴이 감지되었습니다:"
