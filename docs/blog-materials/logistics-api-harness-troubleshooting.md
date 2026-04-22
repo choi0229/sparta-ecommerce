@@ -176,3 +176,130 @@ SCAN_FILES=$(echo "$CHANGED_FILES" | grep -vE '(\.md$|scripts/claude-guardrails\
 - 위험 패턴 스캔은 실제 코드 파일(.java, .sh, .sql, .yaml)에만 적용하는 것이 적절합니다.
 - 문서 파일은 설명 목적의 예시 코드를 포함할 수 있으므로 처음부터 제외 대상으로 설계하는 것이 좋습니다.
 - 새로운 문서 형식이 추가될 때마다 제외 패턴을 업데이트하는 것보다, 확장자 기반 포함/제외가 유지보수 면에서 유리합니다.
+
+---
+
+## 8. Hibernate 6에서 javax.persistence 힌트가 silently 무시됨
+
+**현상**
+`OutboxQueryRepository`에서 PESSIMISTIC_WRITE 잠금 시 `"javax.persistence.lock.timeout"` 힌트를 설정했지만,
+실제로 lock timeout이 적용되지 않아 잠금 대기가 무제한으로 발생할 수 있는 상태였습니다.
+별도 오류 메시지 없이 힌트가 무시되기 때문에 코드만 보고는 정상 동작 중이라고 오인하기 쉽습니다.
+
+**원인**
+Spring Boot 3.x는 Hibernate 6을 사용하며, Hibernate 6부터 JPA 네임스페이스가 `javax.*`에서 `jakarta.*`로 변경되었습니다.
+`javax.persistence.lock.timeout` 힌트는 Hibernate 6에서 인식되지 않아 적용 없이 통과됩니다.
+
+**해결**
+```java
+// 수정 전
+.setHint("javax.persistence.lock.timeout", 3000)
+
+// 수정 후
+.setHint("jakarta.persistence.lock.timeout", 3000)
+```
+
+**교훈**
+- Spring Boot 2.x → 3.x 마이그레이션 또는 신규 프로젝트에서 `javax.*` 힌트 키를 그대로 사용하면 silently 무시됩니다.
+- 힌트가 실제로 적용되는지 확인하려면 slow query 로그나 lock wait 모니터링이 필요합니다.
+- Hibernate 6 기반 프로젝트에서는 JPA 힌트 키 전체를 `jakarta.*`로 통일하는 것이 안전합니다.
+
+---
+
+## 9. Outbox 폴링으로 인한 SQL 로그 과다 출력
+
+**현상**
+`OutboxPublisherJob`이 500ms 주기로 Outbox 이벤트를 폴링하면서
+`show-sql: true` 설정으로 인해 분당 ~120줄 이상의 SQL 로그가 출력되었습니다.
+실제 비즈니스 로그가 SQL 로그에 묻혀 가독성이 크게 떨어졌습니다.
+
+**원인**
+- `application.yml`에 `spring.jpa.show-sql: true` 설정
+- Hibernate `format_sql` 미설정으로 멀티라인 SQL 출력
+- 폴링 주기가 짧아 로그 볼륨이 빠르게 증가
+
+**해결**
+```yaml
+spring:
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+logging:
+  level:
+    org.hibernate.SQL: INFO
+    org.hibernate.orm.jdbc.bind: INFO
+```
+
+Hibernate SQL 로그를 `show-sql`이 아닌 Logger 레벨로 제어하면
+필요 시 특정 패키지 로그 레벨만 올려서 디버깅할 수 있습니다.
+
+**교훈**
+- `show-sql: true`는 개발 초기에만 사용하고, 운영/통합 환경에서는 반드시 꺼야 합니다.
+- Outbox 패턴처럼 짧은 폴링 주기가 있는 경우 SQL 로그 설정을 더욱 신중하게 관리해야 합니다.
+- Hibernate Logger 레벨 기반 설정이 `show-sql`보다 환경별 제어에 유리합니다.
+
+---
+
+## 10. KafkaTemplate.send() 반환 타입 mock — CompletableFuture 처리
+
+**현상**
+`OutboxPublisherJobTest` 작성 시 `kafkaTemplate.send()`의 반환 타입을 mock하는 과정에서
+`ListenableFuture`(Spring Kafka 2.x)와 `CompletableFuture`(Spring Kafka 3.x)의 혼동이 발생할 수 있습니다.
+
+**원인**
+Spring Kafka 3.x(Spring Boot 3.x)에서 `KafkaTemplate.send()`의 반환 타입이
+`ListenableFuture<SendResult<K, V>>`에서 `CompletableFuture<SendResult<K, V>>`로 변경되었습니다.
+
+**해결**
+```java
+// 성공 케이스 — 즉시 완료되는 Future
+@SuppressWarnings("unchecked")
+CompletableFuture<SendResult<String, String>> successFuture =
+        CompletableFuture.completedFuture(mock(SendResult.class));
+given(kafkaTemplate.send(anyString(), anyString(), anyString())).willReturn(successFuture);
+
+// 실패 케이스 — .get() 호출 시 ExecutionException 발생
+CompletableFuture<SendResult<String, String>> failedFuture = new CompletableFuture<>();
+failedFuture.completeExceptionally(new RuntimeException("kafka send timeout"));
+given(kafkaTemplate.send(anyString(), anyString(), anyString())).willReturn(failedFuture);
+```
+
+`CompletableFuture.completedFuture(...)`는 `.get()`이 즉시 반환됩니다.
+`completeExceptionally(...)`를 사용한 Future는 `.get()` 호출 시 `ExecutionException`을 발생시켜
+`catch (Exception e)` 블록으로 진입하도록 유도합니다.
+
+`mock(SendResult.class)`는 제네릭 타입 추론 경고가 발생하므로 `@SuppressWarnings("unchecked")`를 테스트 메서드에 추가합니다.
+
+**교훈**
+- Spring Boot 버전 업그레이드 시 `KafkaTemplate.send()` 반환 타입 변경 여부를 반드시 확인해야 합니다.
+- mock할 때 Future 타입이 맞지 않으면 `stubbing argument mismatch` 오류가 발생합니다.
+
+---
+
+## 11. DomainException.getCode()가 String을 반환 — enum 직접 비교 불가
+
+**현상**
+`OutboxEventTransactionalServiceTest`와 `OrderEventConsumerTest`에서 `DomainException` 검증 시
+`.isEqualTo(DomainExceptionCode.EVENT_NOT_FOUND)` 비교가 실패했습니다.
+
+**원인**
+`DomainException.getCode()`는 `String` 타입을 반환합니다 (`DomainExceptionCode.name()` 결과값).
+`DomainExceptionCode` enum 인스턴스와 직접 비교하면 타입이 달라 항상 불일치합니다.
+
+**해결**
+```java
+// 잘못된 비교
+assertThat(((DomainException) ex).getCode())
+        .isEqualTo(DomainExceptionCode.EVENT_NOT_FOUND);  // String vs Enum → 실패
+
+// 올바른 비교
+assertThat(((DomainException) ex).getCode())
+        .isEqualTo(DomainExceptionCode.EVENT_NOT_FOUND.name());  // String vs String → 성공
+```
+
+**교훈**
+- 예외 코드를 문자열로 저장하는 패턴에서는 테스트 비교 시 `.name()`을 사용해야 합니다.
+- IDE 타입 추론이 없는 `assertThat` 체인에서는 실제 반환 타입을 소스에서 직접 확인하는 것이 안전합니다.

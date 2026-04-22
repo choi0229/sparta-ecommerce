@@ -211,13 +211,98 @@ curl -s -X PATCH http://localhost:8084/shipments/1/status \
 ## GitHub Actions CI Gate 트리거 확인
 
 ```bash
-# 변경사항 커밋 후 push → GitHub Actions 자동 트리거
-git add .
-bash scripts/claude-guardrails.sh   # 로컬 사전 확인
+# 1. 변경 파일 확인 (범위 파악 후 add)
+git status --short
+# M  logistics-api/src/main/...
+# M  scripts/claude-guardrails.sh
+# ?? .claude/agents/
+
+# 2. 실제 변경 파일만 개별 add
+git add logistics-api/src/main/java/.../OutboxQueryRepository.java
+git add logistics-api/src/main/resources/application.yml
+git add scripts/claude-guardrails.sh
+git add .claude/agents/
+
+# git add . 또는 git add -A 는 .env, 빌드 산출물, IDE 설정 파일이
+# 의도치 않게 포함될 수 있으므로 피합니다.
+
+# 3. guardrails 로컬 사전 검사
+bash scripts/claude-guardrails.sh
+# Claude guardrails passed.
+
+# 4. 커밋 및 푸시
 git commit -m "feat: add logistics-api"
 git push origin dev-logitical
 
 # GitHub Actions에서 다음 job 순서로 실행됨:
+# 1. Claude Guardrails
+# 2. logistics-api Tests
+# 3. logistics-api Build
+```
+
+---
+
+## 하네스 고도화 — 테스트 보강 및 커밋 흐름
+
+테스트 추가 후 CI Gate 통과까지의 전체 흐름입니다.
+
+```bash
+# 1. 단위 테스트 실행 (외부 의존성 없음)
+cd logistics-api
+./gradlew test
+
+# 기대 출력:
+# OutboxEventTest > markSent_changeStatusToSent() PASSED
+# OutboxEventTest > markFailed_belowMaxRetry_remainsPendingWithBackoff() PASSED
+# OutboxEventTest > markFailed_atMaxRetry_becomeFailed() PASSED
+# OutboxEventTest > markFailed_backoffIncreasesByRetry() PASSED
+# OutboxEventTransactionalServiceTest > markSent_fetchesEventAndSaves() PASSED
+# OutboxEventTransactionalServiceTest > markFailed_fetchesEventAndSchedulesRetry() PASSED
+# OutboxEventTransactionalServiceTest > markSent_notFound_throwsDomainException() PASSED
+# OutboxEventTransactionalServiceTest > markFailed_notFound_throwsDomainException() PASSED
+# OrderEventConsumerTest > validJson_callsCreateShipmentWithCorrectIdemKeyAndNullAddress() PASSED
+# OrderEventConsumerTest > validJson_nullReturnFromService_completesNormally() PASSED
+# OrderEventConsumerTest > invalidJson_catchesJsonProcessingException_doesNotRethrow() PASSED
+# OrderEventConsumerTest > serviceThrowsRuntimeException_wrapsAsDomainException() PASSED
+# OutboxPublisherJobTest > emptyBatch_noInteractions() PASSED
+# OutboxPublisherJobTest > kafkaSendSuccess_callsMarkSent() PASSED
+# OutboxPublisherJobTest > kafkaSendFails_callsMarkFailed() PASSED
+# OutboxPublisherJobTest > unknownEventType_callsMarkFailedWithoutKafkaSend() PASSED
+# BUILD SUCCESSFUL
+
+# 2. bootJar 빌드 (테스트 제외)
+./gradlew bootJar -x test
+# BUILD SUCCESSFUL
+# build/libs/logistics-api-0.0.1-SNAPSHOT.jar 생성 확인
+
+# 3. guardrails 로컬 검사 (커밋 전)
+cd ..
+
+# 변경 파일 확인 후 실제 변경된 파일만 add
+git status --short
+# M  logistics-api/src/main/...
+# M  logistics-api/src/test/...
+# ?? .claude/agents/msa-architect.md
+# 등 확인
+
+# 확인한 파일만 개별 add (git add . 는 빌드 산출물·IDE 설정 포함 위험)
+git add logistics-api/src/test/java/org/teamsparta/logisticsapi/domain/logistics/OutboxEventTest.java
+git add logistics-api/src/test/java/org/teamsparta/logisticsapi/domain/logistics/OutboxEventTransactionalServiceTest.java
+git add logistics-api/src/test/java/org/teamsparta/logisticsapi/domain/logistics/OrderEventConsumerTest.java
+git add logistics-api/src/test/java/org/teamsparta/logisticsapi/domain/logistics/OutboxPublisherJobTest.java
+git add logistics-api/src/main/java/org/teamsparta/logisticsapi/domain/logistics/repository/OutboxQueryRepository.java
+git add logistics-api/src/main/resources/application.yml
+git add .claude/agents/
+git add scripts/claude-guardrails.sh
+
+bash scripts/claude-guardrails.sh
+# Claude guardrails passed.
+
+# 4. 커밋 및 푸시
+git commit -m "feat: add agent harness and improve logistics-api tests"
+git push origin dev-logitical
+
+# GitHub Actions CI Gate 자동 트리거:
 # 1. Claude Guardrails
 # 2. logistics-api Tests
 # 3. logistics-api Build

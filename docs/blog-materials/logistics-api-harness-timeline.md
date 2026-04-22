@@ -144,3 +144,85 @@
 - `kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce` 로 우회
 - `/actuator/health` 200 OK, DB UP 확인
 - 배송 생성 → 조회 → 상태 전이 4단계 → 잘못된 전이 400 오류 전 항목 검증 통과
+
+---
+
+## Phase 10 — 하네스 고도화 (Agents + 테스트 보강)
+
+### 하네스 고도화 계획 수립
+- revfactory/harness README_KO.md를 참고해 현재 하네스 구조와 비교
+- 전체 구조를 그대로 이식하는 대신, 현재 프로젝트에 맞는 `.claude/agents/` 레이어만 점진 도입하기로 결정
+- P0(설계·구현 분리) → P1(리뷰·검증 분리) → P2(운영 자동화) 순서로 단계 설정
+
+### P0 Agents 추가
+- `.claude/agents/msa-architect.md` 신규 작성
+  - 도메인 경계 설계, 이벤트 계약 검토, Saga/Outbox 설계 방향 역할
+  - 코드를 직접 작성하지 않으며 구조적 의사결정만 수행
+- `.claude/agents/backend-builder.md` 신규 작성
+  - Spring Boot 구현, Flyway 마이그레이션, 단위 테스트 작성 역할
+  - 임의 리팩토링 금지, 이벤트 계약 무단 변경 금지 명시
+
+### P0 Agents 적용 — 런타임 로그 개선
+- msa-architect / backend-builder 관점으로 logistics-api 런타임 로그 문제 진단
+- `OutboxQueryRepository`: `javax.persistence.lock.timeout` → `jakarta.persistence.lock.timeout` 수정
+  - Hibernate 6(Spring Boot 3.x)에서 `javax.*` 힌트는 silently ignored
+  - PESSIMISTIC_WRITE lock timeout이 실제로 적용되지 않던 상태였음
+- `application.yml`: `show-sql: false`, `hibernate.format_sql: false` 설정
+  - Outbox 폴링 주기 500ms 기준으로 분당 ~120줄 SQL 로그 발생 → 억제
+  - Hibernate SQL 로그를 `org.hibernate.SQL: INFO`, `org.hibernate.orm.jdbc.bind: INFO`로 재설정
+
+### guardrails macOS 호환성 수정
+- `scripts/claude-guardrails.sh`의 `grep -lP` + `\s` Perl 정규식을 `grep -lE` + `[[:space:]]` POSIX 방식으로 교체
+- macOS BSD grep은 `-P` 옵션 미지원 → 로컬 실행 시 silent 통과 문제 수정
+- GitHub Actions(Ubuntu)와 macOS 모두 동일하게 동작하도록 통일
+
+### P1 Agents 추가
+- `.claude/agents/code-reviewer.md` 신규 작성
+  - read-only 리뷰 전담: `@Transactional` 경계, `REQUIRES_NEW` self-invocation, Outbox 동일 트랜잭션 등 8개 체크포인트
+  - `[PASS]` / `[FAIL]` / `[WARN]` 형식 출력
+  - 코드 직접 수정 금지
+- `.claude/agents/qa.md` 신규 작성
+  - 테스트 케이스 설계, guardrails 기준 확인, CI Gate 검증, Minikube 배포 체크리스트 역할
+  - `kubectl apply`, `docker build` 직접 실행 금지 (사용자 승인 후 진행)
+
+### P0 테스트 추가
+- `OutboxEventTest.java` 신규 작성
+  - `@ExtendWith` 불필요 — 순수 엔티티 단위 테스트
+  - `markSent()`: SENT 전이, `sentAt` 기록, `nextRetryAt` null
+  - `markFailedAndScheduleRetry()`: PENDING 유지(retryCount < maxRetry), 지수 백오프 nextRetryAt
+  - `markFailedAndScheduleRetry()`: FAILED 전이(retryCount >= maxRetry), nextRetryAt null
+  - 지수 백오프 단조 증가 검증 (2회차 > 1회차)
+- `OutboxEventTransactionalServiceTest.java` 신규 작성
+  - `@ExtendWith(MockitoExtension.class)`, `@Mock OutboxEventRepository`
+  - `markSent()`: 조회 후 SENT 저장, `markFailed()`: retryCount 증가 후 저장
+  - 존재하지 않는 id: `DomainException(EVENT_NOT_FOUND)` 발생, `save()` 미호출
+
+### P1 테스트 추가
+- `OrderEventConsumerTest.java` 신규 작성
+  - `@Mock LogisticsTransactionalService`, `OrderEventConsumer` 테스트별 직접 인스턴스화
+  - 정상 JSON 수신 시 `idemKey="order-create-event:evt-001"`, `ShipmentCreateRequest(1L, null, null)` 검증
+  - `null` 반환 시 예외 없이 정상 종료 (중복 이벤트 케이스)
+  - invalid JSON 수신 시 `JsonProcessingException` catch 후 rethrow 없음
+  - 내부 `RuntimeException` 발생 시 `DomainException(EVENT_CONSUME_ERROR)` rethrow
+- `OutboxPublisherJobTest.java` 신규 작성
+  - `@InjectMocks OutboxPublisherJob`, 의존성 3개 Mock
+  - `OutboxEvent.id`는 `ReflectionTestUtils.setField`로 주입 (DB 없이 처리)
+  - 빈 배치: `kafkaTemplate`, `outboxEventTransactionalService` 모두 no-interaction
+  - Kafka 성공: `CompletableFuture.completedFuture(...)` → `markSent(1L)` 1회, `markFailed` 0회
+  - Kafka 실패: `CompletableFuture.completeExceptionally(...)` → `markFailed(1L)` 1회, `markSent` 0회
+  - 미등록 eventType: `DomainException` catch → `kafkaTemplate` no-interaction, `markFailed(1L)` 1회
+
+### 하네스 구조 변화 요약
+
+Phase 10 전후로 하네스 구조가 어떻게 달라졌는지 한눈에 보려면
+`logistics-api-harness-before-after.md`를 참조하세요.
+
+핵심 변화만 요약하면:
+
+| 항목 | Phase 10 이전 | Phase 10 이후 |
+|---|---|---|
+| 역할 분리 | 하나의 세션이 모두 수행 | agents 4개로 명시적 분리 |
+| 설계 검토 | 구현 후 사후 확인 | msa-architect가 사전 검토 |
+| 리뷰 | 비고정 | code-reviewer 8개 체크포인트 |
+| 테스트 계획 | 임의 추가 | qa가 P0/P1/P2 우선순위 분류 |
+| guardrails | macOS 미동작 가능 | grep -E + POSIX로 플랫폼 통일 |

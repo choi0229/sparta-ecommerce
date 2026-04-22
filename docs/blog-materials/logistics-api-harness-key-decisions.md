@@ -147,6 +147,97 @@ Claude Code가 rules를 기반으로 도메인 경계, 트랜잭션 규칙, 멱�
 
 ---
 
+## 9. revfactory/harness를 그대로 이식하지 않고 agents 레이어만 점진 도입
+
+> 기존 하네스와 고도화 후 하네스의 전체 비교는 `logistics-api-harness-before-after.md`를 참조하세요.
+
+**배경**
+하네스를 고도화하는 방법으로 revfactory/harness 구조 전체를 이식하는 방안을 검토했습니다.
+
+**선택지**
+- A: revfactory/harness 전체 구조 이식 (orchestrator Skill, 다중 agents, 자동화 파이프라인 포함)
+- B: 현재 프로젝트에 맞는 `.claude/agents/` 레이어만 점진적으로 추가
+
+**선택: B**
+
+**근거**
+현재 프로젝트는 이미 `CLAUDE.md`, `rules/`, `skills/`, `settings.json`, `guardrails.sh`, CI Gate까지 구성된 상태입니다.
+전체를 한 번에 이식하면 기존 하네스 구조와 충돌하거나 과도하게 복잡해질 수 있습니다.
+역할 분리(설계·구현·리뷰·검증)가 가장 즉각적인 효과를 내므로, agents 레이어만 먼저 추가하고 orchestrator Skill은 이후 단계로 미뤘습니다.
+
+**결과**
+`.claude/agents/` 4개 파일(msa-architect, backend-builder, code-reviewer, qa)로 역할이 명시적으로 분리되었고,
+기존 rules, skills, settings 구조와의 충돌 없이 통합되었습니다.
+
+---
+
+## 10. Agents를 P0/P1로 나누어 단계적으로 추가
+
+**배경**
+4개 agents를 한 번에 추가하는 것과 역할별로 단계를 나누는 것 중 선택이 필요했습니다.
+
+**선택지**
+- A: 4개 agents(msa-architect, backend-builder, code-reviewer, qa)를 한 번에 생성
+- B: P0(설계·구현 분리) 먼저, P1(리뷰·검증 분리) 이후 추가
+
+**선택: B**
+
+**근거**
+P0 agents(msa-architect, backend-builder)는 코드 생성 흐름의 핵심 분기점이므로 먼저 검증이 필요합니다.
+P0 agents를 실제 작업(런타임 로그 개선)에 적용해 동작을 확인한 뒤 P1을 추가하면,
+각 단계의 효과를 개별적으로 평가할 수 있습니다.
+orchestrator Skill(`msa-change-orchestrator`)은 4개 agents의 동작이 안정화된 이후로 미뤘습니다.
+
+**결과**
+P0 agents로 런타임 로그 개선 작업을 수행한 뒤 P1 agents를 추가하는 흐름으로 진행했고,
+각 단계에서 역할 분리의 효과를 구체적으로 확인할 수 있었습니다.
+
+---
+
+## 11. 테스트 보강을 P0/P1 단위로 나누어 진행
+
+**배경**
+logistics-api에 단위 테스트가 부족한 상태에서 테스트 보강 범위와 순서를 결정해야 했습니다.
+
+**선택지**
+- A: 전체 테스트를 한 번에 작성
+- B: 엔티티/서비스 계층(P0) 먼저, Consumer/Scheduler 계층(P1) 이후 추가
+
+**선택: B**
+
+**근거**
+엔티티 레벨 테스트(`OutboxEventTest`)는 외부 의존성이 전혀 없어 가장 빠르게 작성하고 검증할 수 있습니다.
+서비스 레벨(`OutboxEventTransactionalServiceTest`)은 Repository mock만 필요해 두 번째 단계로 적합합니다.
+Consumer(`OrderEventConsumerTest`)와 Scheduler(`OutboxPublisherJobTest`)는 JSON 파싱, Kafka mock 등 추가 고려 사항이 있어 마지막에 배치했습니다.
+작은 단위로 나누면 실패 시 원인 범위가 좁고, 진행 중 피드백을 반영하기 쉽습니다.
+
+**결과**
+P0 4개 테스트 → P1 OrderEventConsumerTest → P1 OutboxPublisherJobTest 순서로 추가했으며,
+각 단계에서 테스트 설계 패턴(mock 전략, 비교 방식)이 다음 단계에 자연스럽게 재사용되었습니다.
+
+---
+
+## 12. OutboxPublisherJob 폴링 주기 유지 — 로그 설정만 개선
+
+**배경**
+Outbox 폴링 주기 500ms로 인해 분당 ~120줄 SQL 로그가 발생하는 문제가 있었습니다.
+
+**선택지**
+- A: 폴링 주기를 늘려 SQL 발생 빈도를 줄임
+- B: 폴링 주기는 유지하고 로그 설정만 개선
+
+**선택: B**
+
+**근거**
+Outbox 폴링 주기는 배송 이벤트 발행 지연 시간에 직접 영향을 줍니다.
+500ms를 늘리면 Kafka 발행 지연이 늘어나 다운스트림 서비스(order-api 등)의 상태 반영이 느려집니다.
+문제의 실제 원인은 폴링 빈도가 아니라 `show-sql: true` 설정이므로, 로그 설정만 수정하는 것이 올바른 해결책입니다.
+
+**결과**
+폴링 주기 500ms를 유지하면서 `show-sql: false`, Hibernate Logger 레벨 재설정으로 로그 볼륨을 줄였습니다.
+
+---
+
 ## 8. Docker Desktop Minikube에서 port-forward로 API 검증
 
 **배경**
