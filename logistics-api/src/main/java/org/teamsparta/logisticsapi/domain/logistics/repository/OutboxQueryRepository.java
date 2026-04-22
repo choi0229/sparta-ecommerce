@@ -26,7 +26,7 @@ public class OutboxQueryRepository {
                 .orderBy(outboxEvent.createdAt.asc())
                 .limit(batchSize)
                 .setLockMode(LockModeType.PESSIMISTIC_WRITE)
-                .setHint("javax.persistence.lock.timeout", 3000)
+                .setHint("jakarta.persistence.lock.timeout", 3000)
                 .fetch();
     }
 
