@@ -37,7 +37,8 @@ public enum DomainExceptionCode {
     NOT_FOUND_SAGA(HttpStatus.NOT_FOUND, "SAGA를 찾을 수 없습니다."),
     EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "EVENT를 찾을 수 없습니다."),
     INVALID_RESERVATION_ID(HttpStatus.UNAUTHORIZED, "잘못된 RESERVATION ID 입니다."),
-    SNAPSHOT_TIMEOUT(HttpStatus.INTERNAL_SERVER_ERROR, "스냅샷 요청한 시간이 초과됐습니다.")
+    SNAPSHOT_TIMEOUT(HttpStatus.INTERNAL_SERVER_ERROR, "스냅샷 요청한 시간이 초과됐습니다."),
+    EVENT_CONSUME_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "이벤트 처리 중 오류가 발생했습니다.")
     ;
 
     final HttpStatus status;

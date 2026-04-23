@@ -20,6 +20,7 @@ import org.teamsparta.logisticsapi.global.exception.DomainException;
 import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
 
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -73,7 +74,7 @@ public class LogisticsTransactionalService {
 
         outboxEventRepository.save(OutboxEvent.pending(
                 "shipment", String.valueOf(shipment.getId()),
-                "shipment-created-event", toPayload(shipment, null)));
+                "shipment-created-event", toPayload(shipment, null, UUID.randomUUID().toString())));
 
         record.complete();
         idempotencyRecordRepository.save(record);
@@ -98,7 +99,7 @@ public class LogisticsTransactionalService {
                 "shipment",
                 String.valueOf(shipment.getId()),
                 "shipment-created-event",
-                toPayload(shipment, null)
+                toPayload(shipment, null, UUID.randomUUID().toString())
         ));
 
         return shipment;
@@ -121,15 +122,16 @@ public class LogisticsTransactionalService {
                 "shipment",
                 String.valueOf(shipment.getId()),
                 "shipment-status-changed-event",
-                toPayload(shipment, description)
+                toPayload(shipment, description, UUID.randomUUID().toString())
         ));
 
         return shipment;
     }
 
-    private String toPayload(Shipment shipment, String description) {
+    private String toPayload(Shipment shipment, String description, String eventId) {
         try {
             return objectMapper.writeValueAsString(Map.of(
+                    "eventId", eventId,
                     "shipmentId", shipment.getId(),
                     "orderId", shipment.getOrderId(),
                     "status", shipment.getStatus().name(),
