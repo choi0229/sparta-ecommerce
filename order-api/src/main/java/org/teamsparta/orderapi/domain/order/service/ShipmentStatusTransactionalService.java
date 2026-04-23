@@ -9,6 +9,7 @@ import org.teamsparta.orderapi.domain.order.event.dto.ShipmentEventPayload;
 import org.teamsparta.orderapi.domain.order.entity.Orders;
 import org.teamsparta.orderapi.domain.order.repository.IdempotencyRepository;
 import org.teamsparta.orderapi.domain.order.repository.OrderRepository;
+import org.teamsparta.orderapi.global.enums.IdempotencyStatus;
 import org.teamsparta.orderapi.global.enums.ShipmentStatus;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
@@ -23,18 +24,31 @@ public class ShipmentStatusTransactionalService {
 
     @Transactional
     public void applyShipmentStatus(String idemKey, ShipmentEventPayload payload) {
-        if (idempotencyRepository.findById(idemKey).isPresent()) {
+        IdempotencyRecord record = idempotencyRepository.findById(idemKey).orElse(null);
+
+        if (record != null && IdempotencyStatus.COMPLETED.equals(record.getStatus())) {
             log.info("Duplicate shipment-event skipped. idemKey={}", idemKey);
             return;
         }
 
-        IdempotencyRecord record = IdempotencyRecord.start(idemKey, idemKey);
-        idempotencyRepository.save(record);
-
+        ShipmentStatus targetStatus = ShipmentStatus.valueOf(payload.status());
         Orders order = orderRepository.findById(payload.orderId())
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
 
-        order.updateShipmentStatus(ShipmentStatus.valueOf(payload.status()));
+        if (record != null) {
+            // PENDING record exists — recover if status already applied, otherwise reuse record
+            if (targetStatus.equals(order.getShipmentStatus())) {
+                record.complete(order.getId());
+                idempotencyRepository.save(record);
+                log.info("Recovered stuck PENDING record. idemKey={}", idemKey);
+                return;
+            }
+        } else {
+            record = IdempotencyRecord.start(idemKey, idemKey);
+            idempotencyRepository.save(record);
+        }
+
+        order.updateShipmentStatus(targetStatus);
         orderRepository.save(order);
 
         record.complete(order.getId());

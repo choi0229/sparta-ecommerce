@@ -14,6 +14,7 @@ import org.teamsparta.orderapi.domain.order.event.dto.ShipmentEventPayload;
 import org.teamsparta.orderapi.domain.order.repository.IdempotencyRepository;
 import org.teamsparta.orderapi.domain.order.repository.OrderRepository;
 import org.teamsparta.orderapi.domain.order.service.ShipmentStatusTransactionalService;
+import org.teamsparta.orderapi.global.enums.IdempotencyStatus;
 import org.teamsparta.orderapi.global.enums.ShipmentStatus;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
@@ -59,9 +60,10 @@ class ShipmentStatusTransactionalServiceTest {
     }
 
     @Test
-    @DisplayName("중복 idemKey — 즉시 반환, orderRepository 미호출")
-    void applyShipmentStatus_duplicateIdemKey_skipsProcessing() {
+    @DisplayName("COMPLETED idemKey — 즉시 반환, orderRepository 미호출")
+    void applyShipmentStatus_completedIdemKey_skipsProcessing() {
         IdempotencyRecord existing = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
+        existing.complete(10L);
         given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(existing));
 
         service.applyShipmentStatus(IDEM_KEY, shippedPayload());
@@ -80,5 +82,40 @@ class ShipmentStatusTransactionalServiceTest {
                 .isInstanceOf(DomainException.class)
                 .satisfies(ex -> assertThat(((DomainException) ex).getCode())
                         .isEqualTo(DomainExceptionCode.NOT_FOUND_ORDER.name()));
+    }
+
+    @Test
+    @DisplayName("PENDING + 이미 적용된 상태 — idem COMPLETED만 저장, orderRepository.save 미호출")
+    void applyShipmentStatus_pendingRecord_statusAlreadyApplied_recoversIdemOnly() {
+        Orders order = orderWithId(10L);
+        order.updateShipmentStatus(ShipmentStatus.SHIPPED);
+
+        IdempotencyRecord pending = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(pending));
+        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
+
+        service.applyShipmentStatus(IDEM_KEY, shippedPayload());
+
+        then(orderRepository).should(never()).save(any());
+        then(idempotencyRepository).should(times(1)).save(pending);
+        assertThat(pending.getStatus()).isEqualTo(IdempotencyStatus.COMPLETED);
+    }
+
+    @Test
+    @DisplayName("PENDING + 미적용 상태 — 기존 record 재사용하여 정상 업데이트")
+    void applyShipmentStatus_pendingRecord_statusNotApplied_proceedsWithUpdate() {
+        Orders order = orderWithId(10L);
+
+        IdempotencyRecord pending = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(pending));
+        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
+
+        service.applyShipmentStatus(IDEM_KEY, shippedPayload());
+
+        assertThat(order.getShipmentStatus()).isEqualTo(ShipmentStatus.SHIPPED);
+        then(orderRepository).should(times(1)).save(order);
+        // new PENDING save는 없고 COMPLETED save만 1회 (record 재사용)
+        then(idempotencyRepository).should(times(1)).save(pending);
+        assertThat(pending.getStatus()).isEqualTo(IdempotencyStatus.COMPLETED);
     }
 }
