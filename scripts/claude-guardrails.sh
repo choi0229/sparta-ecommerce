@@ -42,7 +42,9 @@ fi
 
 # 5. 위험한 명령어 패턴 감지 (Markdown 문서/설정/스크립트 자체 제외)
 DANGEROUS_PATTERN='(rm[[:space:]]+-rf|DROP[[:space:]]+TABLE|TRUNCATE[[:space:]]+TABLE|force[[:space:]]*push|git[[:space:]]+push[[:space:]]+.*--force)'
-SCAN_FILES=$(echo "$CHANGED_FILES" | grep -vE '(\.md$|scripts/claude-guardrails\.sh|\.claude/settings\.json|\.github/)' || true)
+# reset-kafka-dev.sh: Minikube 개발환경 전용 Kafka/Zookeeper 초기화 스크립트.
+# rm -rf 사용이 의도된 파괴적 동작(PVC hostPath 정리)이므로 스캔 대상에서 제외한다.
+SCAN_FILES=$(echo "$CHANGED_FILES" | grep -vE '(\.md$|scripts/claude-guardrails\.sh|scripts/reset-kafka-dev\.sh|\.claude/settings\.json|\.github/)' || true)
 
 if [[ -n "$SCAN_FILES" ]]; then
   MATCHED=$(echo "$SCAN_FILES" | while read -r f; do
