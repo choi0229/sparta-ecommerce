@@ -24,6 +24,11 @@ public class ShipmentEventConsumer {
         log.info("Received shipment-event: {}", message);
         try {
             ShipmentEventPayload payload = objectMapper.readValue(message, ShipmentEventPayload.class);
+            if (payload.eventId() == null || payload.orderId() == null || payload.status() == null) {
+                log.warn("Skipping shipment-event: required field is null. eventId={}, orderId={}, status={}",
+                        payload.eventId(), payload.orderId(), payload.status());
+                return;
+            }
             String idemKey = "shipment-event:" + payload.eventId();
             shipmentStatusTransactionalService.applyShipmentStatus(idemKey, payload);
         } catch (JsonProcessingException e) {

@@ -81,4 +81,43 @@ class ShipmentEventConsumerTest {
                 .satisfies(ex -> assertThat(((DomainException) ex).getCode())
                         .isEqualTo(DomainExceptionCode.EVENT_CONSUME_ERROR.name()));
     }
+
+    @Test
+    @DisplayName("eventId가 null이면 applyShipmentStatus를 호출하지 않는다")
+    void nullEventId_skipsProcessing() {
+        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService);
+        String json = """
+                {"eventId": null, "shipmentId": 1, "orderId": 10, "status": "SHIPPED", "description": ""}
+                """;
+
+        consumer.onShipmentEvent(json);
+
+        then(shipmentStatusTransactionalService).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("orderId가 null이면 applyShipmentStatus를 호출하지 않는다")
+    void nullOrderId_skipsProcessing() {
+        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService);
+        String json = """
+                {"eventId": "evt-001", "shipmentId": 1, "orderId": null, "status": "SHIPPED", "description": ""}
+                """;
+
+        consumer.onShipmentEvent(json);
+
+        then(shipmentStatusTransactionalService).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("status가 null이면 applyShipmentStatus를 호출하지 않는다")
+    void nullStatus_skipsProcessing() {
+        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService);
+        String json = """
+                {"eventId": "evt-001", "shipmentId": 1, "orderId": 10, "status": null, "description": ""}
+                """;
+
+        consumer.onShipmentEvent(json);
+
+        then(shipmentStatusTransactionalService).shouldHaveNoInteractions();
+    }
 }

@@ -24,6 +24,9 @@ public class ShipmentStatusTransactionalService {
 
     @Transactional
     public void applyShipmentStatus(String idemKey, ShipmentEventPayload payload) {
+        log.info("Applying shipment status. idemKey={}, orderId={}, status={}",
+                idemKey, payload.orderId(), payload.status());
+
         IdempotencyRecord record = idempotencyRepository.findById(idemKey).orElse(null);
 
         if (record != null && IdempotencyStatus.COMPLETED.equals(record.getStatus())) {
@@ -53,5 +56,7 @@ public class ShipmentStatusTransactionalService {
 
         record.complete(order.getId());
         idempotencyRepository.save(record);
+
+        log.info("ShipmentStatus updated. idemKey={}, orderId={}, status={}", idemKey, order.getId(), targetStatus);
     }
 }
