@@ -23,12 +23,14 @@ public class OutboxEventTransactionalService {
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxQueryRepository outboxQueryRepository;
 
-    // 조회 트랜잭션을 publish() 루프와 분리한다.
-    // 이 메서드가 반환하면 PESSIMISTIC_WRITE 잠금이 즉시 해제되므로
-    // 이후 markSent/markFailed(REQUIRES_NEW)가 같은 행을 lock conflict 없이 UPDATE할 수 있다.
+    // 네이티브 UPDATE...RETURNING으로 PENDING → PROCESSING 전이를 원자적으로 수행한다.
+    // claimIds 트랜잭션이 커밋되는 시점에 FOR UPDATE SKIP LOCKED 잠금이 해제되므로
+    // 이후 markSent/markFailed(REQUIRES_NEW)는 잠금 없이 id 기준 UPDATE만 수행한다.
     @Transactional
-    public List<OutboxEvent> fetchBatch(ZonedDateTime now, int batchSize) {
-        return outboxQueryRepository.findBatchForPublish(now, batchSize);
+    public List<OutboxEvent> claimBatch(ZonedDateTime now, int batchSize) {
+        List<Long> ids = outboxQueryRepository.claimIds(now, batchSize);
+        if (ids.isEmpty()) return List.of();
+        return outboxEventRepository.findAllById(ids);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

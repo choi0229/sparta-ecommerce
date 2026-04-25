@@ -24,7 +24,7 @@ public class OutboxPublisherJob {
 
     @Scheduled(fixedDelay = 500)
     public void publish() {
-        List<OutboxEvent> batch = outboxEventTransactionalService.fetchBatch(ZonedDateTime.now(), 50);
+        List<OutboxEvent> batch = outboxEventTransactionalService.claimBatch(ZonedDateTime.now(), 50);
         for (OutboxEvent event : batch) {
             try {
                 String topic = resolveTopicName(event.getEventType());

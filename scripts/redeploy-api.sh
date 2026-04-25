@@ -3,7 +3,7 @@
 set -e
 
 SERVICE=$1
-REPLICAS=${2:-2}
+REPLICAS=${2:-1}
 NAMESPACE="ecommerce"
 IMAGE_NAME="sparta-msa-final-project-${SERVICE}:latest"
 

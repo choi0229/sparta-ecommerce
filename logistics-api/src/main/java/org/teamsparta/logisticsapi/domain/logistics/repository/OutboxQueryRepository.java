@@ -1,40 +1,45 @@
 package org.teamsparta.logisticsapi.domain.logistics.repository;
 
-import com.querydsl.core.types.dsl.BooleanExpression;
-import com.querydsl.jpa.impl.JPAQueryFactory;
-import jakarta.persistence.LockModeType;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
-import org.teamsparta.logisticsapi.domain.logistics.entity.OutboxEvent;
-import org.teamsparta.logisticsapi.global.enums.OutboxStatus;
 
 import java.time.ZonedDateTime;
 import java.util.List;
-
-import static org.teamsparta.logisticsapi.domain.logistics.entity.QOutboxEvent.outboxEvent;
 
 @Repository
 @RequiredArgsConstructor
 public class OutboxQueryRepository {
 
-    private final JPAQueryFactory queryFactory;
+    private final EntityManager entityManager;
 
-    public List<OutboxEvent> findBatchForPublish(ZonedDateTime now, int batchSize) {
-        return queryFactory
-                .selectFrom(outboxEvent)
-                .where(isPending(), isRetryable(now))
-                .orderBy(outboxEvent.createdAt.asc())
-                .limit(batchSize)
-                .setLockMode(LockModeType.PESSIMISTIC_WRITE)
-                .setHint("jakarta.persistence.lock.timeout", 3000)
-                .fetch();
-    }
+    // UPDATE...RETURNING으로 SELECT와 상태 전이를 원자적으로 처리한다.
+    // FOR UPDATE SKIP LOCKED는 다른 세션이 잠근 행을 건너뛰므로 lock wait이 발생하지 않는다.
+    @SuppressWarnings("unchecked")
+    public List<Long> claimIds(ZonedDateTime now, int batchSize) {
+        String sql = """
+                WITH cte AS (
+                  SELECT id FROM outbox_event
+                  WHERE status = 'PENDING'
+                    AND (next_retry_at IS NULL OR next_retry_at <= :now)
+                  ORDER BY created_at
+                  FOR UPDATE SKIP LOCKED
+                  LIMIT :batchSize
+                )
+                UPDATE outbox_event oe
+                SET status = 'PROCESSING'
+                FROM cte
+                WHERE oe.id = cte.id
+                RETURNING oe.id
+                """;
 
-    private BooleanExpression isPending() {
-        return outboxEvent.status.eq(OutboxStatus.PENDING);
-    }
+        List<Object> raw = entityManager.createNativeQuery(sql)
+                .setParameter("now", now.toOffsetDateTime())
+                .setParameter("batchSize", batchSize)
+                .getResultList();
 
-    private BooleanExpression isRetryable(ZonedDateTime now) {
-        return outboxEvent.nextRetryAt.isNull().or(outboxEvent.nextRetryAt.loe(now));
+        return raw.stream()
+                .map(id -> ((Number) id).longValue())
+                .toList();
     }
 }
