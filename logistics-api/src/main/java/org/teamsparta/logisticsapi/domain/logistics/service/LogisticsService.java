@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentStatusUpdateRequest;
+import java.util.UUID;
 import org.teamsparta.logisticsapi.domain.logistics.dto.response.ShipmentResponse;
 import org.teamsparta.logisticsapi.domain.logistics.entity.Shipment;
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentRepository;
@@ -38,7 +39,7 @@ public class LogisticsService {
 
     public ShipmentResponse updateStatus(Long shipmentId, ShipmentStatusUpdateRequest request) {
         Shipment shipment = transactionalService.updateStatus(
-                shipmentId, request.status(), request.description(), null
+                shipmentId, request.status(), request.description(), UUID.randomUUID().toString()
         );
         log.info("Shipment status updated. shipmentId={}, status={}", shipment.getId(), shipment.getStatus());
         return ShipmentResponse.from(shipment);

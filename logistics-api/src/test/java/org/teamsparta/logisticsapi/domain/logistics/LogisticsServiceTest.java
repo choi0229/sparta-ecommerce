@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -89,5 +90,21 @@ class LogisticsServiceTest {
         assertThatNoException().isThrownBy(() ->
                 logisticsService.updateStatus(1L,
                         new ShipmentStatusUpdateRequest(ShipmentStatus.SHIPPED, "출고 완료")));
+    }
+
+    @Test
+    @DisplayName("updateStatus 호출 시 transactionalService에 non-null UUID eventId가 전달된다")
+    void updateStatus_passesNonNullUuidEventId() {
+        given(transactionalService.updateStatus(any(), any(), any(), any())).willReturn(shipment);
+        ArgumentCaptor<String> eventIdCaptor = ArgumentCaptor.forClass(String.class);
+
+        logisticsService.updateStatus(1L,
+                new ShipmentStatusUpdateRequest(ShipmentStatus.SHIPPED, "출고 완료"));
+
+        then(transactionalService).should().updateStatus(
+                eq(1L), eq(ShipmentStatus.SHIPPED), eq("출고 완료"), eventIdCaptor.capture());
+        assertThat(eventIdCaptor.getValue()).isNotNull();
+        assertThatNoException().isThrownBy(() ->
+                java.util.UUID.fromString(eventIdCaptor.getValue()));
     }
 }

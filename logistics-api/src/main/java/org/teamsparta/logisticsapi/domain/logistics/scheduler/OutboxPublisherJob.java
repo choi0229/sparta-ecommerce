@@ -5,7 +5,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.logisticsapi.domain.logistics.entity.OutboxEvent;
 import org.teamsparta.logisticsapi.domain.logistics.repository.OutboxQueryRepository;
 import org.teamsparta.logisticsapi.domain.logistics.service.OutboxEventTransactionalService;
@@ -26,7 +25,6 @@ public class OutboxPublisherJob {
     private final KafkaTemplate<String, String> kafkaTemplate;
 
     @Scheduled(fixedDelay = 500)
-    @Transactional
     public void publish() {
         List<OutboxEvent> batch = outboxQueryRepository.findBatchForPublish(ZonedDateTime.now(), 50);
         for (OutboxEvent event : batch) {
