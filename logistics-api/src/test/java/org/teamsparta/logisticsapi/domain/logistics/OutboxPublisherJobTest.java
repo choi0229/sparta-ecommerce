@@ -10,7 +10,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.logisticsapi.domain.logistics.entity.OutboxEvent;
-import org.teamsparta.logisticsapi.domain.logistics.repository.OutboxQueryRepository;
 import org.teamsparta.logisticsapi.domain.logistics.scheduler.OutboxPublisherJob;
 import org.teamsparta.logisticsapi.domain.logistics.service.OutboxEventTransactionalService;
 
@@ -23,7 +22,6 @@ import static org.mockito.BDDMockito.*;
 @ExtendWith(MockitoExtension.class)
 class OutboxPublisherJobTest {
 
-    @Mock OutboxQueryRepository outboxQueryRepository;
     @Mock OutboxEventTransactionalService outboxEventTransactionalService;
     @Mock KafkaTemplate<String, String> kafkaTemplate;
     @InjectMocks OutboxPublisherJob job;
@@ -37,12 +35,14 @@ class OutboxPublisherJobTest {
     @Test
     @DisplayName("배치가 비어 있으면 kafkaTemplate.send, markSent, markFailed가 호출되지 않는다")
     void emptyBatch_noInteractions() {
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of());
+        given(outboxEventTransactionalService.fetchBatch(any(), anyInt())).willReturn(List.of());
 
         job.publish();
 
+        then(outboxEventTransactionalService).should().fetchBatch(any(), eq(50));
+        then(outboxEventTransactionalService).should(never()).markSent(anyLong());
+        then(outboxEventTransactionalService).should(never()).markFailed(anyLong());
         then(kafkaTemplate).shouldHaveNoInteractions();
-        then(outboxEventTransactionalService).shouldHaveNoInteractions();
     }
 
     @Test
@@ -50,7 +50,7 @@ class OutboxPublisherJobTest {
     @SuppressWarnings("unchecked")
     void kafkaSendSuccess_callsMarkSent() {
         OutboxEvent event = pendingShipmentEvent();
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event));
+        given(outboxEventTransactionalService.fetchBatch(any(), anyInt())).willReturn(List.of(event));
         CompletableFuture<SendResult<String, String>> successFuture =
                 CompletableFuture.completedFuture(mock(SendResult.class));
         given(kafkaTemplate.send(anyString(), anyString(), anyString())).willReturn(successFuture);
@@ -66,7 +66,7 @@ class OutboxPublisherJobTest {
     @DisplayName("Kafka send 실패 시 markFailed(eventId)가 호출되고 markSent는 호출되지 않는다")
     void kafkaSendFails_callsMarkFailed() {
         OutboxEvent event = pendingShipmentEvent();
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event));
+        given(outboxEventTransactionalService.fetchBatch(any(), anyInt())).willReturn(List.of(event));
         CompletableFuture<SendResult<String, String>> failedFuture = new CompletableFuture<>();
         failedFuture.completeExceptionally(new RuntimeException("kafka send timeout"));
         given(kafkaTemplate.send(anyString(), anyString(), anyString())).willReturn(failedFuture);
@@ -82,7 +82,7 @@ class OutboxPublisherJobTest {
     void unknownEventType_callsMarkFailedWithoutKafkaSend() {
         OutboxEvent event = OutboxEvent.pending("shipment", "1", "unknown-event", "{}");
         ReflectionTestUtils.setField(event, "id", 1L);
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event));
+        given(outboxEventTransactionalService.fetchBatch(any(), anyInt())).willReturn(List.of(event));
 
         job.publish();
 

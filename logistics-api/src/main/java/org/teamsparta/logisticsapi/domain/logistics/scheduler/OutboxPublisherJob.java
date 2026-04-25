@@ -6,7 +6,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.teamsparta.logisticsapi.domain.logistics.entity.OutboxEvent;
-import org.teamsparta.logisticsapi.domain.logistics.repository.OutboxQueryRepository;
 import org.teamsparta.logisticsapi.domain.logistics.service.OutboxEventTransactionalService;
 import org.teamsparta.logisticsapi.global.exception.DomainException;
 import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
@@ -20,13 +19,12 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class OutboxPublisherJob {
 
-    private final OutboxQueryRepository outboxQueryRepository;
     private final OutboxEventTransactionalService outboxEventTransactionalService;
     private final KafkaTemplate<String, String> kafkaTemplate;
 
     @Scheduled(fixedDelay = 500)
     public void publish() {
-        List<OutboxEvent> batch = outboxQueryRepository.findBatchForPublish(ZonedDateTime.now(), 50);
+        List<OutboxEvent> batch = outboxEventTransactionalService.fetchBatch(ZonedDateTime.now(), 50);
         for (OutboxEvent event : batch) {
             try {
                 String topic = resolveTopicName(event.getEventType());
