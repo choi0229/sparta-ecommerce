@@ -73,21 +73,19 @@ public class OrderService {
             return new OrderStatusResponse(idemKey, "PENDING", null, null);
         }
         IdempotencyRecord record = recordOpt.get();
+        String status = record.getStatus().name();
         String shipmentStatus = null;
         if (record.getOrderId() != null) {
-            shipmentStatus = orderRepository.findById(record.getOrderId())
-                    .map(order -> order.getShipmentStatus() != null ? order.getShipmentStatus().name() : null)
-                    .orElseGet(() -> {
-                        log.warn("orderId={} found in IdempotencyRecord but Orders not found. idemKey={}", record.getOrderId(), idemKey);
-                        return null;
-                    });
+            Optional<Orders> orderOpt = orderRepository.findById(record.getOrderId());
+            if (orderOpt.isPresent()) {
+                Orders order = orderOpt.get();
+                status = order.getStatus().name();
+                shipmentStatus = order.getShipmentStatus() != null ? order.getShipmentStatus().name() : null;
+            } else {
+                log.warn("orderId={} found in IdempotencyRecord but Orders not found. idemKey={}", record.getOrderId(), idemKey);
+            }
         }
-        return new OrderStatusResponse(
-                record.getIdemKey(),
-                record.getStatus().name(),
-                record.getOrderId(),
-                shipmentStatus
-        );
+        return new OrderStatusResponse(record.getIdemKey(), status, record.getOrderId(), shipmentStatus);
     }
 
 //    @Transactional
