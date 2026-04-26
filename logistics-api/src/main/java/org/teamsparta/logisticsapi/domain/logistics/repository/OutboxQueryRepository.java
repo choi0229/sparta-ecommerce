@@ -13,10 +13,10 @@ public class OutboxQueryRepository {
 
     private final EntityManager entityManager;
 
-    // UPDATE...RETURNING으로 SELECT와 상태 전이를 원자적으로 처리한다.
-    // FOR UPDATE SKIP LOCKED는 다른 세션이 잠근 행을 건너뛰므로 lock wait이 발생하지 않는다.
+    // PENDING 행을 PROCESSING으로 원자적으로 claim한다.
+    // claimExpiresAt을 next_retry_at에 기록해 stale 판단 기준으로 재사용한다.
     @SuppressWarnings("unchecked")
-    public List<Long> claimIds(ZonedDateTime now, int batchSize) {
+    public List<Long> claimIds(ZonedDateTime now, ZonedDateTime claimExpiresAt, int batchSize) {
         String sql = """
                 WITH cte AS (
                   SELECT id FROM outbox_event
@@ -27,7 +27,8 @@ public class OutboxQueryRepository {
                   LIMIT :batchSize
                 )
                 UPDATE outbox_event oe
-                SET status = 'PROCESSING'
+                SET status = 'PROCESSING',
+                    next_retry_at = :claimExpiresAt
                 FROM cte
                 WHERE oe.id = cte.id
                 RETURNING oe.id
@@ -35,11 +36,29 @@ public class OutboxQueryRepository {
 
         List<Object> raw = entityManager.createNativeQuery(sql)
                 .setParameter("now", now.toOffsetDateTime())
+                .setParameter("claimExpiresAt", claimExpiresAt.toOffsetDateTime())
                 .setParameter("batchSize", batchSize)
                 .getResultList();
 
         return raw.stream()
                 .map(id -> ((Number) id).longValue())
                 .toList();
+    }
+
+    // next_retry_at이 만료된 PROCESSING 행을 PENDING으로 되돌린다.
+    public int recoverStale(ZonedDateTime now, ZonedDateTime nextRetryAt) {
+        String sql = """
+                UPDATE outbox_event
+                SET status = 'PENDING',
+                    retry_count = retry_count + 1,
+                    next_retry_at = :nextRetryAt
+                WHERE status = 'PROCESSING'
+                  AND next_retry_at <= :now
+                """;
+
+        return entityManager.createNativeQuery(sql)
+                .setParameter("now", now.toOffsetDateTime())
+                .setParameter("nextRetryAt", nextRetryAt.toOffsetDateTime())
+                .executeUpdate();
     }
 }

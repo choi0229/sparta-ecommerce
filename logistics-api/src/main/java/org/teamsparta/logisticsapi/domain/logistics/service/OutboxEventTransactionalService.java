@@ -26,11 +26,17 @@ public class OutboxEventTransactionalService {
     // 네이티브 UPDATE...RETURNING으로 PENDING → PROCESSING 전이를 원자적으로 수행한다.
     // claimIds 트랜잭션이 커밋되는 시점에 FOR UPDATE SKIP LOCKED 잠금이 해제되므로
     // 이후 markSent/markFailed(REQUIRES_NEW)는 잠금 없이 id 기준 UPDATE만 수행한다.
+    // claim 만료 시각(now+2분)을 next_retry_at에 기록해 stale recovery 기준으로 활용한다.
     @Transactional
     public List<OutboxEvent> claimBatch(ZonedDateTime now, int batchSize) {
-        List<Long> ids = outboxQueryRepository.claimIds(now, batchSize);
+        List<Long> ids = outboxQueryRepository.claimIds(now, now.plusMinutes(2), batchSize);
         if (ids.isEmpty()) return List.of();
         return outboxEventRepository.findAllById(ids);
+    }
+
+    @Transactional
+    public int recoverStaleProcessing(ZonedDateTime now) {
+        return outboxQueryRepository.recoverStale(now, now.plusSeconds(30));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
