@@ -89,4 +89,15 @@ public class OutboxEvent {
             this.nextRetryAt = ZonedDateTime.now().plus(baseBackoff.multipliedBy(waitMultiplier));
         }
     }
+
+    public boolean isFailed() {
+        return OutboxStatus.FAILED.equals(this.status);
+    }
+
+    // FAILED 상태인 이벤트를 수동으로 재처리 큐에 넣는다.
+    // retry_count는 유지하여 누적 실패 횟수를 보존한다.
+    public void resetForRetry(ZonedDateTime now) {
+        this.status = OutboxStatus.PENDING;
+        this.nextRetryAt = now;
+    }
 }

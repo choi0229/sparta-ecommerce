@@ -18,6 +18,7 @@ public enum DomainExceptionCode {
     EVENT_PUBLISH_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Kafka 이벤트 발행 중 오류가 발생했습니다."),
     EVENT_CONSUME_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Kafka 이벤트 처리 중 오류가 발생했습니다."),
     EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "이벤트를 찾을 수 없습니다."),
+    OUTBOX_EVENT_NOT_FAILED(HttpStatus.BAD_REQUEST, "FAILED 상태의 이벤트만 재처리할 수 있습니다."),
     JSON_PROCESSING_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "JSON 처리 중 오류가 발생했습니다.");
 
     final HttpStatus status;

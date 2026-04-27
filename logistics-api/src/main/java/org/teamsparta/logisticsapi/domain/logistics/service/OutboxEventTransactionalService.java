@@ -54,4 +54,16 @@ public class OutboxEventTransactionalService {
         event.markFailedAndScheduleRetry(5, Duration.ofMinutes(1));
         outboxEventRepository.save(event);
     }
+
+    @Transactional
+    public OutboxEvent retryFailed(Long id, ZonedDateTime now) {
+        OutboxEvent event = outboxEventRepository.findById(id)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
+        if (!event.isFailed()) {
+            throw new DomainException(DomainExceptionCode.OUTBOX_EVENT_NOT_FAILED);
+        }
+        event.resetForRetry(now);
+        log.info("Outbox event manually queued for retry. id={}, retryCount={}", id, event.getRetryCount());
+        return outboxEventRepository.save(event);
+    }
 }
