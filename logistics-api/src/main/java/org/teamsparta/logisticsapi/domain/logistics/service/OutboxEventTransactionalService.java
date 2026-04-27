@@ -8,8 +8,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.logisticsapi.domain.logistics.entity.OutboxEvent;
 import org.teamsparta.logisticsapi.domain.logistics.repository.OutboxEventRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.OutboxQueryRepository;
+import org.teamsparta.logisticsapi.global.enums.OutboxStatus;
 import org.teamsparta.logisticsapi.global.exception.DomainException;
 import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
+
+import org.springframework.data.domain.PageRequest;
 
 import java.time.Duration;
 import java.time.ZonedDateTime;
@@ -55,6 +58,18 @@ public class OutboxEventTransactionalService {
         outboxEventRepository.save(event);
     }
 
+    private static final int MAX_QUERY_LIMIT = 200;
+
+    private static int clampLimit(int limit) {
+        return Math.max(1, Math.min(limit, MAX_QUERY_LIMIT));
+    }
+
+    @Transactional(readOnly = true)
+    public List<OutboxEvent> findByStatus(OutboxStatus status, int limit) {
+        return outboxEventRepository.findByStatusOrderByCreatedAtAsc(
+                status, PageRequest.of(0, clampLimit(limit)));
+    }
+
     @Transactional
     public OutboxEvent retryFailed(Long id, ZonedDateTime now) {
         OutboxEvent event = outboxEventRepository.findById(id)
@@ -65,5 +80,21 @@ public class OutboxEventTransactionalService {
         event.resetForRetry(now);
         log.info("Outbox event manually queued for retry. id={}, retryCount={}", id, event.getRetryCount());
         return outboxEventRepository.save(event);
+    }
+
+    @Transactional
+    public List<OutboxEvent> retryFailedBatch(OutboxStatus status, int limit, ZonedDateTime now) {
+        if (!OutboxStatus.FAILED.equals(status)) {
+            throw new DomainException(DomainExceptionCode.OUTBOX_EVENT_NOT_FAILED);
+        }
+        List<OutboxEvent> events = outboxEventRepository.findByStatusOrderByCreatedAtAsc(
+                OutboxStatus.FAILED, PageRequest.of(0, clampLimit(limit)));
+        if (events.isEmpty()) {
+            return List.of();
+        }
+        events.forEach(e -> e.resetForRetry(now));
+        List<OutboxEvent> saved = outboxEventRepository.saveAll(events);
+        log.info("Outbox batch retry queued. count={}", saved.size());
+        return saved;
     }
 }

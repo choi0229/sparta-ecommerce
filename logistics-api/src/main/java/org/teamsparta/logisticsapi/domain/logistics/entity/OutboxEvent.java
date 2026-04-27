@@ -99,5 +99,6 @@ public class OutboxEvent {
     public void resetForRetry(ZonedDateTime now) {
         this.status = OutboxStatus.PENDING;
         this.nextRetryAt = now;
+        this.sentAt = null;
     }
 }
