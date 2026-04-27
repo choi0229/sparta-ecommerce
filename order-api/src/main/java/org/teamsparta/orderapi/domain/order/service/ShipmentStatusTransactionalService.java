@@ -1,6 +1,7 @@
 package org.teamsparta.orderapi.domain.order.service;
 
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,12 +16,24 @@ import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class ShipmentStatusTransactionalService {
 
     private final OrderRepository orderRepository;
     private final IdempotencyRepository idempotencyRepository;
+    private final Counter updateSuccessCounter;
+    private final Counter updateFailedCounter;
+
+    public ShipmentStatusTransactionalService(OrderRepository orderRepository,
+                                              IdempotencyRepository idempotencyRepository,
+                                              MeterRegistry meterRegistry) {
+        this.orderRepository = orderRepository;
+        this.idempotencyRepository = idempotencyRepository;
+        this.updateSuccessCounter = Counter.builder("order.shipment.status.update")
+                .tag("result", "success").register(meterRegistry);
+        this.updateFailedCounter = Counter.builder("order.shipment.status.update")
+                .tag("result", "failed").register(meterRegistry);
+    }
 
     @Transactional
     public void applyShipmentStatus(String idemKey, ShipmentEventPayload payload) {
@@ -34,29 +47,36 @@ public class ShipmentStatusTransactionalService {
             return;
         }
 
-        ShipmentStatus targetStatus = ShipmentStatus.valueOf(payload.status());
-        Orders order = orderRepository.findById(payload.orderId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+        try {
+            ShipmentStatus targetStatus = ShipmentStatus.valueOf(payload.status());
+            Orders order = orderRepository.findById(payload.orderId())
+                    .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
 
-        if (record != null) {
-            // PENDING record exists — recover if status already applied, otherwise reuse record
-            if (targetStatus.equals(order.getShipmentStatus())) {
-                record.complete(order.getId());
+            if (record != null) {
+                // PENDING record exists — recover if status already applied, otherwise reuse record
+                if (targetStatus.equals(order.getShipmentStatus())) {
+                    record.complete(order.getId());
+                    idempotencyRepository.save(record);
+                    log.info("Recovered stuck PENDING record. idemKey={}", idemKey);
+                    updateSuccessCounter.increment();
+                    return;
+                }
+            } else {
+                record = IdempotencyRecord.start(idemKey, idemKey);
                 idempotencyRepository.save(record);
-                log.info("Recovered stuck PENDING record. idemKey={}", idemKey);
-                return;
             }
-        } else {
-            record = IdempotencyRecord.start(idemKey, idemKey);
+
+            order.updateShipmentStatus(targetStatus);
+            orderRepository.save(order);
+
+            record.complete(order.getId());
             idempotencyRepository.save(record);
+
+            log.info("ShipmentStatus updated. idemKey={}, orderId={}, status={}", idemKey, order.getId(), targetStatus);
+            updateSuccessCounter.increment();
+        } catch (Exception e) {
+            updateFailedCounter.increment();
+            throw e;
         }
-
-        order.updateShipmentStatus(targetStatus);
-        orderRepository.save(order);
-
-        record.complete(order.getId());
-        idempotencyRepository.save(record);
-
-        log.info("ShipmentStatus updated. idemKey={}, orderId={}, status={}", idemKey, order.getId(), targetStatus);
     }
 }

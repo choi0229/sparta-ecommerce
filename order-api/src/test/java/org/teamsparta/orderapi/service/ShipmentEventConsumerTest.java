@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +26,7 @@ import static org.mockito.BDDMockito.*;
 class ShipmentEventConsumerTest {
 
     @Mock ShipmentStatusTransactionalService shipmentStatusTransactionalService;
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     private static final String VALID_JSON = """
             {
@@ -46,7 +48,7 @@ class ShipmentEventConsumerTest {
     @Test
     @DisplayName("유효한 JSON 수신 시 applyShipmentStatus가 올바른 idemKey로 1회 호출된다")
     void validJson_callsApplyShipmentStatusWithCorrectIdemKey() {
-        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService);
+        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService, meterRegistry);
 
         consumer.onShipmentEvent(VALID_JSON);
 
@@ -62,7 +64,7 @@ class ShipmentEventConsumerTest {
         ObjectMapper mockMapper = mock(ObjectMapper.class);
         given(mockMapper.readValue(any(String.class), eq(ShipmentEventPayload.class)))
                 .willThrow(new JsonProcessingException("invalid json") {});
-        ShipmentEventConsumer consumer = new ShipmentEventConsumer(mockMapper, shipmentStatusTransactionalService);
+        ShipmentEventConsumer consumer = new ShipmentEventConsumer(mockMapper, shipmentStatusTransactionalService, meterRegistry);
 
         consumer.onShipmentEvent("{invalid}");
 
@@ -72,7 +74,7 @@ class ShipmentEventConsumerTest {
     @Test
     @DisplayName("applyShipmentStatus에서 RuntimeException 발생 시 DomainException(EVENT_CONSUME_ERROR)을 던진다")
     void serviceThrowsRuntimeException_wrapsAsDomainException() {
-        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService);
+        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService, meterRegistry);
         willThrow(new RuntimeException("db error"))
                 .given(shipmentStatusTransactionalService).applyShipmentStatus(any(), any());
 
@@ -85,7 +87,7 @@ class ShipmentEventConsumerTest {
     @Test
     @DisplayName("eventId가 null이면 applyShipmentStatus를 호출하지 않는다")
     void nullEventId_skipsProcessing() {
-        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService);
+        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService, meterRegistry);
         String json = """
                 {"eventId": null, "shipmentId": 1, "orderId": 10, "status": "SHIPPED", "description": ""}
                 """;
@@ -98,7 +100,7 @@ class ShipmentEventConsumerTest {
     @Test
     @DisplayName("orderId가 null이면 applyShipmentStatus를 호출하지 않는다")
     void nullOrderId_skipsProcessing() {
-        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService);
+        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService, meterRegistry);
         String json = """
                 {"eventId": "evt-001", "shipmentId": 1, "orderId": null, "status": "SHIPPED", "description": ""}
                 """;
@@ -111,7 +113,7 @@ class ShipmentEventConsumerTest {
     @Test
     @DisplayName("status가 null이면 applyShipmentStatus를 호출하지 않는다")
     void nullStatus_skipsProcessing() {
-        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService);
+        ShipmentEventConsumer consumer = new ShipmentEventConsumer(realObjectMapper(), shipmentStatusTransactionalService, meterRegistry);
         String json = """
                 {"eventId": "evt-001", "shipmentId": 1, "orderId": 10, "status": null, "description": ""}
                 """;

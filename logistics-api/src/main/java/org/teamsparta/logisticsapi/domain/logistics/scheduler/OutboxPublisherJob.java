@@ -1,6 +1,7 @@
 package org.teamsparta.logisticsapi.domain.logistics.scheduler;
 
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -15,12 +16,24 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class OutboxPublisherJob {
 
     private final OutboxEventTransactionalService outboxEventTransactionalService;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final Counter publishSentCounter;
+    private final Counter publishFailedCounter;
+
+    public OutboxPublisherJob(OutboxEventTransactionalService outboxEventTransactionalService,
+                              KafkaTemplate<String, String> kafkaTemplate,
+                              MeterRegistry meterRegistry) {
+        this.outboxEventTransactionalService = outboxEventTransactionalService;
+        this.kafkaTemplate = kafkaTemplate;
+        this.publishSentCounter = Counter.builder("logistics.outbox.publish")
+                .tag("result", "sent").register(meterRegistry);
+        this.publishFailedCounter = Counter.builder("logistics.outbox.publish")
+                .tag("result", "failed").register(meterRegistry);
+    }
 
     @Scheduled(fixedDelay = 500)
     public void publish() {
@@ -31,9 +44,11 @@ public class OutboxPublisherJob {
                 kafkaTemplate.send(topic, event.getAggregateId(), event.getPayload())
                         .get(2, TimeUnit.SECONDS);
                 outboxEventTransactionalService.markSent(event.getId());
+                publishSentCounter.increment();
             } catch (Exception e) {
                 log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
                 outboxEventTransactionalService.markFailed(event.getId());
+                publishFailedCounter.increment();
             }
         }
     }

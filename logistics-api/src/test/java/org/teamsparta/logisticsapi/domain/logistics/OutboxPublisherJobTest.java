@@ -1,10 +1,13 @@
 package org.teamsparta.logisticsapi.domain.logistics;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
@@ -24,6 +27,7 @@ class OutboxPublisherJobTest {
 
     @Mock OutboxEventTransactionalService outboxEventTransactionalService;
     @Mock KafkaTemplate<String, String> kafkaTemplate;
+    @Spy MeterRegistry meterRegistry = new SimpleMeterRegistry();
     @InjectMocks OutboxPublisherJob job;
 
     private OutboxEvent pendingShipmentEvent() {

@@ -2,7 +2,8 @@ package org.teamsparta.logisticsapi.domain.logistics.event;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -16,12 +17,24 @@ import java.util.List;
 import java.util.UUID;
 
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class OrderEventConsumer {
 
     private final LogisticsTransactionalService transactionalService;
     private final ObjectMapper objectMapper;
+    private final Counter consumeSuccessCounter;
+    private final Counter consumeFailedCounter;
+
+    public OrderEventConsumer(LogisticsTransactionalService transactionalService,
+                              ObjectMapper objectMapper,
+                              MeterRegistry meterRegistry) {
+        this.transactionalService = transactionalService;
+        this.objectMapper = objectMapper;
+        this.consumeSuccessCounter = Counter.builder("logistics.order.event.consume")
+                .tag("result", "success").register(meterRegistry);
+        this.consumeFailedCounter = Counter.builder("logistics.order.event.consume")
+                .tag("result", "failed").register(meterRegistry);
+    }
 
     // [MVP] order-api의 order-create-event 토픽을 수신한다.
     // 현재 order-api 이벤트 payload에 recipientName/recipientAddress가 없으므로 null로 생성한다.
@@ -39,10 +52,13 @@ public class OrderEventConsumer {
             if (shipment != null) {
                 log.info("Shipment created from order-create-event. orderId={}", payload.orderId());
             }
+            consumeSuccessCounter.increment();
         } catch (JsonProcessingException e) {
             log.error("Fatal: Invalid JSON in order-create-event. message={}", message, e);
+            consumeFailedCounter.increment();
         } catch (Exception e) {
             log.error("Error processing order-create-event. message={}", message, e);
+            consumeFailedCounter.increment();
             throw new DomainException(DomainExceptionCode.EVENT_CONSUME_ERROR);
         }
     }

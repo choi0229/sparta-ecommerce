@@ -1,11 +1,13 @@
 package org.teamsparta.orderapi.service;
 
-import org.junit.jupiter.api.BeforeEach;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.orderapi.domain.order.entity.IdempotencyRecord;
@@ -31,6 +33,7 @@ class ShipmentStatusTransactionalServiceTest {
 
     @Mock OrderRepository orderRepository;
     @Mock IdempotencyRepository idempotencyRepository;
+    @Spy MeterRegistry meterRegistry = new SimpleMeterRegistry();
     @InjectMocks ShipmentStatusTransactionalService service;
 
     private static final String IDEM_KEY = "shipment-event:evt-001";

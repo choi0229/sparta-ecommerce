@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -26,6 +27,7 @@ import static org.mockito.BDDMockito.*;
 class OrderEventConsumerTest {
 
     @Mock LogisticsTransactionalService transactionalService;
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     private static final String VALID_JSON = """
             {
@@ -48,7 +50,7 @@ class OrderEventConsumerTest {
     @Test
     @DisplayName("유효한 JSON 수신 시 createShipmentForOrderEvent가 올바른 idemKey와 null 배송지로 1회 호출된다")
     void validJson_callsCreateShipmentWithCorrectIdemKeyAndNullAddress() {
-        OrderEventConsumer consumer = new OrderEventConsumer(transactionalService, realObjectMapper());
+        OrderEventConsumer consumer = new OrderEventConsumer(transactionalService, realObjectMapper(), meterRegistry);
         Shipment shipment = Shipment.create(1L, null, null);
         given(transactionalService.createShipmentForOrderEvent(any(), any())).willReturn(shipment);
 
@@ -63,7 +65,7 @@ class OrderEventConsumerTest {
     @Test
     @DisplayName("createShipmentForOrderEvent가 null을 반환해도 예외 없이 정상 종료된다 (중복 이벤트 케이스)")
     void validJson_nullReturnFromService_completesNormally() {
-        OrderEventConsumer consumer = new OrderEventConsumer(transactionalService, realObjectMapper());
+        OrderEventConsumer consumer = new OrderEventConsumer(transactionalService, realObjectMapper(), meterRegistry);
         given(transactionalService.createShipmentForOrderEvent(any(), any())).willReturn(null);
 
         consumer.onOrderEvent(VALID_JSON);
@@ -77,7 +79,7 @@ class OrderEventConsumerTest {
         ObjectMapper mockMapper = mock(ObjectMapper.class);
         given(mockMapper.readValue(any(String.class), eq(OrderEventConsumer.OrderCreatedPayload.class)))
                 .willThrow(new JsonProcessingException("invalid json") {});
-        OrderEventConsumer consumer = new OrderEventConsumer(transactionalService, mockMapper);
+        OrderEventConsumer consumer = new OrderEventConsumer(transactionalService, mockMapper, meterRegistry);
 
         consumer.onOrderEvent("{invalid}");
 
@@ -87,7 +89,7 @@ class OrderEventConsumerTest {
     @Test
     @DisplayName("createShipmentForOrderEvent에서 RuntimeException 발생 시 DomainException(EVENT_CONSUME_ERROR)을 던진다")
     void serviceThrowsRuntimeException_wrapsAsDomainException() {
-        OrderEventConsumer consumer = new OrderEventConsumer(transactionalService, realObjectMapper());
+        OrderEventConsumer consumer = new OrderEventConsumer(transactionalService, realObjectMapper(), meterRegistry);
         given(transactionalService.createShipmentForOrderEvent(any(), any()))
                 .willThrow(new RuntimeException("db error"));
 
