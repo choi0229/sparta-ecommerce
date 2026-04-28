@@ -187,6 +187,7 @@ P0 agents(msa-architect, backend-builder)는 코드 생성 흐름의 핵심 분�
 P0 agents를 실제 작업(런타임 로그 개선)에 적용해 동작을 확인한 뒤 P1을 추가하면,
 각 단계의 효과를 개별적으로 평가할 수 있습니다.
 orchestrator Skill(`msa-change-orchestrator`)은 4개 agents의 동작이 안정화된 이후로 미뤘습니다.
+실제로 P0/P1 agents를 실제 작업에 적용하고 안정화를 확인한 뒤 `msa-change-orchestrator` Skill을 추가했습니다.
 
 **결과**
 P0 agents로 런타임 로그 개선 작업을 수행한 뒤 P1 agents를 추가하는 흐름으로 진행했고,
@@ -254,3 +255,92 @@ NodePort 30084로 직접 접근이 되지 않아 배포 검증 방법 결정 필
 `port-forward`는 추가 데몬 실행 없이 즉시 동작하며, 포트 번호를 그대로 유지할 수 있어 curl 명령 재작성이 불필요합니다.
 `minikube tunnel`은 sudo 권한이 필요하고 백그라운드 프로세스를 유지해야 합니다.
 API 검증 목적으로는 `port-forward`가 가장 빠르고 간단합니다.
+
+---
+
+## 13. shipment-event 상태 반영 — logistics-api HTTP 직접 호출 대신 order-api consume 방식 선택
+
+**배경**
+logistics-api에서 배송 상태가 변경될 때 order-api의 `orders.shipment_status`를 갱신해야 합니다.
+이를 위해 logistics-api가 order-api를 직접 호출하는 방식과 이벤트를 발행해 order-api가 수신하는 방식 중 선택이 필요했습니다.
+
+**선택지**
+- A: logistics-api가 배송 상태 변경 후 order-api에 HTTP로 직접 호출해 주문 상태 업데이트
+- B: logistics-api가 shipment-event를 발행하고, order-api가 이를 consume해 자체 DB에 반영
+
+**선택: B**
+
+**근거**
+MSA 원칙상 `orders` 테이블은 order-api만 소유합니다.
+logistics-api가 order-api를 HTTP로 직접 호출하면 logistics-api → order-api 단방향 의존이 생기고,
+order-api가 이미 logistics-api 이벤트를 consume하는 구조와 합쳐지면 양방향 결합이 됩니다.
+또한 HTTP 호출은 응답 대기 시간 동안 DB 트랜잭션을 점유하거나 장애를 직접 전파할 수 있습니다.
+
+이벤트 발행 방식은 이미 logistics-api에 적용된 Transactional Outbox 패턴을 그대로 재사용하며,
+order-api도 기존 Kafka consumer 인프라를 갖추고 있어 추가 인프라 비용 없이 연결이 가능합니다.
+배송 상태 변경과 이벤트 저장을 같은 트랜잭션에서 처리하므로 이벤트 유실 없이 주문에 반영됩니다.
+
+**결과**
+logistics-api는 배송 상태 변경 시 outbox에 shipment-event를 저장하고,
+order-api `ShipmentEventConsumer`가 이를 수신해 `orders.shipment_status`를 갱신합니다.
+두 서비스의 DB는 서로 직접 접근하지 않으며, 결합 방향은 order-api → (Kafka) ← logistics-api로 단방향을 유지합니다.
+
+---
+
+## 14. Outbox 발행 잠금 방식 — JPA PESSIMISTIC_WRITE에서 native claim으로 전환
+
+**배경**
+`OutboxPublisherJob`이 PENDING 이벤트를 가져올 때 멀티 Pod 환경에서 동일 이벤트가 중복 처리되지 않도록 잠금 방식이 필요했습니다.
+초기 구현은 JPA `PESSIMISTIC_WRITE` 락을 사용했지만 실제 배포 환경에서 한계가 드러났습니다.
+
+**선택지**
+- A: JPA `PESSIMISTIC_WRITE` + `jakarta.persistence.lock.timeout` 힌트 기반 잠금 후 폴링
+- B: `FOR UPDATE SKIP LOCKED + UPDATE ... RETURNING` 네이티브 쿼리로 원자적 claim
+
+**선택: B**
+
+**근거**
+`PESSIMISTIC_WRITE` 방식은 이미 잠긴 행을 기다립니다.
+멀티 Pod 환경에서 모든 인스턴스가 같은 행에 대해 직렬 대기하면,
+처리량이 낮아지고 잠금 대기 중에도 DB 커넥션을 점유(idle in transaction)하는 문제가 생깁니다.
+힌트 키(`jakarta.persistence.lock.timeout`)가 실제로 적용되는지 런타임에 검증하기 어렵고,
+Hibernate 6의 힌트 처리 방식에 따라 silently 무시될 수 있어 안정성 보장이 불확실했습니다.
+
+`FOR UPDATE SKIP LOCKED`는 이미 잠긴 행을 즉시 건너뜁니다.
+각 Pod가 겹치지 않는 배치를 경합 없이 가져가므로 idle in transaction이 발생하지 않습니다.
+`UPDATE ... RETURNING`으로 claim과 `PROCESSING` 상태 전환을 한 문장에서 원자적으로 처리하고,
+claim 만료 시각(`next_retry_at = now + 2분`)을 기록해 stale recovery의 기준 시각으로도 활용합니다.
+
+**결과**
+멀티 Pod 환경에서 중복 클레임 없이 원자적 배치 처리가 가능해졌습니다.
+idle in transaction 구간이 제거되었고, claim 만료 시각 기록으로 `StaleOutboxRecoveryJob`이
+Pod 장애로 stuck된 PROCESSING 이벤트를 자동 복구하는 기반이 마련되었습니다.
+
+---
+
+## 15. 관리자용 Outbox API — /admin/outbox 분리 경로와 단건/배치 엔드포인트 분할
+
+**배경**
+운영 중 FAILED 상태로 전환된 Outbox 이벤트를 DB 직접 접근 없이 확인하고 재처리할 수단이 필요했습니다.
+이를 기존 도메인 API에 통합할지, 별도 경로로 분리할지 결정이 필요했습니다.
+
+**선택지**
+- A: 기존 도메인 API 경로에 조회·재처리 기능 통합
+- B: `/admin/outbox` 경로로 분리하고 조회, 단건 재처리, 배치 재처리를 독립 엔드포인트로 분할
+
+**선택: B**
+
+**근거**
+Outbox 이벤트 조회와 재처리는 일반 사용자가 호출하는 도메인 API와 목적이 다릅니다.
+운영자 복구용 기능으로 분리하면 나중에 인증·접근 제어를 `/admin` 경로 단위로 일괄 적용할 수 있습니다.
+
+단건(`/{id}/retry`)과 배치(`/retry`)를 별도 엔드포인트로 나눈 이유는 의도한 범위를 명시적으로 구분하기 위해서입니다.
+단건 재처리는 특정 이벤트의 원인을 파악한 뒤 선택적으로 복구할 때,
+배치 재처리는 장애 복구 후 FAILED 이벤트를 일괄 재처리할 때 사용합니다.
+두 동작을 하나의 엔드포인트로 합치면 호출 의도가 불명확해지고 운영 실수 가능성이 높아집니다.
+
+**결과**
+`GET /admin/outbox?status=FAILED&limit=20`으로 상태별 이벤트 목록 조회,
+`POST /admin/outbox/{id}/retry`로 단건 재처리,
+`POST /admin/outbox/retry?status=FAILED&limit=20`으로 배치 재처리가 가능합니다.
+운영자가 DB 직접 접근 없이 FAILED 이벤트를 확인하고 복구할 수 있는 수단이 마련되었습니다.

@@ -17,7 +17,7 @@ Claude Code 하네스를 revfactory/harness 개념을 참고해 고도화하면�
 | **규칙 관리** | CLAUDE.md, rules/, skills/ | 동일 + agents/가 역할별 entry point로 위임 구조 |
 | **컨텍스트 효율** | rules/skills 전체가 항상 로딩될 수 있음 | agent → rules/skills 위임으로 필요 시만 참조 |
 | **guardrails** | macOS grep -P 미지원 (Perl 정규식) | grep -E + POSIX [[:space:]] 로 macOS/Linux 통일 |
-| **자동화 수준** | CI Gate, guardrails로 검증 자동화 | 동일 + agents 흐름 추가 (orchestrator는 미구현) |
+| **자동화 수준** | CI Gate, guardrails로 검증 자동화 | 동일 + agents 흐름 추가 + msa-change-orchestrator Skill 기본 구현 |
 
 ---
 
@@ -112,11 +112,11 @@ macOS 로컬과 GitHub Actions(Ubuntu) 양쪽에서 동일하게 동작합니다
 
 | 항목 | 현재 상태 | 다음 단계 |
 |---|---|---|
-| **Orchestrator Skill** | 미구현 | `msa-change-orchestrator` Skill로 설계→구현→리뷰→검증 흐름 자동 연결 |
+| **Orchestrator Skill** | 기본 구현됨 (`msa-change-orchestrator` Skill 추가) | 추가 고도화 (fan-out/fan-in 자동화 등) |
 | **ops agent** | 보류 | 배포·모니터링·장애 대응 자동화 역할 |
 | **harness-evolve Skill** | 보류 | 하네스 구조 자체를 점진 개선하는 Skill |
 | **다른 서비스 CI 연결** | logistics-api만 연결됨 | product-api, order-api, inventory-api CI 단계적 추가 |
-| **통합 테스트** | 미작성 | Kafka Consumer E2E, Outbox → 발행 → Consumer 흐름 검증 |
+| **통합 테스트** | 수동 검증 완료, 자동화 미적용 | Kafka Consumer E2E 자동화 테스트 |
 
-현재 하네스는 "역할 분리와 규칙 기반 제어"까지 구현된 상태입니다.
-다음 단계는 orchestrator Skill을 추가해 agents 간 흐름을 자동화하는 것입니다.
+현재 하네스는 "역할 분리, 규칙 기반 제어, agents 간 흐름 자동화"까지 구현된 상태입니다.
+다음 단계는 Kafka E2E 통합 테스트 자동화와 다른 서비스 CI 연결 확장입니다.

@@ -204,6 +204,21 @@ curl -s -X PATCH http://localhost:8084/shipments/1/status \
   -d '{"status": "FAILED"}' | jq .
 # HTTP 400 Bad Request
 # {"errorCode": "INVALID_SHIPMENT_STATUS_TRANSITION", ...}
+
+# FAILED 아웃박스 이벤트 목록 조회 (최대 200건, 기본 20건)
+curl -s "http://localhost:8084/admin/outbox?status=FAILED&limit=20" | jq .
+# HTTP 200 OK — {"data": [...], "message": "OK"}
+
+# 단건 FAILED 이벤트 수동 재처리 (id=1 → PENDING 전환)
+curl -s -X POST http://localhost:8084/admin/outbox/1/retry | jq .
+# HTTP 200 OK — {"data": {"id": 1, "status": "PENDING", "retryCount": ...}}
+
+# FAILED 이벤트 배치 재처리 (한 트랜잭션, 최대 20건)
+curl -s -X POST "http://localhost:8084/admin/outbox/retry?status=FAILED&limit=20" | jq .
+# HTTP 200 OK — {"data": {"count": N, "ids": [...]}}
+
+# Prometheus 메트릭 확인 (Outbox status별 row count, 발행 성공/실패 등)
+curl -s http://localhost:8084/actuator/prometheus | grep logistics_outbox
 ```
 
 ---
@@ -256,10 +271,25 @@ cd logistics-api
 # OutboxEventTest > markFailed_belowMaxRetry_remainsPendingWithBackoff() PASSED
 # OutboxEventTest > markFailed_atMaxRetry_becomeFailed() PASSED
 # OutboxEventTest > markFailed_backoffIncreasesByRetry() PASSED
+# ShipmentStatusTransitionTest > ready_to_shipped() PASSED
+# ShipmentStatusTransitionTest > ready_to_canceled() PASSED
+# ShipmentStatusTransitionTest > shipped_allowed_transitions() PASSED
+# ShipmentStatusTransitionTest > in_transit_allowed_transitions() PASSED
+# ShipmentStatusTransitionTest > delivered_cannot_transition() PASSED
+# ShipmentStatusTransitionTest > terminal_states_cannot_transition() PASSED
+# ShipmentStatusTransitionTest > ready_to_in_transit_throws() PASSED
 # OutboxEventTransactionalServiceTest > markSent_fetchesEventAndSaves() PASSED
 # OutboxEventTransactionalServiceTest > markFailed_fetchesEventAndSchedulesRetry() PASSED
 # OutboxEventTransactionalServiceTest > markSent_notFound_throwsDomainException() PASSED
 # OutboxEventTransactionalServiceTest > markFailed_notFound_throwsDomainException() PASSED
+# OutboxEventTransactionalServiceTest > retryFailed_failedEvent_resetsToPending() PASSED
+# OutboxEventTransactionalServiceTest > retryFailed_notFound_throwsDomainException() PASSED
+# OutboxEventTransactionalServiceTest > retryFailed_notFailedStatus_throwsDomainException() PASSED
+# OutboxEventTransactionalServiceTest > findByStatus_returnsMatchingEvents() PASSED
+# OutboxEventTransactionalServiceTest > findByStatus_limitsToMax() PASSED
+# OutboxEventTransactionalServiceTest > retryFailedBatch_resetsAllToPending() PASSED
+# OutboxEventTransactionalServiceTest > retryFailedBatch_notFailedStatus_throwsDomainException() PASSED
+# OutboxEventTransactionalServiceTest > retryFailedBatch_noEvents_returnsEmpty() PASSED
 # OrderEventConsumerTest > validJson_callsCreateShipmentWithCorrectIdemKeyAndNullAddress() PASSED
 # OrderEventConsumerTest > validJson_nullReturnFromService_completesNormally() PASSED
 # OrderEventConsumerTest > invalidJson_catchesJsonProcessingException_doesNotRethrow() PASSED
@@ -268,6 +298,8 @@ cd logistics-api
 # OutboxPublisherJobTest > kafkaSendSuccess_callsMarkSent() PASSED
 # OutboxPublisherJobTest > kafkaSendFails_callsMarkFailed() PASSED
 # OutboxPublisherJobTest > unknownEventType_callsMarkFailedWithoutKafkaSend() PASSED
+# StaleOutboxRecoveryJobTest > noStaleEvents_callsRecoverOnce() PASSED
+# StaleOutboxRecoveryJobTest > staleEventsExist_callsRecoverOnce() PASSED
 # BUILD SUCCESSFUL
 
 # 2. bootJar 빌드 (테스트 제외)

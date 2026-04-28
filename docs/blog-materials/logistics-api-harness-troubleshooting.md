@@ -303,3 +303,62 @@ assertThat(((DomainException) ex).getCode())
 **교훈**
 - 예외 코드를 문자열로 저장하는 패턴에서는 테스트 비교 시 `.name()`을 사용해야 합니다.
 - IDE 타입 추론이 없는 `assertThat` 체인에서는 실제 반환 타입을 소스에서 직접 확인하는 것이 안전합니다.
+
+---
+
+## 12. JPA 락 기반 Outbox 조회 경합 → native claim 전환
+
+**현상**
+멀티 Pod 환경에서 `OutboxPublisherJob` 인스턴스 여러 개가 동일한 PENDING Outbox 이벤트를 중복으로 클레임할 수 있는 구조였습니다.
+`PESSIMISTIC_WRITE` 락 방식은 이미 잠긴 행을 기다리므로, 동시 처리량이 낮고 락 타임아웃 설정이 실제로 적용되지 않을 때는 무한 대기가 발생할 수 있었습니다.
+
+**원인**
+`SELECT ... FOR UPDATE`는 행을 잠그지만, 다른 인스턴스가 같은 행을 기다리는 직렬화 구조가 됩니다.
+`PESSIMISTIC_WRITE`로 클레임하더라도 클레임된 상태로 상태 변경이 이루어지기 전 다른 인스턴스가 동일 이벤트를 가져가는 경쟁 조건이 잠재적으로 존재합니다.
+
+**해결**
+`FOR UPDATE SKIP LOCKED + UPDATE ... RETURNING` 네이티브 쿼리 방식으로 전환했습니다.
+
+```sql
+UPDATE outbox_event
+SET status = 'PROCESSING', next_retry_at = :expiry
+WHERE id IN (
+    SELECT id FROM outbox_event
+    WHERE status = 'PENDING' AND (next_retry_at IS NULL OR next_retry_at <= :now)
+    ORDER BY created_at
+    LIMIT :batchSize
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id
+```
+
+이미 처리 중인 행은 `SKIP LOCKED`로 건너뛰어 대기 없이 진행하므로, 멀티 인스턴스 환경에서 중복 없이 원자적으로 클레임됩니다.
+
+**교훈**
+- Outbox multi-instance 환경에서는 `FOR UPDATE SKIP LOCKED` 방식이 안전합니다.
+- `PESSIMISTIC_WRITE` 락은 단일 인스턴스에서는 문제없지만, 스케일아웃 시 경합 위험이 있습니다.
+- 네이티브 쿼리로 전환하면 Hibernate 버전별 힌트 호환성 문제에서도 벗어납니다.
+
+---
+
+## 13. PROCESSING 상태 stuck — stale recovery 없는 경우
+
+**현상**
+`OutboxPublisherJob`이 이벤트를 `PROCESSING`으로 전환한 뒤 Kafka 발행 전에 Pod가 비정상 종료(OOM Kill, 강제 재시작 등)되면,
+해당 이벤트는 `PROCESSING` 상태로 무기한 남습니다.
+Outbox 발행 스케줄러는 `PENDING` 상태만 처리하므로 해당 이벤트를 영구적으로 건너뜁니다.
+
+**원인**
+claim 단계에서 `next_retry_at = now + 2분`으로 만료 시각을 기록하지만,
+만료된 PROCESSING 이벤트를 자동으로 회복하는 로직이 없으면 시간이 지나도 상태가 유지됩니다.
+
+**해결**
+`StaleOutboxRecoveryJob`을 추가했습니다.
+30초 주기로 `status = PROCESSING AND next_retry_at < now`인 이벤트를 감지해
+`status = PENDING`, `next_retry_at = now + 30초`로 초기화합니다.
+이후 Outbox 발행 스케줄러가 해당 이벤트를 정상 재처리합니다.
+
+**교훈**
+- claim 만료 시각만 기록하고 recovery 로직이 없으면 Pod 장애 시 이벤트가 영구 stuck됩니다.
+- recovery job 주기는 claim 만료 시간(2분)보다 짧게 설정하면 복구 지연을 줄일 수 있습니다.
+- `logistics.outbox.stale.recovered` Counter 메트릭으로 회복 빈도를 모니터링하면 인프라 불안정 징후를 조기 포착할 수 있습니다.

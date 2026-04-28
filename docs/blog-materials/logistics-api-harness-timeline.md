@@ -226,3 +226,66 @@ Phase 10 전후로 하네스 구조가 어떻게 달라졌는지 한눈에 보�
 | 리뷰 | 비고정 | code-reviewer 8개 체크포인트 |
 | 테스트 계획 | 임의 추가 | qa가 P0/P1/P2 우선순위 분류 |
 | guardrails | macOS 미동작 가능 | grep -E + POSIX로 플랫폼 통일 |
+
+---
+
+## Phase 11 — order-api shipment-event 수신 및 연동
+
+### shipment-event Consumer 구현
+- `order-api`가 `logistics-api`가 발행하는 `shipment-event`를 수신하도록 Consumer 추가
+- `orders.shipment_status` 컬럼에 배송 상태 반영
+- `ShipmentEventConsumer` + `ShipmentStatusTransactionalService`: COMPLETED 레코드 존재·PENDING stuck 회복·최초 처리 4가지 경로 명시적 처리
+- `ShipmentStatusTransactionalServiceTest` 단위 테스트 작성
+
+### order status 조회 정합성 개선
+- `GET /api/orders/status/{idemKey}` — order row가 존재하면 `orders.status`를 우선 반환하도록 수정
+- 기존에는 idempotency record 상태를 우선 반환해 실제 주문 상태와 불일치 가능성이 있었음
+
+---
+
+## Phase 12 — Outbox 발행 안정화 (native claim + stale recovery)
+
+### native claim 방식 전환
+- 기존 `PESSIMISTIC_WRITE` 락 기반 Outbox 조회에서 `FOR UPDATE SKIP LOCKED + UPDATE ... RETURNING` 네이티브 쿼리 방식으로 전환
+- 멀티 Pod 환경에서 동일 이벤트 중복 클레임 없이 원자적으로 처리
+- claim 만료 시각(`now + 2분`)을 `next_retry_at`에 기록해 stale recovery 기준으로 활용
+
+### stale PROCESSING 회복
+- `PROCESSING` 상태 Pod 장애 시 무기한 stuck 문제 해결
+- `StaleOutboxRecoveryJob`: 30초 주기로 `next_retry_at < now`인 PROCESSING 이벤트 감지 → PENDING 복구
+- `StaleOutboxRecoveryJobTest` 단위 테스트 작성
+
+---
+
+## Phase 13 — 관측성 보강 (Micrometer 메트릭)
+
+### logistics-api 메트릭 추가
+- `logistics.outbox.events{status=}` Gauge: `OutboxMetricsBinder`가 status별 row count를 Prometheus pull 시 조회
+- `logistics.outbox.publish{result=sent|failed}` Counter: 발행 성공/실패
+- `logistics.outbox.stale.recovered` Counter: stale 회복 건수
+- `logistics.order.event.consume{result=success|failed}` Counter: 주문 이벤트 수신 성공/실패
+
+### order-api 메트릭 추가
+- `order.shipment.event.consume{result=success|failed}` Counter: 배송 이벤트 수신 성공/실패
+- `order.shipment.status.update{result=success|failed}` Counter: 배송 상태 반영 성공/실패
+- Counter 초기화는 `@PostConstruct` 대신 명시적 생성자 방식으로 Mockito 호환성 확보
+
+---
+
+## Phase 14 — 관리자용 Outbox API 추가
+
+### AdminOutboxController 신규 구현
+- `GET /admin/outbox?status=FAILED&limit=20` — 상태별 Outbox 이벤트 목록 조회 (최대 200건)
+- `POST /admin/outbox/{id}/retry` — 단건 FAILED 이벤트 수동 재처리 (PENDING 전환, retryCount 유지)
+- `POST /admin/outbox/retry?status=FAILED&limit=20` — FAILED 이벤트 배치 재처리 (단일 트랜잭션)
+- limit 하한(1) + 상한(200) 양방향 clamp로 `PageRequest` 예외 방지
+- `OutboxEventTransactionalServiceTest` 8개 테스트 추가 (retryFailed, findByStatus, retryFailedBatch)
+
+---
+
+## Phase 15 — msa-change-orchestrator Skill 추가
+
+### Skill 구현
+- `.claude/skills/msa-change-orchestrator/SKILL.md` 신규 작성
+- 신규 기능 추가·이벤트 계약 수정·테스트 보강 요청 시 msa-architect → backend-builder → code-reviewer → qa 흐름 자동 연결
+- Phase 10에서 "4개 agents 안정화 이후로 미뤘던" orchestrator Skill이 실제로 구현됨
