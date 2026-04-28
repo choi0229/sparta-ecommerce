@@ -366,3 +366,31 @@ kubectl rollout status deployment/logistics-api -n ecommerce
 # Flyway migration 로그 필터
 kubectl logs -n ecommerce -l app=logistics-api | grep -i flyway
 ```
+
+---
+
+## Cross-service E2E Smoke Test
+
+order-api → Kafka → logistics-api 연결을 로컬 환경에서 검증하는 최소 happy path 스크립트.
+
+**사전 조건**
+- `kubectl port-forward svc/order-api 8083:8083 -n ecommerce` 가 실행 중이어야 한다.
+- logistics-api 와 Kafka 가 정상 기동 상태여야 한다.
+
+```bash
+# 실행
+bash scripts/e2e-order-shipment-smoke.sh
+
+# 기대 출력 (성공 시)
+# === [1/3] POST /api/orders — 주문 생성 ===
+# [OK] idemKey = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# === [2/3] GET /api/orders/status/... — 폴링 시작 (최대 30초) ===
+# [0s]  status=PENDING      shipmentStatus=null
+# [3s]  status=CREATED    shipmentStatus=null
+# [6s]  status=CREATED    shipmentStatus=READY
+# === [3/3] Smoke test 결과 ===
+# [PASS] status=CREATED  shipmentStatus=READY
+```
+
+성공 조건: `status == CREATED` AND `shipmentStatus == READY`
+종료 코드: 성공 `0` / 실패(타임아웃 포함) `1`
