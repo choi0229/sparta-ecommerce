@@ -3,7 +3,6 @@ package org.teamsparta.logisticsapi.domain.logistics.scheduler;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.teamsparta.logisticsapi.domain.logistics.service.OutboxEventTransactionalService;
 
@@ -23,7 +22,6 @@ public class StaleOutboxRecoveryJob {
                 .register(meterRegistry);
     }
 
-    @Scheduled(fixedDelay = 60_000)
     public void recover() {
         int recovered = outboxEventTransactionalService.recoverStaleProcessing(ZonedDateTime.now());
         if (recovered > 0) {

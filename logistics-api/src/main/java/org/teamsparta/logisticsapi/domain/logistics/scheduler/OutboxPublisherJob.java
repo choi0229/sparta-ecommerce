@@ -4,7 +4,6 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.teamsparta.logisticsapi.domain.logistics.entity.OutboxEvent;
 import org.teamsparta.logisticsapi.domain.logistics.service.OutboxEventTransactionalService;
@@ -35,7 +34,6 @@ public class OutboxPublisherJob {
                 .tag("result", "failed").register(meterRegistry);
     }
 
-    @Scheduled(fixedDelay = 500)
     public void publish() {
         List<OutboxEvent> batch = outboxEventTransactionalService.claimBatch(ZonedDateTime.now(), 50);
         for (OutboxEvent event : batch) {
