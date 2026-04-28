@@ -2,9 +2,9 @@ name: Claude CI Gate
 
 on:
   push:
-    branches: [main, master, dev-logitical]
+    branches: [main, master, dev-logistical]
   pull_request:
-    branches: [main, master, dev-logitical]
+    branches: [main, master, dev-logistical]
 
 jobs:
   guardrails:
