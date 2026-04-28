@@ -33,6 +33,13 @@ public class ShipmentController {
         return ResponseEntity.ok(ApiResponse.ok(response));
     }
 
+    @GetMapping("/by-order/{orderId}")
+    public ResponseEntity<ApiResponse<ShipmentResponse>> getShipmentByOrderId(
+            @PathVariable Long orderId) {
+        ShipmentResponse response = logisticsService.getShipmentByOrderId(orderId);
+        return ResponseEntity.ok(ApiResponse.ok(response));
+    }
+
     @PatchMapping("/{shipmentId}/status")
     public ResponseEntity<ApiResponse<ShipmentResponse>> updateStatus(
             @PathVariable Long shipmentId,

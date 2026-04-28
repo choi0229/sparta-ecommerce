@@ -3,16 +3,19 @@
 # e2e-order-shipment-smoke.sh
 #
 # 사전 조건:
-#   - order-api  가 localhost:8083 에서 응답 중이어야 한다.
-#   - logistics-api 가 order-api와 Kafka로 연결되어 있어야 한다.
+#   - order-api    가 localhost:8083 에서 응답 중이어야 한다.
+#   - logistics-api 가 localhost:8084 에서 응답 중이어야 한다.
+#   - 두 서비스가 Kafka로 연결되어 있어야 한다.
 #   - kubectl port-forward 또는 minikube service 로 포트가 열려 있어야 한다.
 #
 # 실행 방법:
 #   chmod +x scripts/e2e-order-shipment-smoke.sh
 #   bash scripts/e2e-order-shipment-smoke.sh
 #
-# 성공 조건:
+# 성공 조건 (1차):
 #   status == CREATED  &&  shipmentStatus == READY
+# 성공 조건 (2차):
+#   status == CREATED  &&  shipmentStatus == SHIPPED
 #
 # 종료 코드:
 #   0 = 성공
@@ -21,6 +24,7 @@
 set -euo pipefail
 
 ORDER_API="http://localhost:8083"
+LOGISTICS_API="http://localhost:8084"
 POLL_INTERVAL=3   # 초
 TIMEOUT=30        # 초
 
@@ -37,15 +41,46 @@ extract() {
   if $USE_JQ; then
     echo "$json" | jq -r ".data.${key} // empty"
   else
-    # "key":"value" 패턴 추출 (공백 허용)
-    echo "$json" | grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
-                 | sed 's/.*"[^"]*"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/'
+    # "key":"value" 또는 "key":123 패턴 추출 (공백 허용)
+    echo "$json" | grep -o "\"${key}\"[[:space:]]*:[[:space:]]*[^,}]*" \
+                 | sed 's/.*:[[:space:]]*//' \
+                 | tr -d '"'
   fi
+}
+
+poll_until() {
+  local label="$1" target_status="$2" target_shipment="$3"
+  local elapsed=0
+
+  echo ""
+  echo "=== ${label} — 폴링 시작 (최대 ${TIMEOUT}초) ==="
+
+  while true; do
+    STATUS_RESP=$(curl -s "${ORDER_API}/api/orders/status/${IDEM_KEY}")
+    STATUS=$(extract "$STATUS_RESP" "status")
+    SHIPMENT=$(extract "$STATUS_RESP" "shipmentStatus")
+
+    echo "[${elapsed}s] status=${STATUS:-null}  shipmentStatus=${SHIPMENT:-null}"
+
+    if [[ "$STATUS" == "$target_status" && "$SHIPMENT" == "$target_shipment" ]]; then
+      return 0
+    fi
+
+    if [[ $elapsed -ge $TIMEOUT ]]; then
+      echo ""
+      echo "[FAIL] ${TIMEOUT}초 안에 목표 상태(status=${target_status}, shipmentStatus=${target_shipment})에 도달하지 못했습니다."
+      echo "       최종 응답: ${STATUS_RESP}"
+      exit 1
+    fi
+
+    sleep "$POLL_INTERVAL"
+    elapsed=$((elapsed + POLL_INTERVAL))
+  done
 }
 
 # ── 1단계: 주문 생성 ───────────────────────────────────────────────────────────
 echo ""
-echo "=== [1/3] POST /api/orders — 주문 생성 ==="
+echo "=== [1/5] POST /api/orders — 주문 생성 ==="
 CREATE_BODY='{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}]}'
 
 CREATE_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
@@ -63,36 +98,66 @@ fi
 
 echo "[OK] idemKey = ${IDEM_KEY}"
 
-# ── 2단계: 상태 polling ────────────────────────────────────────────────────────
+# ── 2단계: 1차 polling (status=CREATED, shipmentStatus=READY) ─────────────────
+poll_until "[2/5] GET /api/orders/status/${IDEM_KEY} — 1차 목표: shipmentStatus=READY" \
+  "CREATED" "READY"
+
+echo "[OK] 1차 조건 달성: status=CREATED  shipmentStatus=READY"
+
+# ── 3단계: orderId → shipmentId 조회 ──────────────────────────────────────────
 echo ""
-echo "=== [2/3] GET /api/orders/status/${IDEM_KEY} — 폴링 시작 (최대 ${TIMEOUT}초) ==="
+echo "=== [3/5] orderId 추출 및 shipmentId 조회 ==="
 
-elapsed=0
-while true; do
-  STATUS_RESP=$(curl -s "${ORDER_API}/api/orders/status/${IDEM_KEY}")
-  STATUS=$(extract "$STATUS_RESP" "status")
-  SHIPMENT=$(extract "$STATUS_RESP" "shipmentStatus")
+STATUS_RESP=$(curl -s "${ORDER_API}/api/orders/status/${IDEM_KEY}")
+ORDER_ID=$(extract "$STATUS_RESP" "orderId")
 
-  echo "[${elapsed}s] status=${STATUS:-null}  shipmentStatus=${SHIPMENT:-null}"
+if [[ -z "$ORDER_ID" ]]; then
+  echo "[FAIL] orderId를 추출하지 못했습니다."
+  echo "       응답: ${STATUS_RESP}"
+  exit 1
+fi
 
-  if [[ "$STATUS" == "CREATED" && "$SHIPMENT" == "READY" ]]; then
-    break
-  fi
+echo "[OK] orderId = ${ORDER_ID}"
 
-  if [[ $elapsed -ge $TIMEOUT ]]; then
-    echo ""
-    echo "[FAIL] ${TIMEOUT}초 안에 목표 상태에 도달하지 못했습니다."
-    echo "       최종 응답: ${STATUS_RESP}"
-    exit 1
-  fi
+SHIPMENT_RESP=$(curl -s "${LOGISTICS_API}/shipments/by-order/${ORDER_ID}")
+SHIPMENT_ID=$(extract "$SHIPMENT_RESP" "id")
 
-  sleep "$POLL_INTERVAL"
-  elapsed=$((elapsed + POLL_INTERVAL))
-done
+if [[ -z "$SHIPMENT_ID" ]]; then
+  echo "[FAIL] shipmentId를 추출하지 못했습니다."
+  echo "       응답: ${SHIPMENT_RESP}"
+  exit 1
+fi
 
-# ── 3단계: 결과 ───────────────────────────────────────────────────────────────
+echo "[OK] shipmentId = ${SHIPMENT_ID}"
+
+# ── 4단계: 배송 상태 READY → SHIPPED 변경 ─────────────────────────────────────
 echo ""
-echo "=== [3/3] Smoke test 결과 ==="
-echo "[PASS] status=CREATED  shipmentStatus=READY"
-echo "       idemKey = ${IDEM_KEY}"
+echo "=== [4/5] PATCH /shipments/${SHIPMENT_ID}/status — READY → SHIPPED ==="
+
+UPDATE_RESP=$(curl -s -X PATCH "${LOGISTICS_API}/shipments/${SHIPMENT_ID}/status" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"SHIPPED"}')
+
+echo "응답: ${UPDATE_RESP}"
+
+UPDATE_STATUS=$(extract "$UPDATE_RESP" "status")
+if [[ "$UPDATE_STATUS" != "SHIPPED" ]]; then
+  echo "[FAIL] 배송 상태 변경 실패. 응답 status=${UPDATE_STATUS:-null}"
+  exit 1
+fi
+
+echo "[OK] logistics-api shipment status = SHIPPED"
+
+# ── 5단계: 2차 polling (status=CREATED, shipmentStatus=SHIPPED) ───────────────
+poll_until "[5/5] GET /api/orders/status/${IDEM_KEY} — 2차 목표: shipmentStatus=SHIPPED" \
+  "CREATED" "SHIPPED"
+
+# ── 최종 결과 ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Smoke test 결과 ==="
+echo "[PASS] 1차: status=CREATED  shipmentStatus=READY"
+echo "[PASS] 2차: status=CREATED  shipmentStatus=SHIPPED"
+echo "       idemKey    = ${IDEM_KEY}"
+echo "       orderId    = ${ORDER_ID}"
+echo "       shipmentId = ${SHIPMENT_ID}"
 exit 0

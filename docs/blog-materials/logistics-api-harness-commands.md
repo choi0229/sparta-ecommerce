@@ -371,10 +371,12 @@ kubectl logs -n ecommerce -l app=logistics-api | grep -i flyway
 
 ## Cross-service E2E Smoke Test
 
-order-api → Kafka → logistics-api 연결을 로컬 환경에서 검증하는 최소 happy path 스크립트.
+order-api → Kafka → logistics-api 연결을 로컬 환경에서 검증하는 최소 happy path 스크립트.  
+1차 (shipmentStatus=READY) + 2차 (배송 상태 변경 후 shipmentStatus=SHIPPED) 를 순서대로 검증한다.
 
 **사전 조건**
 - `kubectl port-forward svc/order-api 8083:8083 -n ecommerce` 가 실행 중이어야 한다.
+- `kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce` 가 실행 중이어야 한다.
 - logistics-api 와 Kafka 가 정상 기동 상태여야 한다.
 
 ```bash
@@ -382,15 +384,25 @@ order-api → Kafka → logistics-api 연결을 로컬 환경에서 검증하는
 bash scripts/e2e-order-shipment-smoke.sh
 
 # 기대 출력 (성공 시)
-# === [1/3] POST /api/orders — 주문 생성 ===
+# === [1/5] POST /api/orders — 주문 생성 ===
 # [OK] idemKey = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-# === [2/3] GET /api/orders/status/... — 폴링 시작 (최대 30초) ===
-# [0s]  status=PENDING      shipmentStatus=null
+# === [2/5] ... — 1차 목표: shipmentStatus=READY — 폴링 시작 (최대 30초) ===
+# [0s]  status=null       shipmentStatus=null
 # [3s]  status=CREATED    shipmentStatus=null
 # [6s]  status=CREATED    shipmentStatus=READY
-# === [3/3] Smoke test 결과 ===
-# [PASS] status=CREATED  shipmentStatus=READY
+# [OK] 1차 조건 달성: status=CREATED  shipmentStatus=READY
+# === [3/5] orderId 추출 및 shipmentId 조회 ===
+# [OK] orderId = 42
+# [OK] shipmentId = 7
+# === [4/5] PATCH /shipments/7/status — READY → SHIPPED ===
+# [OK] logistics-api shipment status = SHIPPED
+# === [5/5] ... — 2차 목표: shipmentStatus=SHIPPED — 폴링 시작 (최대 30초) ===
+# [0s]  status=CREATED    shipmentStatus=READY
+# [3s]  status=CREATED    shipmentStatus=SHIPPED
+# === Smoke test 결과 ===
+# [PASS] 1차: status=CREATED  shipmentStatus=READY
+# [PASS] 2차: status=CREATED  shipmentStatus=SHIPPED
 ```
 
-성공 조건: `status == CREATED` AND `shipmentStatus == READY`
+성공 조건: 1차 `shipmentStatus=READY` → 2차 `shipmentStatus=SHIPPED`  
 종료 코드: 성공 `0` / 실패(타임아웃 포함) `1`

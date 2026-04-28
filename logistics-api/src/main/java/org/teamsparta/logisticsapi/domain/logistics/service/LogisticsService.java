@@ -37,6 +37,13 @@ public class LogisticsService {
         return ShipmentResponse.from(shipment);
     }
 
+    @Transactional(readOnly = true)
+    public ShipmentResponse getShipmentByOrderId(Long orderId) {
+        Shipment shipment = shipmentRepository.findByOrderId(orderId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.SHIPMENT_NOT_FOUND));
+        return ShipmentResponse.from(shipment);
+    }
+
     public ShipmentResponse updateStatus(Long shipmentId, ShipmentStatusUpdateRequest request) {
         Shipment shipment = transactionalService.updateStatus(
                 shipmentId, request.status(), request.description(), UUID.randomUUID().toString()
