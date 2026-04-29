@@ -92,11 +92,16 @@ public class OrderEventConsumer {
     public void ProductSnapshotReplyEvent(String message){
         log.info("Received product-snapshot-reply-event message: {}", message);
         try{
-            ProductSnapshotReplyResult productSnapshotReplyResult = objectMapper.readValue(message, ProductSnapshotReplyResult.class);
-            // productSnapshotPendingStore.complete(productSnapshotReplyResult);
-            orderTransactionalService.createOrderInternal(productSnapshotReplyResult, productSnapshotReplyResult.idemKey());
+            ProductSnapshotReplyResult result = objectMapper.readValue(message, ProductSnapshotReplyResult.class);
+            if (!result.success() || result.error() != null) {
+                String reason = result.error() != null ? result.error() : "Product snapshot failed";
+                log.warn("Product snapshot failed. idemKey={}, reason={}", result.idemKey(), reason);
+                orderTransactionalService.failOrder(result.idemKey(), reason);
+                return;
+            }
+            orderTransactionalService.createOrderInternal(result, result.idemKey());
         }catch(Exception e){
-            log.error("Error parsing product-snapshot-reply-event message: {}", message, e);
+            log.error("Error processing product-snapshot-reply-event message: {}", message, e);
         }
     }
 }

@@ -35,12 +35,17 @@ public class ProductSnapShotReplyEvent {
         return event;
     }
 
-    public static ProductSnapShotReplyEvent error(UUID requestId, String error){
+    public static ProductSnapShotReplyEvent error(UUID requestId, String error,
+                                                   String idemKey, Long userId,
+                                                   List<ProductSnapshotRequestResult.Item> requestItem) {
         ProductSnapShotReplyEvent event = new ProductSnapShotReplyEvent();
         event.setRequestId(requestId);
         event.setSuccess(false);
         event.setError(error);
         event.setItems(null);
+        event.setIdemKey(idemKey);
+        event.setUserId(userId);
+        event.setRequestItem(requestItem);
         return event;
     }
 

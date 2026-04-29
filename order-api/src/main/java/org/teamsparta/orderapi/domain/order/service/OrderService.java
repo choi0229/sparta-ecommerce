@@ -70,7 +70,7 @@ public class OrderService {
     public OrderStatusResponse getOrderStatus(String idemKey) {
         Optional<IdempotencyRecord> recordOpt = idempotencyRepository.findById(idemKey);
         if (recordOpt.isEmpty()) {
-            return new OrderStatusResponse(idemKey, "PENDING", null, null);
+            return new OrderStatusResponse(idemKey, "PENDING", null, null, null);
         }
         IdempotencyRecord record = recordOpt.get();
         String status = record.getStatus().name();
@@ -85,7 +85,7 @@ public class OrderService {
                 log.warn("orderId={} found in IdempotencyRecord but Orders not found. idemKey={}", record.getOrderId(), idemKey);
             }
         }
-        return new OrderStatusResponse(record.getIdemKey(), status, record.getOrderId(), shipmentStatus);
+        return new OrderStatusResponse(record.getIdemKey(), status, record.getOrderId(), shipmentStatus, record.getFailureReason());
     }
 
 //    @Transactional
