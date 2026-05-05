@@ -11,13 +11,14 @@
 - **해결 과제 2**: LIKE 풀스캔 기반 검색의 한계를 단계적으로 개선하여 고부하 환경에서도 안정적인 검색 제공.
 - **해결 과제 3**: 주문 이후 배송 도메인을 `logistics-api`로 분리하고, 이벤트 기반으로 배송 요청과 배송 상태를 관리.
 - **해결 과제 4**: Claude Code가 프로젝트 규칙 안에서 안전하게 작업하도록 하네스와 CI Gate 구성.
+- **해결 과제 5**: happy path 뿐 아니라 failure path까지 smoke script와 상태 조회 API로 검증 가능한 구조로 보강.
 
 ---
 
 ## 2. 서비스 구성 (MSA)
 
 - **product-api** (`:8081`): 상품 메타데이터 및 SKU(Variant) 관리, ES 검색 인덱스 동기화, 약식 결제 흐름 포함.
-- **order-api** (`:8083`): 주문 생성, 주문 상태 관리, Saga 상태 관리, 주문 이력 보존, shipment-event 수신.
+- **order-api** (`:8083`): 주문 생성, 주문 상태 관리, Saga 상태 관리, 주문 이력 보존, shipment-event 수신, product snapshot 실패 응답 처리.
 - **inventory-api** (`:8082`): 재고 예약(Reservation), 결제 대기 TTL 만료, 재고 해제 및 보상 처리.
 - **logistics-api** (`:8084`): 배송 요청 생성, 배송 상태 관리, 배송 상태 이력 저장, 주문 이벤트 수신, Transactional Outbox 기반 배송 이벤트 발행.
 - **payment-api**: 독립 서비스가 아닌 `product-api` 내부에 약식 구현된 결제 흐름.
@@ -32,7 +33,7 @@
 - **Messaging**: Kafka (Choreography Saga, Transactional Outbox)
 - **Infrastructure**: Kubernetes (Minikube), Docker, Docker Compose
 - **Observability**: Prometheus, Grafana, Micrometer, ELK Stack
-- **Testing**: JUnit5, Mockito, k6 Load Testing
+- **Testing**: JUnit5, Mockito, k6 Load Testing, smoke script
 - **AI Native Development**: Claude Code, Claude Code Rules, Skills, Guardrails, GitHub Actions CI Gate
 
 ---
@@ -55,8 +56,6 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 - `GET /api/orders/status/{idemKey}` 폴링으로 처리 결과 확인.
 - in-memory `ConcurrentHashMap` 기반 `ProductSnapshotPendingStore` 제거 → 레플리카 간 응답 유실 문제 해결 및 수평 확장 가능.
 
----
-
 ### 상품 검색 성능 최적화 (RDB → Elasticsearch 전환)
 
 10만 건 데이터 기준 단계적 최적화를 통해 고부하 실패율 72% → 1.47%로 개선했습니다.
@@ -73,16 +72,12 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 - Kafka Outbox 패턴을 통해 상품 생성/수정/삭제 시 ES 인덱스 자동 동기화 구현.
 - ELK 스택의 ES를 로그 수집용으로 이미 운영 중이어서 추가 인프라 비용 없이 도입.
 
----
-
 ### 멱등성 및 정합성 보장
 
 - **Idempotency**: `Idempotency-Key` 기반으로 중복 주문 및 중복 결제 요청 방어.
 - **Snapshotting**: 상품명, 가격 등이 변동되어도 주문 시점의 데이터를 `jsonb` 형태로 영구 보관.
 - **Transactional Outbox**: DB 커밋과 이벤트 발행의 원자성 보장. 최대 5회 지수 백오프 재시도, FAILED 상태 전환으로 유실 방지.
 - **processed event / idempotency record**: Kafka 이벤트 중복 전달 상황에서도 중복 주문, 중복 재고 처리, 중복 배송 생성이 발생하지 않도록 방어.
-
----
 
 ### logistics-api: 주문 이후 배송 도메인 분리 및 이벤트 연동
 
@@ -94,7 +89,7 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 
 **배송 상태 전이**
 
-```
+```text
 READY      → SHIPPED, CANCELED
 SHIPPED    → IN_TRANSIT, FAILED, CANCELED
 IN_TRANSIT → DELIVERED, FAILED
@@ -121,13 +116,36 @@ Pod 비정상 종료 등으로 PROCESSING 상태가 만료 기한을 넘겨도 S
 
 기존 `GET /api/orders/status/{idemKey}`는 `idempotency_request.status`를 반환해 `orders.status`("CREATED")와 불일치하는 경우가 있었습니다. 수정 후 `orders` 행이 존재하면 `orders.status`를 우선 반환하고, 행이 없을 때만 `idempotency_request.status`로 fallback합니다.
 
+### Failure path 명시화: INVALID SKU → FAILED + failureReason
+
+happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히 PENDING에 머무르지 않고 명시적으로 FAILED로 종료**되도록 order-api와 product-api를 보강했습니다.
+
+- `order-api`는 product snapshot 실패 응답(`success=false` 또는 `error!=null`)을 `FAILED`로 처리
+- `IdempotencyRecord`에 `failureReason` 저장
+- `GET /api/orders/status/{idemKey}` 응답에 `failureReason` 포함
+- `product-api`는 실패 reply에도 `idemKey`, `userId`, `requestItem` 등 correlation field 유지
+
+예시 응답:
+
+```json
+{
+  "data": {
+    "idemKey": "...",
+    "status": "FAILED",
+    "orderId": null,
+    "shipmentStatus": null,
+    "failureReason": "MISSING_SKU=[SKU-INVALID]"
+  }
+}
+```
+
 ---
 
 ## 5. 이벤트 흐름
 
 주문 생성부터 배송 상태가 order-api에 반영되기까지의 전체 흐름입니다.
 
-```
+```text
 [Client]
   POST /api/orders
     │
@@ -163,9 +181,36 @@ Pod 비정상 종료 등으로 PROCESSING 상태가 만료 기한을 넘겨도 S
   → { status: "CREATED", shipmentStatus: "IN_TRANSIT" }
 ```
 
+**실패 흐름 (존재하지 않는 SKU)**
+
+```text
+[Client]
+  POST /api/orders (SKU-INVALID)
+    │
+    ▼
+[order-api]
+  202 Accepted 반환
+  productSnapshot-requested-event 발행
+    │ Kafka
+    ▼
+[product-api]
+  MISSING_SKU 감지
+  productSnapshot-reply-event(success=false, error=MISSING_SKU, idemKey 유지) 발행
+    │ Kafka
+    ▼
+[order-api — OrderEventConsumer]
+  IdempotencyRecord FAILED 처리
+  failureReason 저장
+    │
+    ▼
+[Client]
+  GET /api/orders/status/{idemKey}
+  → { status: "FAILED", orderId: null, shipmentStatus: null, failureReason: "MISSING_SKU=[SKU-INVALID]" }
+```
+
 **outbox_event 상태 전이**
 
-```
+```text
 PENDING → PROCESSING (claim)
         → SENT       (발행 성공)
         → FAILED     (최대 재시도 초과)
@@ -226,8 +271,10 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
 | | 배송 이벤트 발행 | 배송 상태 변경 시 Outbox 기반으로 `shipment-event` 발행 |
 | | shipment-event 수신 | order-api가 shipment-event를 수신해 `orders.shipment_status` 반영 |
 | | 배송 상태 조회 | `GET /api/orders/status/{idemKey}` 에서 `orders.status` 우선 반영 |
+| | 상품 스냅샷 실패 처리 | invalid SKU 등 실패 응답을 `FAILED + failureReason`으로 종료 |
 | **Could-Have** | 데이터 유실 방지 | DB 저장/이벤트 발행 불일치 방지를 위해 **Transactional Outbox** |
 | | 운영 관측성 | Micrometer 기반 메트릭(Gauge/Counter) → `/actuator/prometheus` 노출 |
+| | smoke script 기반 운영 검증 | happy path / negative path를 bash script로 재현 가능 |
 
 ---
 
@@ -279,8 +326,6 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
 
 **판단 근거**: 스냅샷은 "결제 순간의 정확한 값"을 박제하는 기능이므로 SoT인 Product 서비스에서 직접 조회하는 A안 선택. SKU 단건 반복 조회가 아닌 List 기반 Bulk 조회로 I/O 최소화.
 
----
-
 ### 2. 주문 처리 모델: 동기(Blocking) → 비동기(Non-blocking) 전환
 
 | 비교 항목 | 동기식 (초기 구현) | 비동기식 (최종 선택) |
@@ -291,8 +336,6 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
 | **구현 난이도** | 단순 | Correlation ID, 폴링 API 추가 필요 |
 
 **판단 근거**: 트랜잭션 분리로 10 rps까지는 안정화했으나 그 이상에서 스레드 블로킹 문제 재현. Redis 기반 공유 상태 저장도 검토했으나 블로킹 구조 자체는 해결 불가. 비동기 전환으로 커넥션 고갈과 레플리카 문제를 동시에 해결.
-
----
 
 ### 3. 검색 엔진: FTS(PostgreSQL) vs Elasticsearch
 
@@ -306,8 +349,6 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
 
 **판단 근거**: 성능 수치만 보면 FTS가 더 우수하나, DB 부하 분리·한국어 검색 품질·향후 확장성을 종합해 ES 선택. 이미 운영 중인 ELK 스택 재활용으로 추가 인프라 비용 없음.
 
----
-
 ### 4. logistics-api 통합 전략: order-api 변경(B) vs logistics-api 적응(A)
 
 | 비교 항목 | A안: logistics-api가 기존 order 이벤트에 맞춤 (선택) | B안: order-api 이벤트 구조 확장 |
@@ -319,8 +360,6 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
 
 **판단 근거**: 초기 목표는 `logistics-api`를 독립 서비스로 추가하고 기존 주문 흐름을 깨지 않는 것이었습니다. 따라서 1차 MVP에서는 `logistics-api`가 현재 `order-api`의 `order-create-event` 구조에 맞추는 A안을 선택했습니다.
 
----
-
 ### 5. Outbox Publisher 잠금 방식: JPA PESSIMISTIC_WRITE vs Native Claim
 
 | 비교 항목 | JPA PESSIMISTIC_WRITE | Native Claim (선택) |
@@ -331,8 +370,6 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
 | **구현 복잡도** | `@Transactional(REQUIRES_NEW)` 분리 필요 | EntityManager Native Query 1개 |
 
 **판단 근거**: `@Transactional(REQUIRES_NEW)` 분리 후에도 pg_stat_activity에서 `idle in transaction` 상태가 지속되며 잠금이 해제되지 않는 문제가 재현됨. QueryDSL hint `-2` (SKIP_LOCKED) 도 런타임에서 `FOR UPDATE SKIP LOCKED`를 생성하지 않았음. Native SQL 방식으로 전환 후 해결.
-
----
 
 ### 6. AI Native 개발 방식: 단순 프롬프트 사용 vs Claude Code 하네스 구성
 
@@ -372,12 +409,20 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
             └── querydsl.md
 ```
 
-### CI Gate
+### CI / Workflow
 
 ```text
 .github/workflows/claude-ci-gate.yml
+.github/workflows/integration-tests.yml
+.github/workflows/smoke-tests.yml
 scripts/claude-guardrails.sh
 ```
+
+- **CI Gate**: `guardrails` + `logistics-api test` + `order-api test` + `logistics-api build`
+- **integration-tests.yml**: `workflow_dispatch` 기반 통합 테스트 전용 워크플로
+- **smoke-tests.yml**: `workflow_dispatch` 기반 smoke 실행 워크플로 (`happy / negative / all` 선택)
+  - 현재 smoke 스크립트가 `localhost:8083`, `localhost:8084`를 사용하므로 **GitHub-hosted runner에서는 바로 실행 불가**
+  - self-hosted runner 또는 runner에서 접근 가능한 환경이 필요
 
 Guardrails 검사 항목: `.DS_Store`, `.env`, `secrets/`, 의도하지 않은 `payment-api` 디렉터리, Claude Code 세션 로그, 위험 명령 문자열(`rm -rf`, `DROP TABLE`, `TRUNCATE`, `kubectl delete` 등).
 
@@ -398,6 +443,7 @@ kubectl apply -f deployment/
 ```bash
 ./scripts/redeploy-api.sh order-api
 ./scripts/redeploy-api.sh logistics-api
+./scripts/redeploy-api.sh product-api
 ./scripts/redeploy-api.sh logistics-api 2   # replica 수 지정
 ```
 
@@ -406,6 +452,7 @@ kubectl apply -f deployment/
 ```bash
 cd logistics-api && ./gradlew test
 cd order-api && ./gradlew test
+cd product-api && ./gradlew test
 cd logistics-api && ./gradlew bootJar -x test
 ```
 
@@ -418,7 +465,29 @@ kubectl port-forward svc/order-api-svc 8083:8083 -n ecommerce &
 kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce &
 ```
 
-**주문 생성**
+**happy path smoke**
+
+```bash
+bash scripts/smoke/e2e-order-shipment-smoke.sh
+```
+
+검증 내용:
+- 1차: `status=CREATED`, `shipmentStatus=READY`
+- 2차: `PATCH /shipments/{id}/status` 후 `status=CREATED`, `shipmentStatus=SHIPPED`
+
+**negative smoke (invalid SKU)**
+
+```bash
+bash scripts/smoke/e2e-order-invalid-sku-smoke.sh
+```
+
+검증 내용:
+- `status=FAILED`
+- `orderId=null`
+- `shipmentStatus=null`
+- `failureReason`에 `MISSING_SKU` 포함
+
+**수동 주문 생성 / 상태 조회**
 
 ```bash
 curl -X POST http://localhost:8083/api/orders \
@@ -435,26 +504,26 @@ curl -X POST http://localhost:8083/api/orders \
 # → 주문 접수 응답 반환
 ```
 
-**주문 상태 조회**
-
 ```bash
-curl http://localhost:8083/api/orders/status/test-order-001
+curl http://localhost:8083/api/orders/status/<IDEM_KEY>
 # → { "status": "CREATED", "shipmentStatus": "READY", ... }
 ```
 
 **배송 상태 변경**
 
 ```bash
-# shipmentId는 logistics-api DB에서 확인
-curl -X PATCH http://localhost:8084/shipments/1/status \
+curl http://localhost:8084/shipments/by-order/<ORDER_ID>
+# → shipmentId 확인
+
+curl -X PATCH http://localhost:8084/shipments/<SHIPMENT_ID>/status \
   -H "Content-Type: application/json" \
-  -d '{"status": "SHIPPED", "description": "발송 완료"}'
+  -d '{"status": "SHIPPED"}'
 ```
 
 **주문 배송 상태 반영 확인**
 
 ```bash
-curl http://localhost:8083/api/orders/status/test-order-001
+curl http://localhost:8083/api/orders/status/<IDEM_KEY>
 # → { "status": "CREATED", "shipmentStatus": "SHIPPED", ... }
 ```
 
@@ -520,11 +589,30 @@ bash scripts/claude-guardrails.sh
    Kafka 배포 방식에 따라 명령이 다를 수 있습니다. Kafka Pod에 직접 접근 가능한 환경이면 아래를 참고하세요.
 
    ```bash
-   # kafka-consumer-groups.sh 위치와 bootstrap-server는 환경에 맞게 조정
    kubectl exec -n ecommerce <kafka-pod> -- \
      kafka-consumer-groups.sh --bootstrap-server <broker>:9092 \
      --describe --group order-api
    # LAG이 크면 shipment-event 발행은 됐으나 order-api가 처리 못 하고 있는 상태
+   ```
+
+### invalid SKU 주문이 실패 처리되지 않을 때
+
+1. **status API 응답 확인**
+   ```bash
+   curl http://localhost:8083/api/orders/status/{idemKey}
+   # 기대: status=FAILED, failureReason=MISSING_SKU=[...]
+   ```
+
+2. **product-api 실패 reply payload 확인**
+   - `idemKey`, `userId`, `requestItem`가 null 이 아닌지
+   - 실패 reply에도 correlation field가 유지되는지
+
+3. **order-api OrderEventConsumer 로그 확인**
+   - `success=false` 또는 `error!=null` 분기에서 `failOrder()` 호출 여부
+
+4. **negative smoke 재실행**
+   ```bash
+   bash scripts/smoke/e2e-order-invalid-sku-smoke.sh
    ```
 
 ### Stale PROCESSING Recovery가 필요한 이유
@@ -537,9 +625,7 @@ bash scripts/claude-guardrails.sh
 
 ## 13. 향후 개선 과제
 
-- ~~실제 Minikube/Kubernetes 환경에서 `logistics-api` 배포 검증~~ (완료)
-- ~~`shipment-event`를 `order-api`가 수신해 주문 배송 상태에 반영하는 흐름 추가~~ (완료)
-- ~~`logistics-api` 운영 지표 추가 (Micrometer 기반 메트릭)~~ (완료)
+### 도메인 / 운영
 - 배송지 정보 처리 방식 결정
   - 주문 이벤트 확장
   - 배송지 업데이트 API 추가
@@ -551,8 +637,17 @@ bash scripts/claude-guardrails.sh
   - 현재는 일괄 복구(60s 주기, `retry_count + 1`) — 운영 환경에서 복구 임계치와 알림 정책 추가 검토 필요
 - `logistics_outbox_events` Gauge 부하 고려
   - Prometheus scrape 주기마다 `SELECT count(*) ... WHERE status = ?`를 4회 실행 — scrape 간격이 15s 미만인 환경에서는 전용 스케줄러 기반 캐시 갱신으로 전환 검토
-- Claude Code 하네스 고도화
-  - ~~`.claude/settings.json` 권한 경계 추가~~ (완료)
-  - hooks 기반 자동 guardrail 추가
-  - 전체 서비스 테스트 matrix CI 확장
-  - ~~`docs/claude-feedback-log.md` 기반 피드백 루프 기록~~ (완료)
+
+### Claude Code 하네스 / 자동화
+- hooks 기반 자동 guardrail 추가
+- 전체 서비스 테스트 matrix CI 확장
+- smoke workflow를 self-hosted runner 또는 접근 가능한 배포 환경에 연결
+
+### 완료된 항목
+- ~~실제 Minikube/Kubernetes 환경에서 `logistics-api` 배포 검증~~
+- ~~`shipment-event`를 `order-api`가 수신해 주문 배송 상태에 반영하는 흐름 추가~~
+- ~~`logistics-api` 운영 지표 추가 (Micrometer 기반 메트릭)~~
+- ~~`.claude/settings.json` 권한 경계 추가~~
+- ~~`docs/claude-feedback-log.md` 기반 피드백 루프 기록~~
+- ~~happy / negative smoke script 추가~~
+- ~~product snapshot 실패 응답 처리 및 correlation field 보강~~
