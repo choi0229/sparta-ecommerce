@@ -406,3 +406,50 @@ bash scripts/e2e-order-shipment-smoke.sh
 
 성공 조건: 1차 `shipmentStatus=READY` → 2차 `shipmentStatus=SHIPPED`  
 종료 코드: 성공 `0` / 실패(타임아웃 포함) `1`
+
+---
+
+## Negative Smoke Test — invalid SKU 주문 실패 경로 검증
+
+order-api → product-api(MISSING_SKU 실패 reply) → order-api 상태 FAILED 반영을 검증한다.
+
+**사전 조건**
+- `kubectl port-forward svc/order-api 8083:8083 -n ecommerce` 가 실행 중이어야 한다.
+- product-api 가 Kafka로 연결되어 `productSnapshot-requested-event` 를 수신할 수 있어야 한다.
+
+```bash
+# 실행
+bash scripts/e2e-order-invalid-sku-smoke.sh
+
+# 기대 출력 (성공 시)
+# === [1/2] POST /api/orders — invalid SKU로 주문 생성 ===
+# [OK] idemKey = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# === [2/2] GET /api/orders/status/... — 목표: status=FAILED — 폴링 시작 (최대 30초) ===
+# [0s]  status=PENDING  orderId=null  shipmentStatus=null  failureReason=null
+# [3s]  status=FAILED   orderId=null  shipmentStatus=null  failureReason=MISSING_SKU=[SKU-INVALID]
+# === Negative Smoke test 결과 ===
+# [PASS] status=FAILED
+# [PASS] orderId=null
+# [PASS] shipmentStatus=null
+# [PASS] failureReason=MISSING_SKU=[SKU-INVALID] (MISSING_SKU 포함)
+```
+
+성공 조건: `status=FAILED` && `orderId=null` && `shipmentStatus=null` && `failureReason` 에 `MISSING_SKU` 포함  
+종료 코드: 성공 `0` / 실패(타임아웃 또는 조건 불일치) `1`
+
+```bash
+# 수동 검증 (단계별)
+
+# 1. invalid SKU로 주문 생성
+curl -s -X POST http://localhost:8083/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"userId":1,"items":[{"sku":"SKU-INVALID","quantity":1}]}' | jq .
+# → {"data": {"idemKey": "...", ...}, "message": "OK"}
+
+# 2. 상태 조회 (idemKey 교체)
+curl -s http://localhost:8083/api/orders/status/<IDEM_KEY> | jq .
+# 최초 (PENDING):
+# {"data": {"idemKey": "...", "status": "PENDING", "orderId": null, "shipmentStatus": null, "failureReason": null}}
+# 실패 처리 후 (FAILED):
+# {"data": {"idemKey": "...", "status": "FAILED", "orderId": null, "shipmentStatus": null, "failureReason": "MISSING_SKU=[SKU-INVALID]"}}
+```
