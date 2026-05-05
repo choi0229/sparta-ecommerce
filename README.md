@@ -497,7 +497,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 scripts/claude-guardrails.sh
 ```
 
-- **CI Gate**: `guardrails` + `logistics-api test` + `order-api test` + `logistics-api build`
+- **CI Gate**: `guardrails` + 서비스별 unit test matrix(`product-api`, `order-api`, `inventory-api`, `logistics-api`) + `logistics-api build`
 - **integration-tests.yml**: `workflow_dispatch` 기반 통합 테스트 전용 워크플로
 - **smoke-tests.yml**: `workflow_dispatch` 기반 smoke 실행 워크플로 (`happy / negative / all` 선택)
     - 현재 smoke 스크립트가 `localhost:8083`, `localhost:8084`를 사용하므로 **GitHub-hosted runner에서는 바로 실행 불가**
@@ -515,6 +515,14 @@ scripts/claude-guardrails.sh
 
 Guardrails 검사 항목: `.DS_Store`, `.env`, `secrets/`, 의도하지 않은 `payment-api` 디렉터리, Claude Code 세션 로그, 위험 명령 문자열(`rm -rf`, `DROP TABLE`, `TRUNCATE`, `kubectl delete` 등).
 
+### 로컬 guardrail 자동화
+
+기존 `scripts/claude-guardrails.sh`는 CI에서만 쓰는 스크립트가 아니라, 로컬 Git hook으로도 자동 실행되도록 보강했습니다.
+
+- `.githooks/pre-commit`
+    - `git commit` 시 `scripts/claude-guardrails.sh` 자동 실행
+- `scripts/install-git-hooks.sh`
+    - `git config core.hooksPath .githooks` 설정용 1회 설치 스크립트
 ---
 
 ## 11. 프로젝트 실행 방법
@@ -565,6 +573,7 @@ curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {scra
 cd logistics-api && ./gradlew test
 cd order-api && ./gradlew test
 cd product-api && ./gradlew test
+cd inventory-api && ./gradlew test
 ```
 
 ### 로컬 검증 (port-forward 기반)
@@ -602,7 +611,9 @@ bash scripts/smoke/e2e-order-invalid-sku-smoke.sh
 **수동 주문 생성 / 상태 조회**
 
 ```bash
-curl -X POST http://localhost:8083/api/orders   -H "Content-Type: application/json"   -d '{
+curl -X POST http://localhost:8083/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{
     "userId": 42,
     "items": [
       {
@@ -624,7 +635,9 @@ curl http://localhost:8083/api/orders/status/<IDEM_KEY>
 curl http://localhost:8084/shipments/by-order/<ORDER_ID>
 # → shipmentId 확인
 
-curl -X PATCH http://localhost:8084/shipments/<SHIPMENT_ID>/status   -H "Content-Type: application/json"   -d '{"status": "SHIPPED"}'
+curl -X PATCH http://localhost:8084/shipments/<SHIPMENT_ID>/status \
+  -H "Content-Type: application/json" \
+  -d '{"status": "SHIPPED"}'
 ```
 
 **주문 배송 상태 반영 확인**
@@ -686,6 +699,28 @@ bash scripts/claude-guardrails.sh
 git commit --no-verify
 ```
 
+### GitHub Actions 수동 실행
+
+`workflow_dispatch` 기반 워크플로는 GitHub Actions 화면에서 수동 실행합니다.
+
+**Smoke Tests**
+- `target=happy`
+- `target=negative`
+- `target=all`
+
+**Integration Tests**
+- `service=product-api`
+- `service=order-api`
+- `service=inventory-api`
+- `service=logistics-api`
+- `service=all`
+
+권장 실행 순서:
+1. `Smoke Tests` → `happy`
+2. `Smoke Tests` → `negative`
+3. `Integration Tests` → 개별 서비스
+4. 마지막에 `Integration Tests` → `all`
+
 ---
 
 ## 12. 트러블슈팅
@@ -729,7 +764,9 @@ git commit --no-verify
 
 6. **Kafka consumer lag 확인**
    ```bash
-   kubectl exec -n ecommerce <kafka-pod> --      kafka-consumer-groups.sh --bootstrap-server <broker>:9092      --describe --group order-api
+   kubectl exec -n ecommerce <kafka-pod> -- \
+    kafka-consumer-groups.sh --bootstrap-server <broker>:9092 \
+    --describe --group order-api
    ```
 
 ### invalid SKU 주문이 실패 처리되지 않을 때
@@ -810,6 +847,11 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
     - FAILED / high-retry / stale recovery 기준의 알림 임계치 튜닝
 
 ### Claude Code 하네스 / 자동화
+- self-hosted runner 운영 안정화
+    - runner 장애/오프라인 감지 기준 정리
+    - smoke / integration 수동 실행 결과 문서화
+- workflow 결과 요약 자동화
+    - 서비스별 test/integration/smoke 실행 결과를 README 또는 runbook에 연결
 
 ### 완료된 항목
 - ~~실제 Minikube/Kubernetes 환경에서 `logistics-api` 배포 검증~~
