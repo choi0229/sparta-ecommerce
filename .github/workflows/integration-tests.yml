@@ -1,16 +1,35 @@
 # Integration tests require Docker (Testcontainers). Run manually via workflow_dispatch.
+# 'service = all' runs all four services in parallel.
+# 'service = <name>' runs only the selected service; other matrix variants are skipped.
 name: Integration Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      service:
+        description: '테스트할 서비스 (all = 전체 병렬 실행)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - product-api
+          - order-api
+          - inventory-api
+          - logistics-api
 
 jobs:
-  logistics-api-integration-test:
-    name: logistics-api Integration Tests (Docker/Testcontainers)
+  integration-test:
+    name: ${{ matrix.service }} Integration Tests
     runs-on: ubuntu-latest
+    if: ${{ inputs.service == 'all' || inputs.service == matrix.service }}
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [product-api, order-api, inventory-api, logistics-api]
     defaults:
       run:
-        working-directory: logistics-api
+        working-directory: ${{ matrix.service }}
 
     steps:
       - uses: actions/checkout@v4
@@ -25,42 +44,12 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Run integration tests (requires Docker)
+      - name: Run integration tests — ${{ matrix.service }} (Docker/Testcontainers)
         run: ./gradlew integrationTest
 
       - name: Upload integration test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logistics-api-integration-test-results
-          path: logistics-api/build/reports/tests/integrationTest/
-
-  order-api-integration-test:
-    name: order-api Integration Tests (Docker/Testcontainers)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: order-api
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: temurin
-          cache: gradle
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      - name: Run integration tests (requires Docker)
-        run: ./gradlew integrationTest
-
-      - name: Upload integration test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: order-api-integration-test-results
-          path: order-api/build/reports/tests/integrationTest/
+          name: ${{ matrix.service }}-integration-test-results
+          path: ${{ matrix.service }}/build/reports/tests/integrationTest/
