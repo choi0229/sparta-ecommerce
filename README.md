@@ -649,12 +649,41 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 ```
 
-### Guardrails 로컬 실행
+### Guardrails 로컬 자동화 (Git hook)
+
+클론 후 한 번만 실행하면 이후 `git commit` 시 guardrails가 자동 실행됩니다.
+
+```bash
+bash scripts/install-git-hooks.sh
+# → [OK] Git hooks 경로가 .githooks 로 설정되었습니다.
+```
+
+설치 후에는 `git commit` 시 아래처럼 자동으로 실행됩니다.
+
+```
+── Claude guardrails (pre-commit) ──────────────────────────
+Claude guardrails passed.
+────────────────────────────────────────────────────────────
+```
+
+guardrails가 실패하면 커밋이 중단됩니다. 실패 원인을 해결한 뒤 다시 커밋하세요.
+
+```
+[FAIL] .env 또는 secret 파일이 커밋 대상에 포함되어 있습니다.
+```
+
+**수동 실행** (hook 없이 확인만):
 
 ```bash
 git add <커밋할 파일>
 bash scripts/claude-guardrails.sh
 # → Claude guardrails passed.
+```
+
+**우회** (긴급 상황만, 권장하지 않음):
+
+```bash
+git commit --no-verify
 ```
 
 ---
@@ -781,9 +810,6 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
     - FAILED / high-retry / stale recovery 기준의 알림 임계치 튜닝
 
 ### Claude Code 하네스 / 자동화
-- hooks 기반 자동 guardrail 추가
-- 전체 서비스 테스트 matrix CI 확장
-- smoke workflow를 self-hosted runner 또는 접근 가능한 배포 환경에 연결
 
 ### 완료된 항목
 - ~~실제 Minikube/Kubernetes 환경에서 `logistics-api` 배포 검증~~
@@ -791,6 +817,9 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~`logistics-api` 운영 지표 추가 (Micrometer 기반 메트릭)~~
 - ~~`.claude/settings.json` 권한 경계 추가~~
 - ~~`docs/claude-feedback-log.md` 기반 피드백 루프 기록~~
+- ~~hooks 기반 자동 guardrail 추가~~
+- ~~전체 서비스 테스트 matrix CI 확장~~
+- ~~smoke workflow를 self-hosted runner에 연결~~
 - ~~happy / negative smoke script 추가~~
 - ~~product snapshot 실패 응답 처리 및 correlation field 보강~~
 - ~~전체 서비스 Outbox 상태 통합 모니터링~~
