@@ -1,10 +1,10 @@
 package org.teamsparta.orderapi.service;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -32,7 +32,6 @@ import static org.mockito.Mockito.times;
 @ExtendWith(MockitoExtension.class)
 public class OutboxPublisherJobTest {
 
-    @InjectMocks
     private OutboxPublisherJob outboxPublisherJob;
 
     @Mock
@@ -47,6 +46,8 @@ public class OutboxPublisherJobTest {
 
     @BeforeEach
     void setUp() {
+        outboxPublisherJob = new OutboxPublisherJob(
+                outboxQueryRepository, outboxEventRepository, kafkaTemplate, new SimpleMeterRegistry());
         event = OutboxEvent.pending("Orders", AGGREGATE_ID, "order-create-event", "{}");
         ReflectionTestUtils.setField(event, "id", 1L);
         ReflectionTestUtils.setField(event, "retryCount", 0);
