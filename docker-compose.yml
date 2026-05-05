@@ -171,6 +171,7 @@ services:
     volumes:
 #      - ./datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/alerts:/etc/prometheus/alerts
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
