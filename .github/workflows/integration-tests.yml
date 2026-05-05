@@ -1,6 +1,5 @@
-# Integration tests require Docker (Testcontainers). Run manually via workflow_dispatch.
-# 'service = all' runs all four services in parallel.
-# 'service = <name>' runs only the selected service; other matrix variants are skipped.
+# Integration tests require Docker (Testcontainers).
+# workflow_dispatch에서 service를 선택해 단일 서비스 또는 전체 서비스를 실행한다.
 name: Integration Tests
 
 on:
@@ -22,17 +21,23 @@ jobs:
   integration-test:
     name: ${{ matrix.service }} Integration Tests
     runs-on: ubuntu-latest
-    if: ${{ inputs.service == 'all' || inputs.service == matrix.service }}
+
     strategy:
       fail-fast: false
       matrix:
-        service: [product-api, order-api, inventory-api, logistics-api]
+        service: ${{ fromJson(
+          inputs.service == 'all'
+          && '["product-api","order-api","inventory-api","logistics-api"]'
+          || format('["{0}"]', inputs.service)
+          ) }}
+
     defaults:
       run:
         working-directory: ${{ matrix.service }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
