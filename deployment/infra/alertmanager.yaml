@@ -1,3 +1,16 @@
+# Slack 알림 활성화 방법:
+#
+# [방법 A — ConfigMap 직접 수정] (내부 환경용)
+#   kubectl edit configmap alertmanager-config -n monitoring
+#   slack_api_url 값을 실제 Webhook URL로 교체 후:
+#   kubectl rollout restart deployment/alertmanager -n monitoring
+#
+# [방법 B — Secret 기반 마운트] (운영 환경 권장)
+#   1. alertmanager.yml 파일 준비 (slack_api_url에 실제 URL 입력)
+#   2. kubectl create secret generic alertmanager-config \
+#        --from-file=alertmanager.yml=./alertmanager.yml -n monitoring
+#   3. Deployment의 volume.configMap → volume.secret 으로 변경 후 kubectl apply
+#
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -7,12 +20,9 @@ data:
   alertmanager.yml: |
     global:
       resolve_timeout: 5m
-      # SLACK_WEBHOOK_URL은 alertmanager-secret Secret에서 주입됩니다.
-      # 시크릿 생성:
-      #   kubectl create secret generic alertmanager-secret \
-      #     --from-literal=SLACK_WEBHOOK_URL=https://hooks.slack.com/services/... \
-      #     -n monitoring
-      slack_api_url: '${SLACK_WEBHOOK_URL}'
+      # 실제 Slack Webhook URL로 교체하세요.
+      # 운영 환경에서는 방법 B(Secret 마운트) 사용을 권장합니다.
+      slack_api_url: 'https://hooks.slack.com/services/REPLACE/WITH/REAL_WEBHOOK'
 
     route:
       group_by: ['alertname', 'service']
@@ -68,14 +78,7 @@ spec:
           image: prom/alertmanager:latest
           args:
             - "--config.file=/etc/alertmanager/alertmanager.yml"
-            - "--config.expand-env=true"
             - "--storage.path=/alertmanager"
-          env:
-            - name: SLACK_WEBHOOK_URL
-              valueFrom:
-                secretKeyRef:
-                  name: alertmanager-secret
-                  key: SLACK_WEBHOOK_URL
           ports:
             - containerPort: 9093
           volumeMounts:

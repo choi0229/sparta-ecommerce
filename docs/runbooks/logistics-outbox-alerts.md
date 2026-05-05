@@ -173,58 +173,80 @@ FAILED가 5건 이상 누적되어 있습니다. Kafka 장애, topic 설정 오�
 
 ## Alertmanager 운영 적용 절차
 
-### 1. Slack Webhook Secret 생성
+> 현재 클러스터 상태 (검증 완료):
+> - Alertmanager: `Running` (monitoring namespace)
+> - Prometheus → Alertmanager 연결: `activeAlertmanagers` 1개 확인
+> - 6개 alert rule: 모두 `inactive` (logistics-api 정상 동작 중)
 
-```bash
-kubectl create secret generic alertmanager-secret \
-  --from-literal=SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL \
-  -n monitoring
-```
-
-Secret이 이미 존재하는 경우:
-
-```bash
-kubectl create secret generic alertmanager-secret \
-  --from-literal=SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL \
-  -n monitoring \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
-### 2. Alertmanager 배포
+### 1. Alertmanager / Prometheus 배포 (최초 또는 재적용)
 
 ```bash
 kubectl apply -f deployment/infra/alertmanager.yaml
-```
-
-### 3. Prometheus 재적용 (alerting 섹션 반영)
-
-```bash
 kubectl apply -f deployment/infra/prometheus.yaml
 kubectl rollout restart deployment/prometheus -n monitoring
+kubectl rollout status deployment/alertmanager -n monitoring
+kubectl rollout status deployment/prometheus -n monitoring
 ```
 
-### 4. 적용 검증
+### 2. Slack Webhook URL 활성화
+
+Alertmanager ConfigMap에는 현재 placeholder URL이 설정되어 있습니다.  
+실제 Slack 알림을 받으려면 아래 두 방법 중 하나를 선택합니다.
+
+**방법 A — ConfigMap 직접 수정 (내부 환경용)**
 
 ```bash
-# Alertmanager 준비 상태 확인
-kubectl get pods -n monitoring -l app=alertmanager
+kubectl edit configmap alertmanager-config -n monitoring
+# slack_api_url: 'https://hooks.slack.com/services/REPLACE/WITH/REAL_WEBHOOK'
+# 위 값을 실제 Webhook URL로 교체
 
-# Alertmanager API 응답 확인 (포트포워드)
-kubectl port-forward svc/alertmanager 9093:9093 -n monitoring &
-curl -s http://localhost:9093/-/ready
-
-# Prometheus에서 Alertmanager 연결 확인
-# Prometheus UI → Status → Runtime & Build Information → Alertmanagers 항목 확인
-kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
-# 브라우저에서 http://localhost:9090/status 접근
+kubectl rollout restart deployment/alertmanager -n monitoring
 ```
 
-### 5. 알림 채널 확인
+**방법 B — Secret으로 config 파일 통째 관리 (운영 환경 권장)**
+
+```bash
+# 1. 실제 URL이 포함된 alertmanager.yml 로컬 파일 준비
+# 2. Secret 생성
+kubectl create secret generic alertmanager-config \
+  --from-file=alertmanager.yml=./alertmanager.yml \
+  -n monitoring
+
+# 3. deployment/infra/alertmanager.yaml 의 volume 수정:
+#    volumes.configMap.name: alertmanager-config  →  volumes.secret.secretName: alertmanager-config
+kubectl apply -f deployment/infra/alertmanager.yaml
+kubectl rollout restart deployment/alertmanager -n monitoring
+```
+
+### 3. 적용 검증
+
+```bash
+# Pod 상태
+kubectl get pods -n monitoring
+
+# Alertmanager readiness / healthy
+kubectl port-forward svc/alertmanager 9093:9093 -n monitoring &
+curl -s http://localhost:9093/-/ready    # 기대: OK
+curl -s http://localhost:9093/-/healthy  # 기대: OK
+
+# Prometheus → Alertmanager 연결 확인
+kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
+curl -s http://localhost:9090/api/v1/alertmanagers | python3 -m json.tool
+# 기대: activeAlertmanagers 에 alertmanager.monitoring.svc.cluster.local:9093 존재
+
+# alert rules 인식 확인
+curl -s "http://localhost:9090/api/v1/rules?type=alert" | python3 -m json.tool
+# 기대: logistics-outbox group 내 6개 rule
+
+# 포트포워드 정리
+kill %1 %2 2>/dev/null || true
+```
+
+### 4. 알림 채널 및 inhibit_rules
 
 - `#alerts-warning`: `severity=warning` 알림 수신 채널
 - `#alerts-critical`: `severity=critical` 알림 수신 채널
 - `send_resolved: true` — 알림 해소 시 Slack에 resolved 메시지가 전송됩니다.
 
-### inhibit_rules 동작
-
-같은 `(alertname, service)` 조합에서 `critical`이 발화하면 `warning`은 억제됩니다. `LogisticsOutboxFailedEventsSurge`(critical) 발화 시 `LogisticsOutboxFailedEventsPresent`(warning)은 Slack으로 전송되지 않습니다.
+같은 `(alertname, service)` 조합에서 `critical`이 발화하면 `warning`은 억제됩니다.  
+`LogisticsOutboxFailedEventsSurge`(critical) 발화 시 `LogisticsOutboxFailedEventsPresent`(warning)은 Slack으로 전송되지 않습니다.

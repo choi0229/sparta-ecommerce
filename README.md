@@ -538,8 +538,9 @@ kubectl apply -f deployment/
 ### 모니터링 스택 가동
 
 ```bash
-kubectl apply -n monitoring -f infra/grafana.yaml
-kubectl apply -n monitoring -f infra/prometheus.yaml
+kubectl apply -f deployment/infra/prometheus.yaml
+kubectl apply -f deployment/infra/alertmanager.yaml
+kubectl apply -f deployment/infra/grafana.yaml
 ```
 
 ### Prometheus / Grafana 확인
