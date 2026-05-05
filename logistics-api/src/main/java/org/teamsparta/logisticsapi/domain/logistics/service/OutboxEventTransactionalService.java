@@ -63,6 +63,10 @@ public class OutboxEventTransactionalService {
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
         event.markFailedAndScheduleRetry(5, Duration.ofMinutes(1));
         outboxEventRepository.save(event);
+        if (event.isFailed()) {
+            log.warn("[OutboxTerminal] event reached FAILED (terminal). id={} eventType={} aggregateId={} retryCount={}",
+                    id, event.getEventType(), event.getAggregateId(), event.getRetryCount());
+        }
     }
 
     private static final int MAX_QUERY_LIMIT = 200;
