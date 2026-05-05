@@ -27,14 +27,21 @@ kubectl cluster-info
 # 2. 서비스 존재 확인
 kubectl get svc -n ecommerce
 
-# 3. pod 상태 확인
+# 3. pod 상태 확인 (모든 pod가 Running이어야 합니다)
 kubectl get pods -n ecommerce
 
-# 4. port-forward 수동 테스트
+# 4. 포트 선점 여부 확인 (8083, 8084가 비어 있어야 합니다)
+ss -tlnp | grep -E '8083|8084'   # 출력 없으면 정상
+# 또는
+lsof -i :8083; lsof -i :8084    # 출력 없으면 정상
+
+# 5. port-forward 수동 테스트
 kubectl port-forward svc/order-api-svc 8083:8083 -n ecommerce &
 kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce &
-curl -s http://localhost:8084/actuator/health | jq .
-# 확인 후 정리
+sleep 2
+curl -s http://localhost:8083/actuator/health | jq .status
+curl -s http://localhost:8084/actuator/health | jq .status
+# "UP" 이 출력되면 정상. 확인 후 정리
 kill %1 %2
 ```
 
@@ -65,13 +72,39 @@ Checkout
 
 ---
 
-## 실패 시 확인 포인트
+## 실행 성공 기준
+
+### happy path (`target=happy`)
+
+| 검증 항목 | 기대 값 |
+|---|---|
+| POST /api/orders 응답 | `idemKey` 포함 |
+| GET /api/orders/status/:key | `status=CREATED`, `shipmentStatus=READY` (30초 이내) |
+| PATCH /shipments/:id/status 응답 | `status=SHIPPED` |
+| GET /api/orders/status/:key (2차) | `status=CREATED`, `shipmentStatus=SHIPPED` (30초 이내) |
+
+마지막 출력에 `[PASS]` 4줄이 모두 나오면 성공입니다.
+
+### negative path (`target=negative`)
+
+| 검증 항목 | 기대 값 |
+|---|---|
+| POST /api/orders 응답 | `idemKey` 포함 |
+| GET /api/orders/status/:key | `status=FAILED`, `orderId=null`, `shipmentStatus=null`, `failureReason` 에 `MISSING_SKU` 포함 (30초 이내) |
+
+마지막 출력에 `[PASS]` 4줄이 모두 나오면 성공입니다.
+
+---
+
+## 실패 시 로그 확인 순서
 
 | 실패 step | 원인 가능성 | 확인 명령 |
 |---|---|---|
 | `[Preflight]` kubectl | runner에 kubectl 미설치 | `which kubectl` |
 | `[Preflight]` 클러스터 접근 불가 | kubeconfig 누락 또는 클러스터 중단 | `kubectl cluster-info` |
 | `[Preflight]` svc not found | 서비스 이름 불일치 또는 미배포 | `kubectl get svc -n ecommerce` |
-| `[Port-forward]` 20초 타임아웃 | pod가 Running 상태 아님 | `kubectl get pods -n ecommerce` |
-| `[happy]` 폴링 타임아웃 | Kafka 연결 문제 또는 서비스 오류 | 각 서비스 로그 확인 |
-| `[negative]` MISSING_SKU 미포함 | product-api Kafka consumer 오류 | product-api 로그 확인 |
+| `[Port-forward]` 포트 선점 | 이전 실행 잔여 프로세스 | `lsof -i :8083` / `lsof -i :8084` |
+| `[Port-forward]` 20초 타임아웃 | pod가 Running 아님 (로그에 pod 목록 인라인 출력됨) | `kubectl get pods -n ecommerce` |
+| `[happy]` 폴링 타임아웃 | Kafka 연결 문제 또는 서비스 오류 | `kubectl logs -l app=order-api -n ecommerce --tail=50` |
+| `[happy]` shipmentStatus 불일치 | logistics-api 또는 Kafka consumer 오류 | `kubectl logs -l app=logistics-api -n ecommerce --tail=50` |
+| `[negative]` MISSING_SKU 미포함 | product-api Kafka consumer 오류 | `kubectl logs -l app=product-api -n ecommerce --tail=50` |
