@@ -1,0 +1,40 @@
+# Smoke tests connect to localhost:8083 (order-api) and localhost:8084 (logistics-api).
+# GitHub-hosted runners cannot reach these endpoints.
+# This workflow requires a self-hosted runner with kubectl port-forward already running.
+name: Smoke Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '실행할 smoke test 대상 (happy / negative / all)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - happy
+          - negative
+          - all
+
+jobs:
+  smoke-test:
+    name: Smoke Tests (${{ inputs.target }})
+    # ⚠️  배포된 클러스터에 접근 가능한 self-hosted runner 전용.
+    #     kubectl port-forward svc/order-api 8083:8083 -n ecommerce
+    #     kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce
+    #     두 포워딩이 모두 실행 중인 상태에서만 통과합니다.
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Grant execute permission for smoke scripts
+        run: chmod +x scripts/e2e-order-shipment-smoke.sh scripts/e2e-order-invalid-sku-smoke.sh
+
+      - name: '[happy] order 생성 → shipmentStatus=READY/SHIPPED 검증'
+        if: ${{ inputs.target == 'happy' || inputs.target == 'all' }}
+        run: bash scripts/e2e-order-shipment-smoke.sh
+
+      - name: '[negative] invalid SKU → status=FAILED, MISSING_SKU 검증'
+        if: ${{ inputs.target == 'negative' || inputs.target == 'all' }}
+        run: bash scripts/e2e-order-invalid-sku-smoke.sh
