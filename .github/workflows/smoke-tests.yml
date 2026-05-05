@@ -29,12 +29,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Grant execute permission for smoke scripts
-        run: chmod +x scripts/e2e-order-shipment-smoke.sh scripts/e2e-order-invalid-sku-smoke.sh
+        run: chmod +x scripts/smoke/e2e-order-shipment-smoke.sh scripts/smoke/e2e-order-invalid-sku-smoke.sh
 
       - name: '[happy] order 생성 → shipmentStatus=READY/SHIPPED 검증'
         if: ${{ inputs.target == 'happy' || inputs.target == 'all' }}
-        run: bash scripts/e2e-order-shipment-smoke.sh
+        run: bash scripts/smoke/e2e-order-shipment-smoke.sh
 
       - name: '[negative] invalid SKU → status=FAILED, MISSING_SKU 검증'
         if: ${{ inputs.target == 'negative' || inputs.target == 'all' }}
-        run: bash scripts/e2e-order-invalid-sku-smoke.sh
+        run: bash scripts/smoke/e2e-order-invalid-sku-smoke.sh

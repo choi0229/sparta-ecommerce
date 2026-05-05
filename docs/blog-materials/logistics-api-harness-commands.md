@@ -381,7 +381,7 @@ order-api → Kafka → logistics-api 연결을 로컬 환경에서 검증하는
 
 ```bash
 # 실행
-bash scripts/e2e-order-shipment-smoke.sh
+bash scripts/smoke/e2e-order-shipment-smoke.sh
 
 # 기대 출력 (성공 시)
 # === [1/5] POST /api/orders — 주문 생성 ===
@@ -419,7 +419,7 @@ order-api → product-api(MISSING_SKU 실패 reply) → order-api 상태 FAILED 
 
 ```bash
 # 실행
-bash scripts/e2e-order-invalid-sku-smoke.sh
+bash scripts/smoke/e2e-order-invalid-sku-smoke.sh
 
 # 기대 출력 (성공 시)
 # === [1/2] POST /api/orders — invalid SKU로 주문 생성 ===
