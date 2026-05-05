@@ -37,9 +37,16 @@ public class OutboxEventTransactionalService {
         return outboxEventRepository.findAllById(ids);
     }
 
+    private static final int RECOVERY_BATCH_SIZE = 100;
+
     @Transactional
     public int recoverStaleProcessing(ZonedDateTime now) {
-        return outboxQueryRepository.recoverStale(now, now.plusSeconds(30));
+        return outboxQueryRepository.recoverStale(now, now.plusSeconds(30), RECOVERY_BATCH_SIZE);
+    }
+
+    @Transactional(readOnly = true)
+    public int countStaleHighRetry(ZonedDateTime now, int retryThreshold) {
+        return outboxQueryRepository.countStaleHighRetry(now, retryThreshold);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
