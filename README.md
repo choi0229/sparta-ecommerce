@@ -12,13 +12,14 @@
 - **해결 과제 3**: 주문 이후 배송 도메인을 `logistics-api`로 분리하고, 이벤트 기반으로 배송 요청과 배송 상태를 관리.
 - **해결 과제 4**: Claude Code가 프로젝트 규칙 안에서 안전하게 작업하도록 하네스와 CI Gate 구성.
 - **해결 과제 5**: happy path 뿐 아니라 failure path까지 smoke script와 상태 조회 API로 검증 가능한 구조로 보강.
+- **해결 과제 6**: Outbox 상태 관측성, stale recovery, admin retry, alert/runbook까지 포함한 운영 체계 정리.
 
 ---
 
 ## 2. 서비스 구성 (MSA)
 
 - **product-api** (`:8081`): 상품 메타데이터 및 SKU(Variant) 관리, ES 검색 인덱스 동기화, 약식 결제 흐름 포함.
-- **order-api** (`:8083`): 주문 생성, 주문 상태 관리, Saga 상태 관리, 주문 이력 보존, shipment-event 수신, product snapshot 실패 응답 처리.
+- **order-api** (`:8083`): 주문 생성, 주문 상태 관리, Saga 상태 관리, 주문 이력 보존, `shipment-event` 수신, product snapshot 실패 응답 처리.
 - **inventory-api** (`:8082`): 재고 예약(Reservation), 결제 대기 TTL 만료, 재고 해제 및 보상 처리.
 - **logistics-api** (`:8084`): 배송 요청 생성, 배송 상태 관리, 배송 상태 이력 저장, 주문 이벤트 수신, Transactional Outbox 기반 배송 이벤트 발행.
 - **payment-api**: 독립 서비스가 아닌 `product-api` 내부에 약식 구현된 결제 흐름.
@@ -46,15 +47,15 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 
 **1단계: 트랜잭션 분리**
 
-- `OrderService`(Kafka 이벤트 전송)와 `OrderTransactionalService`(`@Transactional` DB 작업)로 분리하여 Kafka 대기 구간 동안 DB 커넥션을 점유하지 않도록 개선.
-- 동기 방식 기준 10 rps까지 안정화 달성.
+- `OrderService`(Kafka 이벤트 전송)와 `OrderTransactionalService`(`@Transactional` DB 작업)로 분리하여 Kafka 대기 구간 동안 DB 커넥션을 점유하지 않도록 개선
+- 동기 방식 기준 10 rps까지 안정화 달성
 
 **2단계: 비동기 전환 (202 Accepted + 폴링)**
 
-- 트랜잭션 분리만으로는 고부하에서 스레드 블로킹 문제가 재현되어 구조 자체를 전환.
-- `POST /api/orders` → 즉시 202 Accepted 반환, Outbox → Kafka → Consumer → DB 저장 비동기 처리.
-- `GET /api/orders/status/{idemKey}` 폴링으로 처리 결과 확인.
-- in-memory `ConcurrentHashMap` 기반 `ProductSnapshotPendingStore` 제거 → 레플리카 간 응답 유실 문제 해결 및 수평 확장 가능.
+- 트랜잭션 분리만으로는 고부하에서 스레드 블로킹 문제가 재현되어 구조 자체를 전환
+- `POST /api/orders` → 즉시 202 Accepted 반환, Outbox → Kafka → Consumer → DB 저장 비동기 처리
+- `GET /api/orders/status/{idemKey}` 폴링으로 처리 결과 확인
+- in-memory `ConcurrentHashMap` 기반 `ProductSnapshotPendingStore` 제거 → 레플리카 간 응답 유실 문제 해결 및 수평 확장 가능
 
 ### 상품 검색 성능 최적화 (RDB → Elasticsearch 전환)
 
@@ -68,16 +69,16 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 | 파티셔닝 + FTS | 29.57% | 1.87s |
 | **ES 전환** | **1.47%** | **31ms** |
 
-- FTS 고부하 실패율 0%로 성능 수치는 우수했으나, DB 커넥션 의존성·한국어 형태소 분석 한계·확장성을 고려해 ES를 최종 선택.
-- Kafka Outbox 패턴을 통해 상품 생성/수정/삭제 시 ES 인덱스 자동 동기화 구현.
-- ELK 스택의 ES를 로그 수집용으로 이미 운영 중이어서 추가 인프라 비용 없이 도입.
+- FTS 고부하 실패율 0%로 성능 수치는 우수했으나, DB 커넥션 의존성·한국어 형태소 분석 한계·확장성을 고려해 ES를 최종 선택
+- Kafka Outbox 패턴을 통해 상품 생성/수정/삭제 시 ES 인덱스 자동 동기화 구현
+- ELK 스택의 ES를 로그 수집용으로 이미 운영 중이어서 추가 인프라 비용 없이 도입
 
 ### 멱등성 및 정합성 보장
 
-- **Idempotency**: `Idempotency-Key` 기반으로 중복 주문 및 중복 결제 요청 방어.
-- **Snapshotting**: 상품명, 가격 등이 변동되어도 주문 시점의 데이터를 `jsonb` 형태로 영구 보관.
-- **Transactional Outbox**: DB 커밋과 이벤트 발행의 원자성 보장. 최대 5회 지수 백오프 재시도, FAILED 상태 전환으로 유실 방지.
-- **processed event / idempotency record**: Kafka 이벤트 중복 전달 상황에서도 중복 주문, 중복 재고 처리, 중복 배송 생성이 발생하지 않도록 방어.
+- **Idempotency**: `Idempotency-Key` 기반으로 중복 주문 및 중복 결제 요청 방어
+- **Snapshotting**: 상품명, 가격 등이 변동되어도 주문 시점의 데이터를 `jsonb` 형태로 영구 보관
+- **Transactional Outbox**: DB 커밋과 이벤트 발행의 원자성 보장. 최대 5회 지수 백오프 재시도, FAILED 상태 전환으로 유실 방지
+- **processed event / idempotency record**: Kafka 이벤트 중복 전달 상황에서도 중복 주문, 중복 재고 처리, 중복 배송 생성이 발생하지 않도록 방어
 
 ### logistics-api: 주문 이후 배송 도메인 분리 및 이벤트 연동
 
@@ -110,15 +111,22 @@ CANCELED   → 변경 불가
 
 **Stale PROCESSING Recovery**
 
-Pod 비정상 종료 등으로 PROCESSING 상태가 만료 기한을 넘겨도 SENT로 전환되지 않는 경우, 60초 주기 스케줄러가 해당 행을 PENDING으로 되돌리고 `retry_count`를 증가시킵니다. `updated_at` 컬럼 추가 없이 기존 `next_retry_at` 필드를 재활용하므로 Flyway 마이그레이션이 필요 없습니다.
+Pod 비정상 종료 등으로 PROCESSING 상태가 만료 기한을 넘겨도 SENT로 전환되지 않는 경우, 60초 주기 스케줄러가 해당 행을 PENDING으로 되돌리고 `retry_count`를 증가시킵니다.
+
+추가로 recovery 정책을 정교화했습니다.
+
+- 한 cycle에 **최대 100건**까지만 복구하도록 batch 상한 추가
+- `retry_count >= 3`인 stale row를 별도 high-retry 신호로 집계
+- `logistics_outbox_stale_high_retry_total` 메트릭 추가
+- terminal `FAILED` 전이 시 `[OutboxTerminal]` WARN 로그 추가
 
 **Order-api 상태 조회 정합성 개선**
 
-기존 `GET /api/orders/status/{idemKey}`는 `idempotency_request.status`를 반환해 `orders.status`("CREATED")와 불일치하는 경우가 있었습니다. 수정 후 `orders` 행이 존재하면 `orders.status`를 우선 반환하고, 행이 없을 때만 `idempotency_request.status`로 fallback합니다.
+기존 `GET /api/orders/status/{idemKey}`는 `idempotency_request.status`를 반환해 `orders.status`(`CREATED`)와 불일치하는 경우가 있었습니다. 수정 후 `orders` 행이 존재하면 `orders.status`를 우선 반환하고, 행이 없을 때만 `idempotency_request.status`로 fallback합니다.
 
 ### Failure path 명시화: INVALID SKU → FAILED + failureReason
 
-happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히 PENDING에 머무르지 않고 명시적으로 FAILED로 종료**되도록 order-api와 product-api를 보강했습니다.
+happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히 PENDING에 머무르지 않고 명시적으로 FAILED로 종료**되도록 `order-api`와 `product-api`를 보강했습니다.
 
 - `order-api`는 product snapshot 실패 응답(`success=false` 또는 `error!=null`)을 `FAILED`로 처리
 - `IdempotencyRecord`에 `failureReason` 저장
@@ -138,6 +146,18 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
   }
 }
 ```
+
+### FAILED outbox_event 운영 채널 보강
+
+`logistics-api`의 admin outbox 재처리 채널도 운영 친화적으로 보강했습니다.
+
+- `GET /admin/outbox?status=FAILED`로 FAILED 이벤트 조회
+- `POST /admin/outbox/{id}/retry` 단건 재처리
+- `POST /admin/outbox/retry?limit=20` 배치 재처리
+- 단건/배치 재처리 응답에 `eventType`, `aggregateId`, `items` 등 운영 해석 정보 포함
+- `logistics_outbox_admin_retry_total{type=single|batch}` 메트릭 추가
+
+또한 DLQ는 지금 즉시 도입하지 않고, **수동 재처리 + 모니터링 + alert/runbook** 체계로 운영하는 방향을 ADR로 정리했습니다.
 
 ---
 
@@ -215,40 +235,78 @@ PENDING → PROCESSING (claim)
         → SENT       (발행 성공)
         → FAILED     (최대 재시도 초과)
 PROCESSING → PENDING (stale recovery: 만료 후 60s 주기 복구)
+FAILED → PENDING     (admin retry: 단건/배치 수동 재처리)
 ```
 
 ---
 
 ## 6. 운영 관측성
 
-두 서비스 모두 `/actuator/prometheus` 엔드포인트를 노출합니다 (`management.endpoints.web.exposure.include: prometheus,health,info,metrics`).
+세 서비스 모두 `/actuator/prometheus` 엔드포인트를 노출합니다 (`management.endpoints.web.exposure.include: prometheus,health,info,metrics`). logistics-api를 중심으로 시작했던 메트릭을 `order-api`, `inventory-api`까지 확장해 **Outbox 상태를 서비스별로 같은 패턴으로 비교**할 수 있도록 보강했습니다.
 
 ### logistics-api 메트릭 (포트 8084)
 
 | 메트릭 | 설명 |
 |---|---|
-| `logistics_outbox_events{status}` | outbox_event 상태별 현재 건수 (Gauge, scrape 시 DB 조회) |
+| `logistics_outbox_events{status}` | outbox_event 상태별 현재 건수 (`PENDING / PROCESSING / SENT / FAILED`) |
 | `logistics_outbox_publish_total{result=sent\|failed}` | Kafka 발행 성공/실패 누적 수 |
-| `logistics_outbox_stale_recovered_total` | Stale PROCESSING → PENDING 복구 누적 수 |
-| `logistics_order_event_consume_total{result=success\|failed}` | order-create-event 소비 성공/실패 누적 수 |
+| `logistics_outbox_stale_recovered_total` | stale PROCESSING → PENDING 복구 누적 수 |
+| `logistics_outbox_stale_high_retry_total` | `retry_count >= 3` stale row 복구 감지 누적 수 |
+| `logistics_outbox_admin_retry_total{type=single\|batch}` | 운영자 단건/배치 재처리 누적 수 |
+| `logistics_order_event_consume_total{result=success\|failed}` | `order-create-event` 소비 성공/실패 누적 수 |
 
 ### order-api 메트릭 (포트 8083)
 
 | 메트릭 | 설명 |
 |---|---|
-| `order_shipment_event_consume_total{result=success\|failed}` | shipment-event 소비 성공/실패 누적 수 |
-| `order_shipment_status_update_total{result=success\|failed}` | orders.shipment_status 갱신 성공/실패 누적 수 |
+| `order_outbox_events{status}` | outbox_event 상태별 현재 건수 (`PENDING / SENT / FAILED`) |
+| `order_outbox_publish_total{result=sent\|failed}` | outbox 발행 성공/실패 누적 수 |
+| `order_shipment_event_consume_total{result=success\|failed}` | `shipment-event` 소비 성공/실패 누적 수 |
+| `order_shipment_status_update_total{result=success\|failed}` | `orders.shipment_status` 갱신 성공/실패 누적 수 |
+
+### inventory-api 메트릭 (포트 8082)
+
+| 메트릭 | 설명 |
+|---|---|
+| `inventory_outbox_events{status}` | outbox_event 상태별 현재 건수 (`PENDING / SENT / FAILED`) |
+| `inventory_outbox_publish_total{result=sent\|failed}` | outbox 발행 성공/실패 누적 수 |
+
+### Prometheus Alert / Runbook
+
+logistics-api Outbox 운영을 위해 Prometheus alert rule과 runbook 초안을 추가했습니다. 현재는 **DLQ를 즉시 도입하지 않고**, FAILED gauge / publish failed / stale high-retry / stale recovery 빈도 기반으로 운영 신호를 감지하는 방향을 채택했습니다.
+
+- Alert rule: `prometheus/alerts/logistics-outbox-alerts.yml`
+- Runbook: `docs/runbooks/logistics-outbox-alerts.md`
+- ADR: `docs/adr/001-outbox-dlq-decision.md`
+
+대표 알림 예시:
+- `LogisticsOutboxFailedEventsPresent` — FAILED row가 5분 이상 존재
+- `LogisticsOutboxFailedEventsSurge` — FAILED row 급증
+- `LogisticsOutboxPublishErrorsDetected` — 최근 5분간 publish failed 증가
+- `LogisticsOutboxHighRetryEventsDetected` — high-retry stale row 감지
+- `LogisticsOutboxStaleRecoveryFrequent` — stale recovery 빈발 감지
 
 ### 메트릭 조회
 
 ```bash
 # logistics-api
 kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce
-curl http://localhost:8084/actuator/prometheus | grep "logistics_outbox"
+curl -s http://localhost:8084/actuator/prometheus | grep "logistics_outbox"
 
 # order-api
 kubectl port-forward svc/order-api-svc 8083:8083 -n ecommerce
-curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
+curl -s http://localhost:8083/actuator/prometheus | grep "order_outbox"
+
+# inventory-api
+kubectl port-forward svc/inventory-api-svc 8082:8082 -n ecommerce
+curl -s http://localhost:8082/actuator/prometheus | grep "inventory_outbox"
+```
+
+**admin retry / stale recovery 메트릭 확인**
+
+```bash
+curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
+curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 ```
 
 ---
@@ -269,12 +327,14 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
 | | 배송 상태 관리 | READY, SHIPPED, IN_TRANSIT, DELIVERED, FAILED, CANCELED 상태 전이 관리 |
 | | 배송 이력 저장 | 상태 변경 이력을 append-only 방식으로 저장 |
 | | 배송 이벤트 발행 | 배송 상태 변경 시 Outbox 기반으로 `shipment-event` 발행 |
-| | shipment-event 수신 | order-api가 shipment-event를 수신해 `orders.shipment_status` 반영 |
+| | `shipment-event` 수신 | order-api가 `shipment-event`를 수신해 `orders.shipment_status` 반영 |
 | | 배송 상태 조회 | `GET /api/orders/status/{idemKey}` 에서 `orders.status` 우선 반영 |
 | | 상품 스냅샷 실패 처리 | invalid SKU 등 실패 응답을 `FAILED + failureReason`으로 종료 |
+| | FAILED outbox 운영 복구 | admin retry API + 수동 재처리 메트릭 지원 |
 | **Could-Have** | 데이터 유실 방지 | DB 저장/이벤트 발행 불일치 방지를 위해 **Transactional Outbox** |
 | | 운영 관측성 | Micrometer 기반 메트릭(Gauge/Counter) → `/actuator/prometheus` 노출 |
 | | smoke script 기반 운영 검증 | happy path / negative path를 bash script로 재현 가능 |
+| | alert / runbook 기반 운영 대응 | FAILED, publish failed, stale recovery 기준 운영 대응 |
 
 ---
 
@@ -369,7 +429,7 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
 | **다중 인스턴스** | `SKIP LOCKED` hint 지원 불안정 | `FOR UPDATE SKIP LOCKED` 명시적 보장 |
 | **구현 복잡도** | `@Transactional(REQUIRES_NEW)` 분리 필요 | EntityManager Native Query 1개 |
 
-**판단 근거**: `@Transactional(REQUIRES_NEW)` 분리 후에도 pg_stat_activity에서 `idle in transaction` 상태가 지속되며 잠금이 해제되지 않는 문제가 재현됨. QueryDSL hint `-2` (SKIP_LOCKED) 도 런타임에서 `FOR UPDATE SKIP LOCKED`를 생성하지 않았음. Native SQL 방식으로 전환 후 해결.
+**판단 근거**: `@Transactional(REQUIRES_NEW)` 분리 후에도 `pg_stat_activity`에서 `idle in transaction` 상태가 지속되며 잠금이 해제되지 않는 문제가 재현됨. QueryDSL hint `-2` (`SKIP_LOCKED`)도 런타임에서 `FOR UPDATE SKIP LOCKED`를 생성하지 않았음. Native SQL 방식으로 전환 후 해결.
 
 ### 6. AI Native 개발 방식: 단순 프롬프트 사용 vs Claude Code 하네스 구성
 
@@ -380,6 +440,25 @@ curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
 | **작업 범위 통제** | 명시하지 않으면 기존 코드까지 수정 가능 | path-scoped rules와 금지 조건으로 범위 제한 |
 | **반복 작업** | 매번 절차 설명 필요 | Skill로 배포/신규 API 생성 절차 재사용 |
 | **검증 방식** | 수동 테스트 중심 | Guardrails + GitHub Actions CI Gate로 자동 검증 |
+
+### 7. logistics-api Outbox DLQ 도입 여부
+
+현재는 **DLQ 미도입**을 선택했습니다.
+
+- 이유
+    - FAILED 상태가 이미 DB-level 격리 역할을 수행
+    - `GET /admin/outbox?status=FAILED`로 즉시 조회 가능
+    - admin retry API로 수동 재처리 가능
+    - stale/high-retry/FAILED gauge/alert로 운영 신호 확보
+    - 현재 이벤트 종류가 제한적이어서 broken row가 대량 발생할 구조가 아님
+
+- 재검토 기준
+    - FAILED row 일평균 100건 이상
+    - 자동 알림 연동이 필수인 시점
+    - 영구 실패와 재시도 가능 실패를 코드 레벨에서 구분해야 하는 시점
+
+관련 문서:
+- `docs/adr/001-outbox-dlq-decision.md`
 
 ---
 
@@ -421,8 +500,18 @@ scripts/claude-guardrails.sh
 - **CI Gate**: `guardrails` + `logistics-api test` + `order-api test` + `logistics-api build`
 - **integration-tests.yml**: `workflow_dispatch` 기반 통합 테스트 전용 워크플로
 - **smoke-tests.yml**: `workflow_dispatch` 기반 smoke 실행 워크플로 (`happy / negative / all` 선택)
-  - 현재 smoke 스크립트가 `localhost:8083`, `localhost:8084`를 사용하므로 **GitHub-hosted runner에서는 바로 실행 불가**
-  - self-hosted runner 또는 runner에서 접근 가능한 환경이 필요
+    - 현재 smoke 스크립트가 `localhost:8083`, `localhost:8084`를 사용하므로 **GitHub-hosted runner에서는 바로 실행 불가**
+    - self-hosted runner 또는 runner에서 접근 가능한 환경이 필요
+
+### 운영/검증 자동화 보강
+
+- `scripts/smoke/e2e-order-shipment-smoke.sh`
+    - happy path smoke
+    - 주문 생성 → `shipmentStatus=READY`
+    - 배송 상태 변경 후 `shipmentStatus=SHIPPED`
+- `scripts/smoke/e2e-order-invalid-sku-smoke.sh`
+    - negative smoke
+    - invalid SKU → `FAILED + failureReason=MISSING_SKU[...]`
 
 Guardrails 검사 항목: `.DS_Store`, `.env`, `secrets/`, 의도하지 않은 `payment-api` 디렉터리, Claude Code 세션 로그, 위험 명령 문자열(`rm -rf`, `DROP TABLE`, `TRUNCATE`, `kubectl delete` 등).
 
@@ -438,13 +527,36 @@ minikube tunnel
 kubectl apply -f deployment/
 ```
 
+### 모니터링 스택 가동
+
+```bash
+kubectl apply -n monitoring -f infra/grafana.yaml
+kubectl apply -n monitoring -f infra/prometheus.yaml
+```
+
+### Prometheus / Grafana 확인
+
+```bash
+kubectl port-forward svc/prometheus 9090:9090 -n monitoring
+kubectl port-forward svc/grafana 3000:3000 -n monitoring
+```
+
+```bash
+curl -s http://localhost:9090/api/v1/rules | jq '.data.groups[].name'
+curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {scrapeUrl: .scrapeUrl, health: .health}'
+```
+
+기대:
+- `rules`에 `logistics-outbox`
+- `targets`에 `product-api`, `inventory-api`, `order-api`, `logistics-api`가 `up`
+
 ### 서비스 재배포
 
 ```bash
 ./scripts/redeploy-api.sh order-api
 ./scripts/redeploy-api.sh logistics-api
 ./scripts/redeploy-api.sh product-api
-./scripts/redeploy-api.sh logistics-api 2   # replica 수 지정
+./scripts/redeploy-api.sh logistics-api 2
 ```
 
 ### 테스트 및 빌드
@@ -453,7 +565,6 @@ kubectl apply -f deployment/
 cd logistics-api && ./gradlew test
 cd order-api && ./gradlew test
 cd product-api && ./gradlew test
-cd logistics-api && ./gradlew bootJar -x test
 ```
 
 ### 로컬 검증 (port-forward 기반)
@@ -463,6 +574,7 @@ cd logistics-api && ./gradlew bootJar -x test
 ```bash
 kubectl port-forward svc/order-api-svc 8083:8083 -n ecommerce &
 kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce &
+kubectl port-forward svc/inventory-api-svc 8082:8082 -n ecommerce &
 ```
 
 **happy path smoke**
@@ -490,9 +602,7 @@ bash scripts/smoke/e2e-order-invalid-sku-smoke.sh
 **수동 주문 생성 / 상태 조회**
 
 ```bash
-curl -X POST http://localhost:8083/api/orders \
-  -H "Content-Type: application/json" \
-  -d '{
+curl -X POST http://localhost:8083/api/orders   -H "Content-Type: application/json"   -d '{
     "userId": 42,
     "items": [
       {
@@ -501,7 +611,6 @@ curl -X POST http://localhost:8083/api/orders \
       }
     ]
   }'
-# → 주문 접수 응답 반환
 ```
 
 ```bash
@@ -515,9 +624,7 @@ curl http://localhost:8083/api/orders/status/<IDEM_KEY>
 curl http://localhost:8084/shipments/by-order/<ORDER_ID>
 # → shipmentId 확인
 
-curl -X PATCH http://localhost:8084/shipments/<SHIPMENT_ID>/status \
-  -H "Content-Type: application/json" \
-  -d '{"status": "SHIPPED"}'
+curl -X PATCH http://localhost:8084/shipments/<SHIPMENT_ID>/status   -H "Content-Type: application/json"   -d '{"status": "SHIPPED"}'
 ```
 
 **주문 배송 상태 반영 확인**
@@ -530,8 +637,16 @@ curl http://localhost:8083/api/orders/status/<IDEM_KEY>
 **메트릭 조회**
 
 ```bash
-curl http://localhost:8084/actuator/prometheus | grep "logistics_outbox"
-curl http://localhost:8083/actuator/prometheus | grep "order_shipment"
+curl -s http://localhost:8084/actuator/prometheus | grep "logistics_outbox"
+curl -s http://localhost:8083/actuator/prometheus | grep "order_outbox"
+curl -s http://localhost:8082/actuator/prometheus | grep "inventory_outbox"
+```
+
+**admin retry / stale recovery 메트릭 확인**
+
+```bash
+curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
+curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 ```
 
 ### Guardrails 로컬 실행
@@ -578,21 +693,14 @@ bash scripts/claude-guardrails.sh
 
 5. **메트릭 확인**
    ```bash
-   curl http://localhost:8084/actuator/prometheus | grep "logistics_outbox_publish_total"
-   # result="failed"가 증가하면 Kafka 연결 또는 발행 오류
-   curl http://localhost:8083/actuator/prometheus | grep "order_shipment_event_consume_total"
-   # result="failed"가 증가하면 order-api consumer 처리 오류
+   curl -s http://localhost:8084/actuator/prometheus | grep "logistics_outbox_publish_total"
+   curl -s http://localhost:8084/actuator/prometheus | grep "logistics_outbox_events"
+   curl -s http://localhost:8083/actuator/prometheus | grep "order_shipment_event_consume_total"
    ```
 
 6. **Kafka consumer lag 확인**
-
-   Kafka 배포 방식에 따라 명령이 다를 수 있습니다. Kafka Pod에 직접 접근 가능한 환경이면 아래를 참고하세요.
-
    ```bash
-   kubectl exec -n ecommerce <kafka-pod> -- \
-     kafka-consumer-groups.sh --bootstrap-server <broker>:9092 \
-     --describe --group order-api
-   # LAG이 크면 shipment-event 발행은 됐으나 order-api가 처리 못 하고 있는 상태
+   kubectl exec -n ecommerce <kafka-pod> --      kafka-consumer-groups.sh --bootstrap-server <broker>:9092      --describe --group order-api
    ```
 
 ### invalid SKU 주문이 실패 처리되지 않을 때
@@ -604,16 +712,49 @@ bash scripts/claude-guardrails.sh
    ```
 
 2. **product-api 실패 reply payload 확인**
-   - `idemKey`, `userId`, `requestItem`가 null 이 아닌지
-   - 실패 reply에도 correlation field가 유지되는지
+    - `idemKey`, `userId`, `requestItem`가 null 이 아닌지
+    - 실패 reply에도 correlation field가 유지되는지
 
 3. **order-api OrderEventConsumer 로그 확인**
-   - `success=false` 또는 `error!=null` 분기에서 `failOrder()` 호출 여부
+    - `success=false` 또는 `error!=null` 분기에서 `failOrder()` 호출 여부
 
 4. **negative smoke 재실행**
    ```bash
    bash scripts/smoke/e2e-order-invalid-sku-smoke.sh
    ```
+
+### FAILED outbox_event 수동 재처리
+
+운영자가 FAILED 이벤트를 수동으로 다시 살릴 수 있도록 admin retry API를 제공합니다.
+
+```bash
+# FAILED 이벤트 조회
+curl -s "http://localhost:8084/admin/outbox?status=FAILED" | jq .
+
+# 단건 재처리
+curl -s -X POST http://localhost:8084/admin/outbox/<ID>/retry | jq .
+
+# 배치 재처리
+curl -s -X POST "http://localhost:8084/admin/outbox/retry?limit=20" | jq .
+
+# 메트릭 확인
+curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
+```
+
+예상 흐름:
+- `FAILED -> PENDING`
+- 이후 publisher가 다시 집어가면 최종적으로 `SENT`
+
+### terminal FAILED 판단과 운영 기준
+
+최대 재시도 초과로 terminal `FAILED`에 도달하면 `[OutboxTerminal]` WARN 로그를 남기도록 보강했습니다. 현재는 DLQ를 즉시 도입하지 않고, **FAILED 상태 + admin retry + Prometheus alert + runbook** 조합으로 운영합니다.
+
+확인 포인트:
+- `GET /admin/outbox?status=FAILED`
+- `logistics_outbox_events{status="FAILED"}`
+- `logistics_outbox_stale_high_retry_total`
+- `docs/runbooks/logistics-outbox-alerts.md`
+- `docs/adr/001-outbox-dlq-decision.md`
 
 ### Stale PROCESSING Recovery가 필요한 이유
 
@@ -627,16 +768,17 @@ bash scripts/claude-guardrails.sh
 
 ### 도메인 / 운영
 - 배송지 정보 처리 방식 결정
-  - 주문 이벤트 확장
-  - 배송지 업데이트 API 추가
-  - 사용자 주소 서비스 연동
-- Outbox retry 정책 고도화
-  - DLQ 또는 수동 재처리 채널 추가
-  - 전체 서비스(order-api, inventory-api) Outbox 상태 통합 모니터링
-- Stale PROCESSING recovery 정책 정교화
-  - 현재는 일괄 복구(60s 주기, `retry_count + 1`) — 운영 환경에서 복구 임계치와 알림 정책 추가 검토 필요
+    - 주문 이벤트 확장
+    - 배송지 업데이트 API 추가
+    - 사용자 주소 서비스 연동
+- Outbox retry 정책 추가 고도화
+    - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
+    - DLQ 재검토 기준 도달 시 DB 기반 DLQ 도입
 - `logistics_outbox_events` Gauge 부하 고려
-  - Prometheus scrape 주기마다 `SELECT count(*) ... WHERE status = ?`를 4회 실행 — scrape 간격이 15s 미만인 환경에서는 전용 스케줄러 기반 캐시 갱신으로 전환 검토
+    - scrape 간격이 더 짧아지는 환경에서는 전용 스케줄러 기반 캐시 갱신 구조 검토
+- Prometheus alert rule 실제 운영 적용
+    - Alertmanager / Slack / PagerDuty 연동
+    - FAILED / high-retry / stale recovery 기준의 알림 임계치 튜닝
 
 ### Claude Code 하네스 / 자동화
 - hooks 기반 자동 guardrail 추가
@@ -651,3 +793,8 @@ bash scripts/claude-guardrails.sh
 - ~~`docs/claude-feedback-log.md` 기반 피드백 루프 기록~~
 - ~~happy / negative smoke script 추가~~
 - ~~product snapshot 실패 응답 처리 및 correlation field 보강~~
+- ~~전체 서비스 Outbox 상태 통합 모니터링~~
+- ~~Stale PROCESSING recovery 정책 정교화~~
+- ~~FAILED outbox_event 수동 재처리 채널 보강~~
+- ~~Prometheus alert rule / runbook 초안 추가~~
+- ~~DLQ 필요성 판단 ADR 추가~~
