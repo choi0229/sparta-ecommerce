@@ -9,6 +9,9 @@ data:
       scrape_interval: 15s
       evaluation_interval: 15s
 
+    rule_files:
+      - /etc/prometheus/logistics-outbox-alerts.yml
+
     scrape_configs:
       - job_name: 'prometheus'
         static_configs:
@@ -22,6 +25,71 @@ data:
               - 'product-api-svc.ecommerce.svc.cluster.local:8081'
               - 'inventory-api-svc.ecommerce.svc.cluster.local:8082'
               - 'order-api-svc.ecommerce.svc.cluster.local:8083'
+              - 'logistics-api-svc.ecommerce.svc.cluster.local:8084'
+
+  logistics-outbox-alerts.yml: |
+    groups:
+      - name: logistics-outbox
+        rules:
+          - alert: LogisticsOutboxFailedEventsPresent
+            expr: logistics_outbox_events{status="FAILED"} >= 1
+            for: 5m
+            labels:
+              severity: warning
+              service: logistics-api
+            annotations:
+              summary: "Logistics Outbox FAILED 이벤트 존재"
+              description: "FAILED row가 5분 이상 지속됩니다."
+
+          - alert: LogisticsOutboxFailedEventsSurge
+            expr: logistics_outbox_events{status="FAILED"} >= 5
+            for: 5m
+            labels:
+              severity: critical
+              service: logistics-api
+            annotations:
+              summary: "Logistics Outbox FAILED 이벤트 급증"
+              description: "FAILED row가 5건 이상 5분 유지됩니다."
+
+          - alert: LogisticsOutboxPublishErrorsDetected
+            expr: increase(logistics_outbox_publish_total{result="failed"}[5m]) >= 3
+            for: 2m
+            labels:
+              severity: warning
+              service: logistics-api
+            annotations:
+              summary: "Logistics Outbox 발행 실패 감지"
+              description: "최근 5분간 publish failed 증가량이 3 이상입니다."
+
+          - alert: LogisticsOutboxPublishErrorsSurge
+            expr: increase(logistics_outbox_publish_total{result="failed"}[5m]) >= 10
+            for: 2m
+            labels:
+              severity: critical
+              service: logistics-api
+            annotations:
+              summary: "Logistics Outbox 발행 실패 급증"
+              description: "최근 5분간 publish failed 증가량이 10 이상입니다."
+
+          - alert: LogisticsOutboxHighRetryEventsDetected
+            expr: increase(logistics_outbox_stale_high_retry_total[10m]) > 0
+            for: 1m
+            labels:
+              severity: warning
+              service: logistics-api
+            annotations:
+              summary: "Logistics Outbox high-retry stale 이벤트 감지"
+              description: "retry_count >= 3 stale recovery가 감지되었습니다."
+
+          - alert: LogisticsOutboxStaleRecoveryFrequent
+            expr: increase(logistics_outbox_stale_recovered_total[5m]) > 5
+            for: 10m
+            labels:
+              severity: warning
+              service: logistics-api
+            annotations:
+              summary: "Logistics Outbox stale recovery 빈발"
+              description: "5분 동안 stale recovery가 5건 초과로 10분 지속됩니다."
 
 ---
 apiVersion: apps/v1

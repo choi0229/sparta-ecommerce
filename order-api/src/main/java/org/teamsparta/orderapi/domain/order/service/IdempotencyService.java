@@ -1,17 +1,20 @@
 package org.teamsparta.orderapi.domain.order.service;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.orderapi.domain.order.entity.IdempotencyRecord;
 import org.teamsparta.orderapi.domain.order.repository.IdempotencyRepository;
+import org.teamsparta.orderapi.global.enums.IdempotencyStatus;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class IdempotencyService {
 
     private final IdempotencyRepository idempotencyRepository;
@@ -51,5 +54,24 @@ public class IdempotencyService {
         IdempotencyRecord existing = idempotencyRepository.findById(key).orElseThrow();
         existing.complete(orderId);
         idempotencyRepository.save(existing);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void fail(String key, String reason) {
+        IdempotencyRecord existing = idempotencyRepository.findById(key).orElse(null);
+        if (existing != null) {
+            if (existing.getStatus() == IdempotencyStatus.FAILED) {
+                return; // 중복 이벤트 — 멱등 처리
+            }
+            if (existing.getStatus() == IdempotencyStatus.COMPLETED) {
+                log.warn("Product snapshot failure ignored: order already completed. idemKey={}", key);
+                return;
+            }
+            existing.fail(reason);
+            idempotencyRepository.save(existing);
+        } else {
+            idempotencyRepository.save(IdempotencyRecord.createFailed(key, reason));
+        }
+        log.info("IdempotencyRecord marked FAILED. idemKey={}, reason={}", key, reason);
     }
 }

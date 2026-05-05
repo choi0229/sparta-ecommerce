@@ -10,6 +10,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.teamsparta.orderapi.global.enums.ShipmentStatus;
 import org.teamsparta.orderapi.global.enums.Status;
 
 import java.math.BigDecimal;
@@ -53,6 +54,10 @@ public class Orders {
     @Column(name = "failure_reason")
     String failureReason;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "shipment_status")
+    ShipmentStatus shipmentStatus;
+
     @Column(name = "saga_id", nullable = false, unique = true)
     UUID sagaId;
 
@@ -79,6 +84,10 @@ public class Orders {
 
     public void updateStatus(Status status) {
         this.status = status;
+    }
+
+    public void updateShipmentStatus(ShipmentStatus shipmentStatus) {
+        this.shipmentStatus = shipmentStatus;
     }
 
 }

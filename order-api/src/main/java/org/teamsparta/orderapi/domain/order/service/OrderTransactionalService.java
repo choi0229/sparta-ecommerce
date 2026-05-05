@@ -31,6 +31,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class OrderTransactionalService {
 
     private final OrderRepository orderRepository;
@@ -123,6 +124,11 @@ public class OrderTransactionalService {
 
     }
 
+
+    public void failOrder(String idemKey, String reason) {
+        idempotencyService.fail(idemKey, reason);
+        log.info("Order failed due to product snapshot failure. idemKey={}, reason={}", idemKey, reason);
+    }
 
     // TODO : SHA-256으로 교체
     private String hashRequest(ProductSnapshotReplyResult result) {

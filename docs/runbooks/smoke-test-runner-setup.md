@@ -1,0 +1,110 @@
+# Runbook: Smoke Test Self-Hosted Runner 준비
+
+이 문서는 `.github/workflows/smoke-tests.yml`을 실행하기 위해 self-hosted runner에 필요한 준비 사항을 설명합니다.
+
+---
+
+## Runner에 필요한 것
+
+| 항목                      | 확인 명령                                            | 비고 |
+|-------------------------|--------------------------------------------------|---|
+| `kubectl`               | `kubectl version --client`                       | 클러스터 버전과 맞는 kubectl |
+| `curl`                  | `curl --version`                                 | smoke script에서 HTTP 호출에 사용 |
+| `jq`                    | `jq --version`                                   | 미설치 시 grep/sed fallback 동작 (권장 설치) |
+| kubeconfig              | `kubectl cluster-info`                           | 클러스터 접근 가능한 context가 설정되어 있어야 함 |
+| 네임스페이스 `ecommerce`      | `kubectl get ns ecommerce`                       | |
+| `svc/order-api-svc`     | `kubectl get svc order-api-svc -n ecommerce`     | |
+| `svc/logistics-api-svc` | `kubectl get svc logistics-api-svc -n ecommerce` | |
+
+---
+
+## 실행 전 수동 점검 항목
+
+```bash
+# 1. 클러스터 접근
+kubectl cluster-info
+
+# 2. 서비스 존재 확인
+kubectl get svc -n ecommerce
+
+# 3. pod 상태 확인 (모든 pod가 Running이어야 합니다)
+kubectl get pods -n ecommerce
+
+# 4. 포트 선점 여부 확인 (8083, 8084가 비어 있어야 합니다)
+ss -tlnp | grep -E '8083|8084'   # 출력 없으면 정상
+# 또는
+lsof -i :8083; lsof -i :8084    # 출력 없으면 정상
+
+# 5. port-forward 수동 테스트
+kubectl port-forward svc/order-api-svc 8083:8083 -n ecommerce &
+kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce &
+sleep 2
+curl -s http://localhost:8083/actuator/health | jq .status
+curl -s http://localhost:8084/actuator/health | jq .status
+# "UP" 이 출력되면 정상. 확인 후 정리
+kill %1 %2
+```
+
+---
+
+## GitHub Actions에서 실행하는 법
+
+1. GitHub 저장소 → **Actions** 탭
+2. **Smoke Tests** 워크플로 선택
+3. **Run workflow** 클릭
+4. `target` 선택:
+   - `happy` — 정상 주문 → 배송 상태 검증만
+   - `negative` — invalid SKU → FAILED 검증만
+   - `all` (기본) — 두 시나리오 모두 실행
+
+---
+
+## 워크플로 step 흐름
+
+```
+Checkout
+  └─ [Preflight] kubectl/curl/jq 확인, 클러스터 접근, svc 존재 확인
+       └─ [Port-forward] order-api:8083, logistics-api:8084 시작 + 응답 대기
+            ├─ [happy] e2e-order-shipment-smoke.sh  (target=happy|all)
+            ├─ [negative] e2e-order-invalid-sku-smoke.sh  (target=negative|all)
+            └─ [Teardown] port-forward 프로세스 종료 (always 실행)
+```
+
+---
+
+## 실행 성공 기준
+
+### happy path (`target=happy`)
+
+| 검증 항목 | 기대 값 |
+|---|---|
+| POST /api/orders 응답 | `idemKey` 포함 |
+| GET /api/orders/status/:key | `status=CREATED`, `shipmentStatus=READY` (30초 이내) |
+| PATCH /shipments/:id/status 응답 | `status=SHIPPED` |
+| GET /api/orders/status/:key (2차) | `status=CREATED`, `shipmentStatus=SHIPPED` (30초 이내) |
+
+마지막 출력에 `[PASS]` 4줄이 모두 나오면 성공입니다.
+
+### negative path (`target=negative`)
+
+| 검증 항목 | 기대 값 |
+|---|---|
+| POST /api/orders 응답 | `idemKey` 포함 |
+| GET /api/orders/status/:key | `status=FAILED`, `orderId=null`, `shipmentStatus=null`, `failureReason` 에 `MISSING_SKU` 포함 (30초 이내) |
+
+마지막 출력에 `[PASS]` 4줄이 모두 나오면 성공입니다.
+
+---
+
+## 실패 시 로그 확인 순서
+
+| 실패 step | 원인 가능성 | 확인 명령 |
+|---|---|---|
+| `[Preflight]` kubectl | runner에 kubectl 미설치 | `which kubectl` |
+| `[Preflight]` 클러스터 접근 불가 | kubeconfig 누락 또는 클러스터 중단 | `kubectl cluster-info` |
+| `[Preflight]` svc not found | 서비스 이름 불일치 또는 미배포 | `kubectl get svc -n ecommerce` |
+| `[Port-forward]` 포트 선점 | 이전 실행 잔여 프로세스 | `lsof -i :8083` / `lsof -i :8084` |
+| `[Port-forward]` 20초 타임아웃 | pod가 Running 아님 (로그에 pod 목록 인라인 출력됨) | `kubectl get pods -n ecommerce` |
+| `[happy]` 폴링 타임아웃 | Kafka 연결 문제 또는 서비스 오류 | `kubectl logs -l app=order-api -n ecommerce --tail=50` |
+| `[happy]` shipmentStatus 불일치 | logistics-api 또는 Kafka consumer 오류 | `kubectl logs -l app=logistics-api -n ecommerce --tail=50` |
+| `[negative]` MISSING_SKU 미포함 | product-api Kafka consumer 오류 | `kubectl logs -l app=product-api -n ecommerce --tail=50` |

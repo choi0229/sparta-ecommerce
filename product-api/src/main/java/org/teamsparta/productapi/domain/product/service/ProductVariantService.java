@@ -52,7 +52,8 @@ public class ProductVariantService {
                 .map(ProductSnapshotRequestResult.Item::sku)
                 .toList();
         if(skus == null || skus.isEmpty()){
-            saveReplyOutbox(ProductSnapShotReplyEvent.error(event.requestId(), "EMPTY_SKUS"));
+            saveReplyOutbox(ProductSnapShotReplyEvent.error(
+                    event.requestId(), "EMPTY_SKUS", event.idemKey(), event.userId(), event.items()));
             return;
         }
 
@@ -66,7 +67,8 @@ public class ProductVariantService {
                 .toList();
 
         if(!missing.isEmpty()){
-            saveReplyOutbox(ProductSnapShotReplyEvent.error(event.requestId(), "MISSING_SKU="+missing));
+            saveReplyOutbox(ProductSnapShotReplyEvent.error(
+                    event.requestId(), "MISSING_SKU=" + missing, event.idemKey(), event.userId(), event.items()));
             return;
         }
 

@@ -37,6 +37,9 @@ public class IdempotencyRecord {
     @Column(name = "status", nullable = false)
     IdempotencyStatus status;
 
+    @Column(name = "failure_reason", length = 512)
+    String failureReason;
+
     @Column(name = "created_at", updatable = false)
     @CreationTimestamp
     ZonedDateTime createdAt;
@@ -55,9 +58,31 @@ public class IdempotencyRecord {
         return idempotencyRecord;
     }
 
+    public static IdempotencyRecord createFailed(String idemKey, String reason) {
+        IdempotencyRecord record = new IdempotencyRecord();
+        record.idemKey = idemKey;
+        record.requestHash = idemKey; // snapshot reply 실패 시 아직 hash가 없으므로 idemKey를 sentinel로 사용
+        record.status = IdempotencyStatus.FAILED;
+        record.failureReason = truncate(reason, 512);
+        record.createdAt = ZonedDateTime.now();
+        record.updatedAt = ZonedDateTime.now();
+        return record;
+    }
+
     public void complete(Long orderId) {
         this.orderId = orderId;
         this.status = IdempotencyStatus.COMPLETED;
         this.updatedAt = ZonedDateTime.now();
+    }
+
+    public void fail(String reason) {
+        this.status = IdempotencyStatus.FAILED;
+        this.failureReason = truncate(reason, 512);
+        this.updatedAt = ZonedDateTime.now();
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : s.substring(0, max);
     }
 }

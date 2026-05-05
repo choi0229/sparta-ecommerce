@@ -1,0 +1,98 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.2.11'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'org.teamsparta'
+version = '0.0.1-SNAPSHOT'
+description = 'logistics-api'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Spring Boot
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+
+    // DB
+    runtimeOnly 'org.postgresql:postgresql'
+    implementation 'io.hypersistence:hypersistence-utils-hibernate-63:3.7.0'
+
+    // QueryDSL
+    implementation 'com.querydsl:querydsl-jpa:5.0.0:jakarta'
+    annotationProcessor "com.querydsl:querydsl-apt:5.0.0:jakarta"
+    annotationProcessor "jakarta.annotation:jakarta.annotation-api"
+    annotationProcessor "jakarta.persistence:jakarta.persistence-api"
+
+    // Jackson
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+
+    // Lombok
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // Flyway
+    implementation 'org.flywaydb:flyway-database-postgresql:10.10.0'
+    implementation 'org.flywaydb:flyway-core:10.10.0'
+
+    // Logging
+    implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
+
+    // Prometheus
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // Kafka
+    implementation 'org.springframework.kafka:spring-kafka'
+
+    // Swagger
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.5.0'
+
+    // Test
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
+    testImplementation 'org.testcontainers:postgresql'
+    testImplementation 'org.testcontainers:junit-jupiter'
+}
+
+tasks.named('test') {
+    useJUnitPlatform {
+        excludeTags 'integration'
+    }
+}
+
+tasks.register('integrationTest', Test) {
+    description = 'Runs integration tests (requires Docker).'
+    group = 'verification'
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    shouldRunAfter(tasks.named('test'))
+}
+
+def generated = "build/generated/querydsl"
+
+sourceSets {
+    main.java.srcDirs += [generated]
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.generatedSourceOutputDirectory = file(generated)
+}
+
+clean.doLast {
+    file(generated).deleteDir()
+}

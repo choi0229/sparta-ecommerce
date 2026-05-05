@@ -13,12 +13,14 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.orderapi.domain.order.dto.request.CreateOrderRequest;
 import org.teamsparta.orderapi.domain.order.dto.response.CreateOrderResponse;
+import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
 import org.teamsparta.orderapi.domain.order.entity.IdempotencyRecord;
 import org.teamsparta.orderapi.domain.order.entity.OrderSagaState;
 import org.teamsparta.orderapi.domain.order.entity.Orders;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
 import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult;
 import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult.ProductSnapshotItem;
+import org.teamsparta.orderapi.domain.order.repository.IdempotencyRepository;
 import org.teamsparta.orderapi.domain.order.repository.OrderItemRepository;
 import org.teamsparta.orderapi.domain.order.repository.OrderRepository;
 import org.teamsparta.orderapi.domain.order.repository.OrderSagaStateRepository;
@@ -32,6 +34,7 @@ import org.teamsparta.orderapi.domain.productProjection.repository.ProductProjec
 import org.teamsparta.orderapi.global.enums.IdempotencyStatus;
 import org.teamsparta.orderapi.global.enums.OutboxStatus;
 import org.teamsparta.orderapi.global.enums.ProductVariantStatus;
+import org.teamsparta.orderapi.global.enums.ShipmentStatus;
 import org.teamsparta.orderapi.global.enums.Status;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
@@ -53,6 +56,112 @@ import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 public class OrderServiceTest {
+
+    @InjectMocks OrderService orderService;
+    @Mock OrderRepository orderRepository;
+    @Mock OrderItemRepository orderItemRepository;
+    @Mock OrderSagaStateRepository sagaStateRepository;
+    @Mock org.teamsparta.orderapi.domain.order.event.OrderEventPublisher orderEventPublisher;
+    @Mock ProductProjectionRepository productProjectionRepository;
+    @Mock ObjectMapper objectMapper;
+    @Mock IdempotencyService idempotencyService;
+    @Mock org.teamsparta.orderapi.domain.order.repository.OutboxQueryRepository outboxQueryRepository;
+    @Mock OutboxEventRepository outboxEventRepository;
+    @Mock ProductSnapshotPendingStore productSnapshotPendingStore;
+    @Mock KafkaTemplate<String, String> kafkaTemplate;
+    @Mock OrderTransactionalService orderTransactionalService;
+    @Mock IdempotencyRepository idempotencyRepository;
+
+    private static final String IDEM_KEY = "idem-key-001";
+
+    @Test
+    @DisplayName("idem 레코드 없음 — status=PENDING, shipmentStatus=null 반환")
+    void getOrderStatus_noRecord_returnsPendingWithNullShipmentStatus() {
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.empty());
+
+        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response.idemKey()).isEqualTo(IDEM_KEY);
+        assertThat(response.status()).isEqualTo("PENDING");
+        assertThat(response.orderId()).isNull();
+        assertThat(response.shipmentStatus()).isNull();
+        then(orderRepository).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("order 존재 + shipmentStatus=SHIPPED — orders.status와 shipmentStatus 반환")
+    void getOrderStatus_orderExists_returnsOrderStatus() {
+        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
+        record.complete(10L);
+
+        Orders order = Orders.createNew("O001", 42L);
+        ReflectionTestUtils.setField(order, "id", 10L);
+        order.updateShipmentStatus(ShipmentStatus.SHIPPED);
+
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(record));
+        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
+
+        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response.status()).isEqualTo("CREATED");
+        assertThat(response.orderId()).isEqualTo(10L);
+        assertThat(response.shipmentStatus()).isEqualTo("SHIPPED");
+    }
+
+    @Test
+    @DisplayName("order 존재 + shipmentStatus 미설정 — orders.status 반환, shipmentStatus=null")
+    void getOrderStatus_orderExistsNoShipment_returnsOrderStatusNullShipment() {
+        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
+        record.complete(10L);
+
+        Orders order = Orders.createNew("O001", 42L);
+        ReflectionTestUtils.setField(order, "id", 10L);
+
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(record));
+        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
+
+        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response.status()).isEqualTo("CREATED");
+        assertThat(response.orderId()).isEqualTo(10L);
+        assertThat(response.shipmentStatus()).isNull();
+    }
+
+    @Test
+    @DisplayName("orderId 있음 + order row 없음 — idempotency_request.status를 fallback으로 반환")
+    void getOrderStatus_orderNotFound_fallbackToIdemStatus() {
+        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
+        record.complete(10L);
+
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(record));
+        given(orderRepository.findById(10L)).willReturn(Optional.empty());
+
+        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        assertThat(response.orderId()).isEqualTo(10L);
+        assertThat(response.shipmentStatus()).isNull();
+    }
+
+    @Test
+    @DisplayName("orderId 세팅된 idem PENDING + order 존재 — orders.status(CREATED) 반환")
+    void getOrderStatus_pendingRecordWithOrderId_returnsOrderStatus() {
+        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
+        ReflectionTestUtils.setField(record, "orderId", 10L);
+
+        Orders order = Orders.createNew("O001", 42L);
+        ReflectionTestUtils.setField(order, "id", 10L);
+
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(record));
+        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
+
+        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response.status()).isEqualTo("CREATED");
+        assertThat(response.orderId()).isEqualTo(10L);
+        assertThat(response.shipmentStatus()).isNull();
+    }
+
 //
 //    @InjectMocks
 //    private OrderService orderService;

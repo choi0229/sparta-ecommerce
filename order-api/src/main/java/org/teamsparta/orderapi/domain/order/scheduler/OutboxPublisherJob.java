@@ -1,10 +1,10 @@
 package org.teamsparta.orderapi.domain.order.scheduler;
 
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,15 +20,28 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class OutboxPublisherJob {
 
     private final OutboxQueryRepository outboxQueryRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final Counter publishSentCounter;
+    private final Counter publishFailedCounter;
 
-    @Scheduled(fixedDelay = 500)
+    public OutboxPublisherJob(OutboxQueryRepository outboxQueryRepository,
+                              OutboxEventRepository outboxEventRepository,
+                              KafkaTemplate<String, String> kafkaTemplate,
+                              MeterRegistry meterRegistry) {
+        this.outboxQueryRepository = outboxQueryRepository;
+        this.outboxEventRepository = outboxEventRepository;
+        this.kafkaTemplate = kafkaTemplate;
+        this.publishSentCounter = Counter.builder("order.outbox.publish")
+                .tag("result", "sent").register(meterRegistry);
+        this.publishFailedCounter = Counter.builder("order.outbox.publish")
+                .tag("result", "failed").register(meterRegistry);
+    }
+
     @Transactional
     public void publish() {
         List<OutboxEvent> batch = outboxQueryRepository.findBatchForPublish(ZonedDateTime.now(), 50);
@@ -44,10 +57,11 @@ public class OutboxPublisherJob {
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())
                         .get(2, TimeUnit.SECONDS);
                 updateToSent(event.getId());
+                publishSentCounter.increment();
             }catch (Exception e){
                 log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
-                // 4. 실패 및 재시도 처리
                 handleFailure(event.getId(), e.getMessage());
+                publishFailedCounter.increment();
             }
         }
     }
