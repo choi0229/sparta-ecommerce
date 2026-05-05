@@ -154,16 +154,77 @@ FAILED가 5건 이상 누적되어 있습니다. Kafka 장애, topic 설정 오�
 
 ## 지금 당장 적용할 것 / 나중에 적용할 것
 
-### 지금 (이 runbook 작성 시점)
+### 완료
 
 - [x] Prometheus alert rule 정의 (`prometheus/alerts/logistics-outbox-alerts.yml`)
 - [x] Prometheus rule_files, scrape target 등록
 - [x] docker-compose alerts 볼륨 마운트
 - [x] 운영 대응 절차 문서화 (이 파일)
+- [x] `deployment/infra/alertmanager.yaml` 추가 (ConfigMap, Deployment, Service)
+- [x] `deployment/infra/prometheus.yaml`에 `alerting:` 섹션 추가
+- [x] `prometheus/prometheus.yml`에 `alerting:` 섹션 추가 (로컬 docker-compose용)
 
-### 나중에 (Alertmanager 구성 시)
+### 남은 작업
 
-- [ ] Alertmanager 설치 및 `prometheus.yml`에 `alerting` 섹션 추가
-- [ ] Slack webhook 연동 (`receivers`, `route` 구성)
-- [ ] `severity=critical` 알림을 PagerDuty 또는 온콜 채널로 라우팅
+- [ ] `severity=critical` 알림을 PagerDuty 또는 온콜 채널로 라우팅 고도화
 - [ ] `ADR-001`의 DLQ 재검토 기준점(일평균 FAILED 100건)에 대한 알림 추가
+
+---
+
+## Alertmanager 운영 적용 절차
+
+### 1. Slack Webhook Secret 생성
+
+```bash
+kubectl create secret generic alertmanager-secret \
+  --from-literal=SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL \
+  -n monitoring
+```
+
+Secret이 이미 존재하는 경우:
+
+```bash
+kubectl create secret generic alertmanager-secret \
+  --from-literal=SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL \
+  -n monitoring \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### 2. Alertmanager 배포
+
+```bash
+kubectl apply -f deployment/infra/alertmanager.yaml
+```
+
+### 3. Prometheus 재적용 (alerting 섹션 반영)
+
+```bash
+kubectl apply -f deployment/infra/prometheus.yaml
+kubectl rollout restart deployment/prometheus -n monitoring
+```
+
+### 4. 적용 검증
+
+```bash
+# Alertmanager 준비 상태 확인
+kubectl get pods -n monitoring -l app=alertmanager
+
+# Alertmanager API 응답 확인 (포트포워드)
+kubectl port-forward svc/alertmanager 9093:9093 -n monitoring &
+curl -s http://localhost:9093/-/ready
+
+# Prometheus에서 Alertmanager 연결 확인
+# Prometheus UI → Status → Runtime & Build Information → Alertmanagers 항목 확인
+kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
+# 브라우저에서 http://localhost:9090/status 접근
+```
+
+### 5. 알림 채널 확인
+
+- `#alerts-warning`: `severity=warning` 알림 수신 채널
+- `#alerts-critical`: `severity=critical` 알림 수신 채널
+- `send_resolved: true` — 알림 해소 시 Slack에 resolved 메시지가 전송됩니다.
+
+### inhibit_rules 동작
+
+같은 `(alertname, service)` 조합에서 `critical`이 발화하면 `warning`은 억제됩니다. `LogisticsOutboxFailedEventsSurge`(critical) 발화 시 `LogisticsOutboxFailedEventsPresent`(warning)은 Slack으로 전송되지 않습니다.
