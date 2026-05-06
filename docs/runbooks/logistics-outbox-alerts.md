@@ -163,9 +163,13 @@ FAILED가 5건 이상 누적되어 있습니다. Kafka 장애, topic 설정 오�
 - [x] `deployment/infra/alertmanager.yaml` 추가 (ConfigMap, Deployment, Service)
 - [x] `deployment/infra/prometheus.yaml`에 `alerting:` 섹션 추가
 - [x] `prometheus/prometheus.yml`에 `alerting:` 섹션 추가 (로컬 docker-compose용)
+- [x] Alertmanager 라우팅 검증 — `warning` → `slack-warning`, `critical` → `slack-critical`
+- [x] inhibit_rules 검증 — critical 발화 시 동일 alertname+service의 warning이 `suppressed`
+- [x] Slack send 시도 로그 확인 — placeholder URL로 인한 HTTP 오류, 라우팅 자체는 정상
 
 ### 남은 작업
 
+- [ ] 실제 Slack Webhook URL 교체 및 Slack 채널 수신 확인 (아래 절차 참조)
 - [ ] `severity=critical` 알림을 PagerDuty 또는 온콜 채널로 라우팅 고도화
 - [ ] `ADR-001`의 DLQ 재검토 기준점(일평균 FAILED 100건)에 대한 알림 추가
 
@@ -177,6 +181,9 @@ FAILED가 5건 이상 누적되어 있습니다. Kafka 장애, topic 설정 오�
 > - Alertmanager: `Running` (monitoring namespace)
 > - Prometheus → Alertmanager 연결: `activeAlertmanagers` 1개 확인
 > - 6개 alert rule: 모두 `inactive` (logistics-api 정상 동작 중)
+> - 라우팅: `warning` → `slack-warning`, `critical` → `slack-critical` 정상
+> - inhibit_rules: critical 발화 시 동일 (alertname, service)의 warning이 `suppressed` 정상
+> - **미완료**: 실제 Slack Webhook URL 미설정 → Slack 수신 미검증
 
 ### 1. Alertmanager / Prometheus 배포 (최초 또는 재적용)
 
@@ -250,3 +257,98 @@ kill %1 %2 2>/dev/null || true
 
 같은 `(alertname, service)` 조합에서 `critical`이 발화하면 `warning`은 억제됩니다.  
 `LogisticsOutboxFailedEventsSurge`(critical) 발화 시 `LogisticsOutboxFailedEventsPresent`(warning)은 Slack으로 전송되지 않습니다.
+
+---
+
+## Slack 실제 수신 검증 절차
+
+Webhook URL 교체 후 아래 절차로 end-to-end 수신을 검증합니다.
+
+### 사전 준비: Slack Incoming Webhook 생성
+
+1. [Slack API](https://api.slack.com/apps) → 앱 선택 또는 신규 생성
+2. **Incoming Webhooks** → Activate Incoming Webhooks: On
+3. **Add New Webhook to Workspace** → `#alerts-warning` 채널 선택 → URL 복사
+4. (선택) `#alerts-critical` 채널용 Webhook URL 별도 생성
+
+### 1단계: Webhook URL 교체 (git에 절대 커밋하지 말 것)
+
+```bash
+# 터미널에서 직접 실행 — 이 채팅창에 URL 입력 금지
+kubectl edit configmap alertmanager-config -n monitoring
+# slack_api_url 값을 실제 URL로 교체하고 저장
+
+kubectl rollout restart deployment/alertmanager -n monitoring
+kubectl rollout status deployment/alertmanager -n monitoring
+```
+
+### 2단계: test alert 발화 (Alertmanager API 직접 POST)
+
+```bash
+kubectl port-forward svc/alertmanager 9093:9093 -n monitoring &
+
+NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+ENDS=$(date -u -v+10M +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "+10 minutes" +"%Y-%m-%dT%H:%M:%SZ")
+
+# warning alert 발화 → #alerts-warning 채널 수신 확인
+curl -XPOST http://localhost:9093/api/v2/alerts \
+  -H "Content-Type: application/json" \
+  -d "[{
+    \"labels\": {\"alertname\": \"TestSlackAlert\", \"severity\": \"warning\", \"service\": \"logistics-api\"},
+    \"annotations\": {\"summary\": \"Slack 수신 테스트\", \"description\": \"warning receiver 검증\"},
+    \"startsAt\": \"${NOW}\", \"endsAt\": \"${ENDS}\"
+  }]"
+```
+
+Slack `#alerts-warning` 채널에서 확인할 것:
+- `[WARNING] TestSlackAlert` 메시지 수신
+- `description` 필드에 "warning receiver 검증" 텍스트 표시
+- 약 30초 내 수신 (`group_wait: 30s`)
+
+### 3단계: resolved 메시지 확인
+
+```bash
+PAST=$(date -u -v-1M +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "-1 minutes" +"%Y-%m-%dT%H:%M:%SZ")
+START=$(date -u -v-15M +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "-15 minutes" +"%Y-%m-%dT%H:%M:%SZ")
+
+curl -XPOST http://localhost:9093/api/v2/alerts \
+  -H "Content-Type: application/json" \
+  -d "[{
+    \"labels\": {\"alertname\": \"TestSlackAlert\", \"severity\": \"warning\", \"service\": \"logistics-api\"},
+    \"annotations\": {\"summary\": \"Slack 수신 테스트\", \"description\": \"warning receiver 검증\"},
+    \"startsAt\": \"${START}\", \"endsAt\": \"${PAST}\"
+  }]"
+```
+
+Slack `#alerts-warning` 채널에서 확인할 것:
+- `[RESOLVED] TestSlackAlert` 또는 resolved 표시 메시지 수신
+
+### 4단계: inhibit_rules 검증
+
+```bash
+# critical 발화
+curl -XPOST http://localhost:9093/api/v2/alerts \
+  -H "Content-Type: application/json" \
+  -d "[{
+    \"labels\": {\"alertname\": \"TestSlackAlert\", \"severity\": \"critical\", \"service\": \"logistics-api\"},
+    \"annotations\": {\"summary\": \"critical 테스트\", \"description\": \"critical receiver 검증\"},
+    \"startsAt\": \"${NOW}\", \"endsAt\": \"${ENDS}\"
+  }]"
+
+# 확인: warning이 suppressed 상태인지
+curl -s http://localhost:9093/api/v2/alerts | python3 -m json.tool | \
+  python3 -c "
+import sys, json
+for a in json.load(sys.stdin):
+    print(a['labels']['severity'], a['status']['state'], a['status'].get('inhibitedBy', []))
+"
+# 기대: warning suppressed [critical-alert-id], critical active []
+```
+
+Slack `#alerts-critical` 채널에 critical 메시지만 수신 (warning 억제 확인).
+
+### 5단계: 정리
+
+```bash
+kill %1 2>/dev/null || true  # 포트포워드 종료
+```
