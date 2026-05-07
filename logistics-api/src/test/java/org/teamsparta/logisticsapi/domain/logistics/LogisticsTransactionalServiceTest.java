@@ -17,10 +17,14 @@ import org.teamsparta.logisticsapi.domain.logistics.repository.OutboxEventReposi
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentStatusHistoryRepository;
 import org.teamsparta.logisticsapi.domain.logistics.service.LogisticsTransactionalService;
+import org.teamsparta.logisticsapi.global.enums.ShipmentStatus;
+import org.teamsparta.logisticsapi.global.exception.DomainException;
+import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
 
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.*;
 
@@ -132,6 +136,31 @@ class LogisticsTransactionalServiceTest {
         then(shipmentRepository).should(times(1)).save(any(Shipment.class));
         then(historyRepository).should(times(1)).save(any());
         then(outboxEventRepository).should(times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("READY 상태 배송의 주소를 수정하면 recipientName·recipientAddress가 변경된다")
+    void updateAddress_readyStatus_updatesFields() {
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+        given(shipmentRepository.save(any(Shipment.class))).willAnswer(invocation -> invocation.getArgument(0));
+
+        Shipment result = service.updateAddress(1L, "김철수", "부산시 해운대구 달맞이길 1");
+
+        assertThat(result.getRecipientName()).isEqualTo("김철수");
+        assertThat(result.getRecipientAddress()).isEqualTo("부산시 해운대구 달맞이길 1");
+    }
+
+    @Test
+    @DisplayName("READY가 아닌 상태의 배송 주소 수정 시 ADDRESS_UPDATE_NOT_ALLOWED 예외가 발생한다")
+    void updateAddress_nonReadyStatus_throwsException() {
+        existingShipment.changeStatus(ShipmentStatus.SHIPPED);
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+
+        assertThatThrownBy(() -> service.updateAddress(1L, "김철수", "부산시"))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining(DomainExceptionCode.ADDRESS_UPDATE_NOT_ALLOWED.getMessage());
     }
 
     @Test

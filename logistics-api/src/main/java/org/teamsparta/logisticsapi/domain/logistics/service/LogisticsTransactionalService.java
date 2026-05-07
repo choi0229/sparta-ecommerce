@@ -128,6 +128,14 @@ public class LogisticsTransactionalService {
         return shipment;
     }
 
+    @Transactional
+    public Shipment updateAddress(Long shipmentId, String recipientName, String recipientAddress) {
+        Shipment shipment = shipmentRepository.findById(shipmentId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.SHIPMENT_NOT_FOUND));
+        shipment.updateAddress(recipientName, recipientAddress);
+        return shipmentRepository.save(shipment);
+    }
+
     private String toPayload(Shipment shipment, String description, String eventId) {
         try {
             return objectMapper.writeValueAsString(Map.of(

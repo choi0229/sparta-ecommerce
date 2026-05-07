@@ -11,6 +11,8 @@ import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.teamsparta.logisticsapi.global.enums.ShipmentStatus;
+import org.teamsparta.logisticsapi.global.exception.DomainException;
+import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
 
 import java.time.ZonedDateTime;
 
@@ -67,6 +69,14 @@ public class Shipment {
     public void changeStatus(ShipmentStatus nextStatus) {
         this.status.validateTransitionTo(nextStatus);
         this.status = nextStatus;
+    }
+
+    public void updateAddress(String recipientName, String recipientAddress) {
+        if (this.status != ShipmentStatus.READY) {
+            throw new DomainException(DomainExceptionCode.ADDRESS_UPDATE_NOT_ALLOWED);
+        }
+        this.recipientName = recipientName;
+        this.recipientAddress = recipientAddress;
     }
 
     public void assignTracking(String trackingNumber, String carrier) {

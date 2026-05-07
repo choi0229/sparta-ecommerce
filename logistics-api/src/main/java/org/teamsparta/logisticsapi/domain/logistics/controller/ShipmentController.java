@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentAddressUpdateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentStatusUpdateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.response.ShipmentResponse;
@@ -45,6 +46,14 @@ public class ShipmentController {
             @PathVariable Long shipmentId,
             @Valid @RequestBody ShipmentStatusUpdateRequest request) {
         ShipmentResponse response = logisticsService.updateStatus(shipmentId, request);
+        return ResponseEntity.ok(ApiResponse.ok(response));
+    }
+
+    @PatchMapping("/{shipmentId}/address")
+    public ResponseEntity<ApiResponse<ShipmentResponse>> updateAddress(
+            @PathVariable Long shipmentId,
+            @Valid @RequestBody ShipmentAddressUpdateRequest request) {
+        ShipmentResponse response = logisticsService.updateAddress(shipmentId, request);
         return ResponseEntity.ok(ApiResponse.ok(response));
     }
 }
