@@ -159,6 +159,35 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 
 또한 DLQ는 지금 즉시 도입하지 않고, **수동 재처리 + 모니터링 + alert/runbook** 체계로 운영하는 방향을 ADR로 정리했습니다.
 
+### 주문 시점 배송지 snapshot 도입
+
+배송지 정보도 상품 snapshot과 동일하게 **주문 시점 사실**로 저장하도록 보강했습니다.
+
+- `CreateOrderRequest.shippingAddress` 추가
+- `orders.recipient_name`, `orders.recipient_address` 컬럼 추가
+- `OrderCreatedEvent`에 `recipientName`, `recipientAddress` 포함
+- `logistics-api`는 해당 값을 받아 `shipment.recipient_name`, `shipment.recipient_address`에 저장
+
+이를 통해 주문 생성 시점의 배송지 정보가 `order-api`와 `logistics-api` 양쪽에 일관되게 반영되며, 이후 사용자가 배송지 변경을 요청하더라도 **주문 당시 snapshot은 보존**됩니다.
+
+### 배송지 수정 API 추가 (`READY` 상태 한정)
+
+초기 배송지 snapshot 저장 이후, 실제 배송 처리 대상 주소는 `logistics-api`의 `shipment`만 수정할 수 있도록 API를 추가했습니다.
+
+- `PATCH /shipments/{shipmentId}/address`
+- request body:
+  ```json
+  {
+    "recipientName": "김철수",
+    "recipientAddress": "부산시 해운대구 달맞이길 1"
+  }
+  ```
+- `READY` 상태일 때만 수정 허용
+- `SHIPPED`, `IN_TRANSIT`, `DELIVERED`, `FAILED`, `CANCELED` 상태에서는 수정 불가
+- 수정 시 `orders.recipient_name`, `orders.recipient_address`는 변경하지 않음
+
+즉, `order-api`의 배송지 snapshot은 **주문 당시 사실 기록**, `logistics-api`의 `shipment` 주소는 **현재 배송 처리 대상 주소**로 역할을 분리했습니다.
+
 ---
 
 ## 5. 이벤트 흐름
@@ -199,6 +228,39 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 [Client]
   GET /api/orders/status/{idemKey}
   → { status: "CREATED", shipmentStatus: "IN_TRANSIT" }
+```
+
+**배송지 snapshot 포함 주문 흐름**
+
+```text
+[Client]
+  POST /api/orders
+  shippingAddress { recipientName, recipientAddress }
+    │
+    ▼
+[order-api]
+  orders.recipient_name / recipient_address 저장
+  OrderCreatedEvent(recipientName, recipientAddress) 발행
+    │ Kafka
+    ▼
+[logistics-api]
+  shipment.recipient_name / recipient_address 저장
+```
+
+**배송지 수정 흐름**
+
+```text
+[Client]
+  PATCH /shipments/{shipmentId}/address
+    │
+    ▼
+[logistics-api]
+  READY 상태 확인
+  shipment.recipient_name / recipient_address 수정
+    │
+    ▼
+[order-api]
+  orders.recipient_name / recipient_address 는 그대로 유지
 ```
 
 **실패 흐름 (존재하지 않는 SKU)**
@@ -331,6 +393,8 @@ curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 | | 배송 상태 조회 | `GET /api/orders/status/{idemKey}` 에서 `orders.status` 우선 반영 |
 | | 상품 스냅샷 실패 처리 | invalid SKU 등 실패 응답을 `FAILED + failureReason`으로 종료 |
 | | FAILED outbox 운영 복구 | admin retry API + 수동 재처리 메트릭 지원 |
+| | 주문 시점 배송지 snapshot 저장 | 주문 생성 시 `shippingAddress`를 `orders`와 `shipment`에 반영하고 주문 당시 사실로 보존 |
+| | 배송지 수정 API | `PATCH /shipments/{shipmentId}/address`로 `READY` 상태 배송의 현재 주소만 수정 |
 | **Could-Have** | 데이터 유실 방지 | DB 저장/이벤트 발행 불일치 방지를 위해 **Transactional Outbox** |
 | | 운영 관측성 | Micrometer 기반 메트릭(Gauge/Counter) → `/actuator/prometheus` 노출 |
 | | smoke script 기반 운영 검증 | happy path / negative path를 bash script로 재현 가능 |
@@ -630,6 +694,75 @@ curl http://localhost:8083/api/orders/status/<IDEM_KEY>
 # → { "status": "CREATED", "shipmentStatus": "READY", ... }
 ```
 
+**배송지 포함 주문 생성**
+
+```bash
+curl -X POST http://localhost:8083/api/orders   -H "Content-Type: application/json"   -d '{
+    "userId": 1,
+    "items": [
+      {
+        "sku": "SKU-TEST-001",
+        "quantity": 2
+      }
+    ],
+    "shippingAddress": {
+      "recipientName": "홍길동",
+      "recipientAddress": "서울시 강남구 테헤란로 123, 4층"
+    }
+  }'
+```
+
+**주문 시점 배송지 snapshot 확인**
+
+```bash
+kubectl exec -n ecommerce order-db-0 -- psql -U postgres -d orderdb -c "
+SELECT id, order_no, recipient_name, recipient_address, created_at
+FROM orders
+ORDER BY created_at DESC
+LIMIT 3;
+"
+```
+
+**shipment 생성 시 배송지 반영 확인**
+
+```bash
+kubectl exec -n ecommerce logistics-db-0 -- psql -U postgres -d logisticsdb -c "
+SELECT id, order_id, status, recipient_name, recipient_address, created_at
+FROM shipment
+ORDER BY created_at DESC
+LIMIT 3;
+"
+```
+
+**배송지 수정 API**
+
+```bash
+curl -X PATCH http://localhost:8084/shipments/<SHIPMENT_ID>/address   -H "Content-Type: application/json"   -d '{
+    "recipientName": "김철수",
+    "recipientAddress": "부산시 해운대구 달맞이길 1"
+  }'
+```
+
+**배송지 수정 후 shipment 확인**
+
+```bash
+kubectl exec -n ecommerce logistics-db-0 -- psql -U postgres -d logisticsdb -c "
+SELECT id, order_id, status, recipient_name, recipient_address, updated_at
+FROM shipment
+WHERE id = <SHIPMENT_ID>;
+"
+```
+
+**order snapshot 불변 확인**
+
+```bash
+kubectl exec -n ecommerce order-db-0 -- psql -U postgres -d orderdb -c "
+SELECT id, order_no, recipient_name, recipient_address, updated_at
+FROM orders
+WHERE id = <ORDER_ID>;
+"
+```
+
 **배송 상태 변경**
 
 ```bash
@@ -834,10 +967,13 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 ## 13. 향후 개선 과제
 
 ### 도메인 / 운영
-- 배송지 정보 처리 방식 결정
-    - 주문 이벤트 확장
-    - 배송지 업데이트 API 추가
-    - 사용자 주소 서비스 연동
+- 사용자 주소 서비스 연동
+    - addressId 기반 주문 입력 지원
+    - 주소 서비스 조회 후 snapshot 저장
+    - 주소 서비스 장애 시 fallback 정책 결정
+- 배송지 변경 이력 관리 고도화
+    - shipment 주소 변경 이력 저장 여부 결정
+    - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 검토
 - Outbox retry 정책 추가 고도화
     - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
     - DLQ 재검토 기준 도달 시 DB 기반 DLQ 도입
@@ -870,3 +1006,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~FAILED outbox_event 수동 재처리 채널 보강~~
 - ~~Prometheus alert rule / runbook 초안 추가~~
 - ~~DLQ 필요성 판단 ADR 추가~~
+- ~~주문 시점 배송지 snapshot 저장 (`orders.recipient_name`, `orders.recipient_address`)~~
+- ~~OrderCreatedEvent를 통한 배송지 정보 전달~~
+- ~~배송지 수정 API 추가 (`PATCH /shipments/{shipmentId}/address`)~~
+- ~~`READY` 상태에서만 배송지 수정 허용 및 order snapshot 불변성 검증~~
