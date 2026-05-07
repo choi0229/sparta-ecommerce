@@ -188,6 +188,25 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 
 즉, `order-api`의 배송지 snapshot은 **주문 당시 사실 기록**, `logistics-api`의 `shipment` 주소는 **현재 배송 처리 대상 주소**로 역할을 분리했습니다.
 
+### 배송지 변경 이력 저장 (append-only)
+
+배송지 수정 API 도입 이후, 운영/CS 관점에서 변경 이력을 추적할 수 있도록 `shipment_address_history` 테이블을 추가했습니다.
+
+- `shipment.recipient_name`, `shipment.recipient_address`는 **현재 배송 처리 대상 주소**
+- `shipment_address_history`는 **주소 변경 이력 append-only 저장소**
+- 이력에는 변경 전/후 주소와 변경 시각(`changed_at`)을 저장
+- 동일한 값으로 다시 요청한 경우에는 이력을 중복 저장하지 않음
+
+저장 예시 컬럼:
+- `shipment_id`
+- `previous_recipient_name`
+- `previous_recipient_address`
+- `new_recipient_name`
+- `new_recipient_address`
+- `changed_at`
+
+이를 통해 주문 당시 snapshot(`orders.recipient_*`)은 그대로 유지하면서, 실제 배송 주소 변경 내역은 별도로 추적할 수 있게 했습니다.
+
 ---
 
 ## 5. 이벤트 흐름
@@ -395,6 +414,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 | | FAILED outbox 운영 복구 | admin retry API + 수동 재처리 메트릭 지원 |
 | | 주문 시점 배송지 snapshot 저장 | 주문 생성 시 `shippingAddress`를 `orders`와 `shipment`에 반영하고 주문 당시 사실로 보존 |
 | | 배송지 수정 API | `PATCH /shipments/{shipmentId}/address`로 `READY` 상태 배송의 현재 주소만 수정 |
+| | 배송지 변경 이력 저장 | `shipment_address_history`에 변경 전/후 주소와 변경 시각을 append-only로 저장 |
 | **Could-Have** | 데이터 유실 방지 | DB 저장/이벤트 발행 불일치 방지를 위해 **Transactional Outbox** |
 | | 운영 관측성 | Micrometer 기반 메트릭(Gauge/Counter) → `/actuator/prometheus` 노출 |
 | | smoke script 기반 운영 검증 | happy path / negative path를 bash script로 재현 가능 |
@@ -753,6 +773,41 @@ WHERE id = <SHIPMENT_ID>;
 "
 ```
 
+**배송지 변경 이력 확인**
+
+```bash
+kubectl exec -n ecommerce logistics-db-0 -- psql -U postgres -d logisticsdb -c "
+SELECT shipment_id,
+       previous_recipient_name,
+       previous_recipient_address,
+       new_recipient_name,
+       new_recipient_address,
+       changed_at
+FROM shipment_address_history
+WHERE shipment_id = <SHIPMENT_ID>
+ORDER BY changed_at;
+"
+```
+
+동일 값 재요청 시 이력 미저장 확인:
+
+```bash
+curl -X PATCH http://localhost:8084/shipments/<SHIPMENT_ID>/address \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recipientName": "이영희",
+    "recipientAddress": "대전시 유성구 대학로 99"
+  }'
+
+kubectl exec -n ecommerce logistics-db-0 -- psql -U postgres -d logisticsdb -c "
+SELECT count(*)
+FROM shipment_address_history
+WHERE shipment_id = <SHIPMENT_ID>;
+"
+```
+
+기대 결과: 첫 변경 후 `shipment_address_history` 1건 저장, 동일한 값으로 다시 요청하면 count 증가 없음
+
 **order snapshot 불변 확인**
 
 ```bash
@@ -972,8 +1027,8 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
     - 주소 서비스 조회 후 snapshot 저장
     - 주소 서비스 장애 시 fallback 정책 결정
 - 배송지 변경 이력 관리 고도화
-    - shipment 주소 변경 이력 저장 여부 결정
-    - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 검토
+    - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토
+    - 주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토
 - Outbox retry 정책 추가 고도화
     - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
     - DLQ 재검토 기준 도달 시 DB 기반 DLQ 도입
@@ -1009,4 +1064,5 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~주문 시점 배송지 snapshot 저장 (`orders.recipient_name`, `orders.recipient_address`)~~
 - ~~OrderCreatedEvent를 통한 배송지 정보 전달~~
 - ~~배송지 수정 API 추가 (`PATCH /shipments/{shipmentId}/address`)~~
+- ~~배송지 변경 이력 저장 (`shipment_address_history`) 및 동일 값 재요청 시 중복 미저장 검증~~
 - ~~`READY` 상태에서만 배송지 수정 허용 및 order snapshot 불변성 검증~~
