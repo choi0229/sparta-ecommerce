@@ -57,7 +57,7 @@ class ProductVariantServiceTest {
         List<ProductSnapshotRequestResult.Item> requestItems =
                 List.of(new ProductSnapshotRequestResult.Item("SKU-INVALID", 1));
         ProductSnapshotRequestResult event = new ProductSnapshotRequestResult(
-                REQUEST_ID, "productSnapshot-requested-event", requestItems, IDEM_KEY, USER_ID);
+                REQUEST_ID, "productSnapshot-requested-event", requestItems, IDEM_KEY, USER_ID, null);
 
         given(productVariantRepository.findBySkuIn(any())).willReturn(List.of());
 
@@ -85,7 +85,7 @@ class ProductVariantServiceTest {
     void emptySkus_errorReplyContainsCorrelationFields() throws Exception {
         List<ProductSnapshotRequestResult.Item> requestItems = List.of();
         ProductSnapshotRequestResult event = new ProductSnapshotRequestResult(
-                REQUEST_ID, "productSnapshot-requested-event", requestItems, IDEM_KEY, USER_ID);
+                REQUEST_ID, "productSnapshot-requested-event", requestItems, IDEM_KEY, USER_ID, null);
 
         productVariantService.replyProductSnapshot(event);
 
@@ -106,7 +106,7 @@ class ProductVariantServiceTest {
         List<ProductSnapshotRequestResult.Item> requestItems =
                 List.of(new ProductSnapshotRequestResult.Item("SKU-001", 2));
         ProductSnapshotRequestResult event = new ProductSnapshotRequestResult(
-                REQUEST_ID, "productSnapshot-requested-event", requestItems, IDEM_KEY, USER_ID);
+                REQUEST_ID, "productSnapshot-requested-event", requestItems, IDEM_KEY, USER_ID, null);
 
         Product product = Product.builder().name("상품A").build();
         org.springframework.test.util.ReflectionTestUtils.setField(product, "id", 10L);

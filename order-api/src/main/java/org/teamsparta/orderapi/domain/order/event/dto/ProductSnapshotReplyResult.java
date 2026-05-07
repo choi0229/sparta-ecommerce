@@ -15,7 +15,8 @@ public record ProductSnapshotReplyResult(
         List<ProductSnapshotItem> items,
         List<Item> requestItem,
         String idemKey,
-        Long userId
+        Long userId,
+        ShippingAddress shippingAddress
 ) {
     public record ProductSnapshotItem(
             String sku,
@@ -29,6 +30,11 @@ public record ProductSnapshotReplyResult(
     public record Item(
             String sku,
             Integer quantity
+    ){}
+
+    public record ShippingAddress(
+            String recipientName,
+            String recipientAddress
     ){}
 }
 

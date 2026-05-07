@@ -55,7 +55,7 @@ public class OrderService {
             throw new DomainException(DomainExceptionCode.NOT_FOUND_ITEMS);
         }
 
-        ProductSnapShotRequestEvent event = ProductSnapShotRequestEvent.from(UUID.randomUUID(), request.items(), idemKey, request.userId());
+        ProductSnapShotRequestEvent event = ProductSnapShotRequestEvent.from(UUID.randomUUID(), request.items(), idemKey, request.userId(), request.shippingAddress());
         String payload;
 
         try{

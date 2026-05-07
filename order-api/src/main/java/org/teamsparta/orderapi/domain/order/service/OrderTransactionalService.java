@@ -74,6 +74,9 @@ public class OrderTransactionalService {
 
         String orderNo = generateOrderNo();
         Orders order = Orders.createNew(orderNo, result.userId());
+        if (result.shippingAddress() != null) {
+            order.setShippingAddress(result.shippingAddress().recipientName(), result.shippingAddress().recipientAddress());
+        }
         Orders savedOrder = orderRepository.save(order);
 
         OrderSagaState sagaState = OrderSagaState.start(order.getSagaId(), savedOrder.getId());

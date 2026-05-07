@@ -36,9 +36,6 @@ public class OrderEventConsumer {
                 .tag("result", "failed").register(meterRegistry);
     }
 
-    // [MVP] order-api의 order-create-event 토픽을 수신한다.
-    // 현재 order-api 이벤트 payload에 recipientName/recipientAddress가 없으므로 null로 생성한다.
-    // 배송지 정보는 추후 order-api 주문 요청/이벤트 확장 또는 별도 배송지 업데이트 API로 보강한다.
     @KafkaListener(topics = "order-create-event", groupId = "${spring.application.name}")
     public void onOrderEvent(String message) {
         log.info("Received order-create-event: {}", message);
@@ -47,7 +44,7 @@ public class OrderEventConsumer {
             String idemKey = "order-create-event:" + payload.eventId();
             Shipment shipment = transactionalService.createShipmentForOrderEvent(
                     idemKey,
-                    new ShipmentCreateRequest(payload.orderId(), null, null)
+                    new ShipmentCreateRequest(payload.orderId(), payload.recipientName(), payload.recipientAddress())
             );
             if (shipment != null) {
                 log.info("Shipment created from order-create-event. orderId={}", payload.orderId());
@@ -63,14 +60,16 @@ public class OrderEventConsumer {
         }
     }
 
-    // order-api OrderCreatedEvent 구조와 동일하게 맞춤 (1차 MVP 연결용)
+    // order-api OrderCreatedEvent 구조와 동일하게 맞춤
     public record OrderCreatedPayload(
             String eventId,
             String eventType,
             Long orderId,
             UUID sagaId,
             Long userId,
-            List<Item> items
+            List<Item> items,
+            String recipientName,
+            String recipientAddress
     ) {
         public record Item(String sku, Integer quantity) {}
     }

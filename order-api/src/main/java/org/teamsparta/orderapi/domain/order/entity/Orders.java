@@ -61,6 +61,12 @@ public class Orders {
     @Column(name = "saga_id", nullable = false, unique = true)
     UUID sagaId;
 
+    @Column(name = "recipient_name")
+    String recipientName;
+
+    @Column(name = "recipient_address")
+    String recipientAddress;
+
     @Column(name = "created_at", updatable = false)
     @CreationTimestamp
     ZonedDateTime createdAt;
@@ -88,6 +94,11 @@ public class Orders {
 
     public void updateShipmentStatus(ShipmentStatus shipmentStatus) {
         this.shipmentStatus = shipmentStatus;
+    }
+
+    public void setShippingAddress(String recipientName, String recipientAddress) {
+        this.recipientName = recipientName;
+        this.recipientAddress = recipientAddress;
     }
 
 }
