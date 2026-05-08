@@ -207,6 +207,21 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 
 이를 통해 주문 당시 snapshot(`orders.recipient_*`)은 그대로 유지하면서, 실제 배송 주소 변경 내역은 별도로 추적할 수 있게 했습니다.
 
+
+### addressId 기반 주문 배송지 해소 (MVP 1단계)
+
+주문 생성 시 배송지 정보를 직접 입력하는 방식에 더해, 저장된 사용자 주소를 참조할 수 있도록 `addressId` 기반 배송지 해소 로직을 추가했습니다.
+
+- `CreateOrderRequest`에 `addressId` 필드 추가
+- `OrderService.createOrder()`에서 배송지를 먼저 해소한 뒤 기존 주문 이벤트 흐름에 주입
+- `addressId`가 있으면 `AddressServiceClient`를 통해 조회한 주소를 사용
+- `addressId`가 없고 `shippingAddress`가 있으면 직접 입력 값을 사용
+- `addressId`와 `shippingAddress`가 동시에 오면 `addressId`를 우선 사용
+- 둘 다 없으면 `SHIPPING_ADDRESS_REQUIRED`로 주문 차단
+- 존재하지 않는 `addressId`는 `ADDRESS_NOT_FOUND`로 주문 차단
+
+현재는 실제 주소 서비스가 아직 없기 때문에 `StubAddressServiceClient`를 사용해 addressId 기반 흐름을 먼저 검증했습니다. 이 방식으로 기존 `shippingAddress` 직접 입력 경로를 깨지 않으면서, 이후 실제 주소 서비스로 자연스럽게 전환할 수 있는 확장 지점을 마련했습니다.
+
 ---
 
 ## 5. 이벤트 흐름
@@ -415,6 +430,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 | | 주문 시점 배송지 snapshot 저장 | 주문 생성 시 `shippingAddress`를 `orders`와 `shipment`에 반영하고 주문 당시 사실로 보존 |
 | | 배송지 수정 API | `PATCH /shipments/{shipmentId}/address`로 `READY` 상태 배송의 현재 주소만 수정 |
 | | 배송지 변경 이력 저장 | `shipment_address_history`에 변경 전/후 주소와 변경 시각을 append-only로 저장 |
+| | addressId 기반 주문 배송지 해소 | `addressId`가 있으면 저장된 주소를 조회해 snapshot에 반영하고, 없으면 `shippingAddress` 직접 입력을 사용 |
 | **Could-Have** | 데이터 유실 방지 | DB 저장/이벤트 발행 불일치 방지를 위해 **Transactional Outbox** |
 | | 운영 관측성 | Micrometer 기반 메트릭(Gauge/Counter) → `/actuator/prometheus` 노출 |
 | | smoke script 기반 운영 검증 | happy path / negative path를 bash script로 재현 가능 |
@@ -818,6 +834,96 @@ WHERE id = <ORDER_ID>;
 "
 ```
 
+
+**addressId 기반 주문 생성**
+
+```bash
+curl -X POST http://localhost:8083/api/orders   -H "Content-Type: application/json"   -d '{
+    "userId": 1,
+    "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
+    "addressId": 1
+  }'
+```
+
+**addressId 기반 상태 조회**
+
+```bash
+curl http://localhost:8083/api/orders/status/<IDEM_KEY>
+# → { "status": "CREATED", "orderId": <ORDER_ID>, "shipmentStatus": "READY", ... }
+```
+
+**addressId 기반 orders snapshot 확인**
+
+```bash
+kubectl exec -n ecommerce order-db-0 -- psql -U postgres -d orderdb -c "
+SELECT id, order_no, status, recipient_name, recipient_address
+FROM orders
+WHERE id = <ORDER_ID>;
+"
+```
+
+**addressId 기반 shipment 반영 확인**
+
+```bash
+curl http://localhost:8084/shipments/by-order/<ORDER_ID>
+```
+
+```bash
+kubectl exec -n ecommerce logistics-db-0 -- psql -U postgres -d logisticsdb -c "
+SELECT id, order_id, status, recipient_name, recipient_address
+FROM shipment
+WHERE order_id = <ORDER_ID>;
+"
+```
+
+**addressId와 shippingAddress 동시 입력 시 addressId 우선**
+
+```bash
+curl -X POST http://localhost:8083/api/orders   -H "Content-Type: application/json"   -d '{
+    "userId": 1,
+    "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
+    "addressId": 2,
+    "shippingAddress": {
+      "recipientName": "직접입력이름(무시되어야함)",
+      "recipientAddress": "직접입력주소(무시되어야함)"
+    }
+  }'
+```
+
+기대 결과:
+- `orders.recipient_name = 김철수`
+- `orders.recipient_address = 부산시 해운대구 달맞이길 2`
+- 직접 입력한 `shippingAddress` 값이 아닌 `addressId=2`의 주소가 저장됨
+
+**배송지 누락 시 주문 차단**
+
+```bash
+curl -i -X POST http://localhost:8083/api/orders   -H "Content-Type: application/json"   -d '{
+    "userId": 1,
+    "items": [{"sku": "SKU-TEST-001", "quantity": 1}]
+  }'
+```
+
+기대 결과:
+- HTTP 400
+- `errorCode = SHIPPING_ADDRESS_REQUIRED`
+- 주문 row 미생성
+
+**존재하지 않는 addressId 차단**
+
+```bash
+curl -i -X POST http://localhost:8083/api/orders   -H "Content-Type: application/json"   -d '{
+    "userId": 1,
+    "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
+    "addressId": 999
+  }'
+```
+
+기대 결과:
+- HTTP 404
+- `errorCode = ADDRESS_NOT_FOUND`
+- 주문 row 미생성
+
 **배송 상태 변경**
 
 ```bash
@@ -1022,10 +1128,11 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 ## 13. 향후 개선 과제
 
 ### 도메인 / 운영
-- 사용자 주소 서비스 연동
-    - addressId 기반 주문 입력 지원
-    - 주소 서비스 조회 후 snapshot 저장
-    - 주소 서비스 장애 시 fallback 정책 결정
+- 사용자 주소 서비스 연동 고도화
+    - `StubAddressServiceClient`를 실제 HTTP 기반 구현체로 교체
+    - 주소 조회 타임아웃 / 5xx 응답 시 `ADDRESS_LOOKUP_FAILED` 처리
+    - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
+    - 삭제된 주소 / 비활성 주소 정책 확정
 - 배송지 변경 이력 관리 고도화
     - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토
     - 주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토
@@ -1066,3 +1173,5 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~배송지 수정 API 추가 (`PATCH /shipments/{shipmentId}/address`)~~
 - ~~배송지 변경 이력 저장 (`shipment_address_history`) 및 동일 값 재요청 시 중복 미저장 검증~~
 - ~~`READY` 상태에서만 배송지 수정 허용 및 order snapshot 불변성 검증~~
+- ~~addressId 기반 주문 배송지 해소 추가 (`CreateOrderRequest.addressId`, `AddressServiceClient`, `StubAddressServiceClient`)~~
+- ~~addressId 우선 / shippingAddress fallback / 배송지 누락 400 / 잘못된 addressId 404 검증~~
