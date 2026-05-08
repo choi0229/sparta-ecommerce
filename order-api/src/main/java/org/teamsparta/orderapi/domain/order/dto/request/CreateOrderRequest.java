@@ -4,7 +4,7 @@ import lombok.Getter;
 
 import java.util.List;
 
-public record CreateOrderRequest(Long userId, List<Item> items, ShippingAddress shippingAddress) {
+public record CreateOrderRequest(Long userId, List<Item> items, Long addressId, ShippingAddress shippingAddress) {
 
     public record Item(
             String sku,

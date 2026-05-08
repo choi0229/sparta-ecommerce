@@ -17,6 +17,7 @@ import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
 import org.teamsparta.orderapi.domain.order.event.ProductSnapShotRequestEvent;
 import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult;
 import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult.ProductSnapshotItem;
+import org.teamsparta.orderapi.domain.order.client.AddressServiceClient;
 import org.teamsparta.orderapi.domain.order.repository.*;
 import org.teamsparta.orderapi.domain.productProjection.entity.ProductProjection;
 import org.teamsparta.orderapi.domain.productProjection.repository.ProductProjectionRepository;
@@ -49,13 +50,16 @@ public class OrderService {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final OrderTransactionalService orderTransactionalService;
     private final IdempotencyRepository idempotencyRepository;
+    private final AddressServiceClient addressServiceClient;
 
     public void createOrder(CreateOrderRequest request, String idemKey){
         if(request.items() == null || request.items().isEmpty()){
             throw new DomainException(DomainExceptionCode.NOT_FOUND_ITEMS);
         }
 
-        ProductSnapShotRequestEvent event = ProductSnapShotRequestEvent.from(UUID.randomUUID(), request.items(), idemKey, request.userId(), request.shippingAddress());
+        CreateOrderRequest.ShippingAddress resolvedAddress = resolveShippingAddress(request);
+
+        ProductSnapShotRequestEvent event = ProductSnapShotRequestEvent.from(UUID.randomUUID(), request.items(), idemKey, request.userId(), resolvedAddress);
         String payload;
 
         try{
@@ -64,6 +68,20 @@ public class OrderService {
         }catch(Exception e){
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
+    }
+
+    private CreateOrderRequest.ShippingAddress resolveShippingAddress(CreateOrderRequest request) {
+        if (request.addressId() != null && request.shippingAddress() != null) {
+            log.warn("addressId와 shippingAddress가 동시에 전달됨. addressId 우선 사용. addressId={}", request.addressId());
+        }
+        if (request.addressId() != null) {
+            AddressServiceClient.AddressInfo info = addressServiceClient.findById(request.addressId());
+            return new CreateOrderRequest.ShippingAddress(info.recipientName(), info.recipientAddress());
+        }
+        if (request.shippingAddress() != null) {
+            return request.shippingAddress();
+        }
+        throw new DomainException(DomainExceptionCode.SHIPPING_ADDRESS_REQUIRED);
     }
 
     @Transactional(readOnly = true)
