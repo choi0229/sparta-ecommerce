@@ -100,7 +100,7 @@ trap cleanup EXIT
 echo ""
 echo "=== [1/7] mock address-api 이미지 빌드 및 minikube 로드 ==="
 
-docker build -t "${IMAGE_NAME}" ./address-api
+docker build -f ./address-api/Dockerfile.mock -t "${IMAGE_NAME}" ./address-api
 echo "[OK] docker build 완료: ${IMAGE_NAME}"
 
 minikube image load "${IMAGE_NAME}"

@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: address-api
+  datasource:
+    url: jdbc:postgresql://${ADDRESS_DB_HOST:localhost}:${ADDRESS_DB_PORT:5432}/${ADDRESS_DB_NAME:addressdb}
+    username: ${SPRING_DATASOURCE_USERNAME:address}
+    password: ${SPRING_DATASOURCE_PASSWORD:address}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
