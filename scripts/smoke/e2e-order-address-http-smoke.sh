@@ -30,6 +30,7 @@ IMAGE_NAME="sparta-msa-final-project-address-api:latest"
 POLL_INTERVAL=3
 TIMEOUT=60
 PF_PID=""
+ORDER_API_POD=""
 PF_LOG=$(mktemp)
 PF_READY=false
 RUN_FAILED=true
@@ -124,14 +125,20 @@ kubectl set env deployment/order-api -n "${NAMESPACE}" \
   ADDRESS_CLIENT_READ_TIMEOUT_MS=2000
 
 kubectl rollout status deployment/order-api -n "${NAMESPACE}" --timeout=120s
-kubectl wait --for=condition=ready pod -l app=order-api -n "${NAMESPACE}" --timeout=120s
+
+ORDER_API_POD=$(kubectl get pods -n "${NAMESPACE}" -l app=order-api \
+  --sort-by=.metadata.creationTimestamp \
+  -o custom-columns=NAME:.metadata.name --no-headers | tail -n 1)
+echo "[OK] 최신 order-api pod: ${ORDER_API_POD}"
+
+kubectl wait --for=condition=ready pod/"${ORDER_API_POD}" -n "${NAMESPACE}" --timeout=120s
 echo "[OK] order-api rollout 완료 및 pod Ready 확인 (mode=http)"
 
 # ── 4단계: order-api port-forward 시작 ───────────────────────────────────────
 echo ""
 echo "=== [4/7] order-api port-forward 시작 (localhost:8083) ==="
 
-kubectl port-forward svc/order-api-svc 8083:8083 -n "${NAMESPACE}" >"${PF_LOG}" 2>&1 &
+kubectl port-forward pod/"${ORDER_API_POD}" 8083:8083 -n "${NAMESPACE}" >"${PF_LOG}" 2>&1 &
 PF_PID=$!
 
 for i in $(seq 1 30); do
