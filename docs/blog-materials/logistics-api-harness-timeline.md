@@ -289,3 +289,94 @@ Phase 10 전후로 하네스 구조가 어떻게 달라졌는지 한눈에 보�
 - `.claude/skills/msa-change-orchestrator/SKILL.md` 신규 작성
 - 신규 기능 추가·이벤트 계약 수정·테스트 보강 요청 시 msa-architect → backend-builder → code-reviewer → qa 흐름 자동 연결
 - Phase 10에서 "4개 agents 안정화 이후로 미뤘던" orchestrator Skill이 실제로 구현됨
+
+---
+
+## Phase 16 — CLAUDE.md gitignore 문제 발견 및 수정
+
+### 문제 발견
+- `.gitignore`에 `CLAUDE.md`가 포함되어 있었음을 확인
+- CLAUDE.md 변경이 커밋에 반영되지 않아, 클론 또는 새 환경에서 하네스 지침이 누락될 수 있는 상태였음
+
+### 수정
+- `.gitignore`에서 `CLAUDE.md` 항목 제거
+- CLAUDE.md를 커밋 대상으로 전환, git 이력에 변경 사항 추적 가능해짐
+
+---
+
+## Phase 17 — Karpathy 스타일 CLAUDE.md 정비
+
+### CLAUDE.md 구조 정비
+- 기존 CLAUDE.md에서 세부 규칙 성격의 내용을 제거하고 고수준 원칙 5개만 유지
+  - Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution / Project Context
+- 세부 규칙은 `.claude/rules/*.md`로 완전히 위임
+- 첫 문단에 rules/skills 참조 안내 명시
+- 커밋: `chore: CLAUDE.md 공통 작업 원칙 정비`
+
+### order-api rules 추가
+- `.claude/rules/order-api.md` 신규 작성
+- 주문 생성/스냅샷, 트랜잭션 경계, 비동기 주문 처리, Outbox/Saga/멱등성, 테스트 규칙 명세
+- Phase 2에서 미비했던 order-api 전용 path-scoped rule 추가
+
+---
+
+## Phase 18 — AddressServiceClient stub/http 분리
+
+### 설계 결정
+- 사용자 주소 서비스 연동 방식으로 Option C(addressId + shippingAddress 병용, addressId 우선) 선택
+- addressId를 받아 외부 서비스에서 주소를 조회하거나, 직접 입력한 shippingAddress를 사용하는 구조
+
+### MVP 1단계 — 인터페이스 + stub 구현
+- `AddressServiceClient` 인터페이스 신규 작성
+- `StubAddressServiceClient` 구현체 (addressId 1/2/3에 대한 픽스처 응답)
+- `OrderService.resolveShippingAddress()` 메서드 추가
+- `CreateOrderRequest`에 `addressId`, `ShippingAddress` 필드 추가
+- 단위 테스트 5개 추가 (OrderServiceTest)
+
+### HTTP 구현체 전환 단계
+- `HttpAddressServiceClient` 신규 작성 (RestTemplate 기반)
+- `AddressClientProperties` (mode, base-url, timeout 설정)
+- `AddressClientConfig` 빈 선택 로직 (stub/http 모드)
+- `StubAddressServiceClient`에서 `@Component` 제거 (AddressClientConfig가 단독 관리)
+- `AddressClientConfigTest`, `HttpAddressServiceClientTest` 작성
+- `application.yml`에 `address.client.*` 설정 추가 (기본값: mode=stub)
+
+---
+
+## Phase 19 — mock address-api 추가 및 http mode 검증
+
+### WireMock 기반 mock 서버 구성
+- `address-api/Dockerfile` 신규 작성 (wiremock/wiremock:3.5.4 기반)
+- `address-api/mappings/addresses.json` — addressId별 응답 정의
+  - 1/2/3 → 200 + 주소 정보
+  - 999 → 404
+  - 503 → 503 (HTTP 에러 시뮬레이션)
+- `deployment/address-api/deployment.yaml` — replicas: 1, imagePullPolicy: Never
+- `deployment/address-api/service.yaml` — ClusterIP, port 8090
+
+### order-api http mode 수동 검증 가이드 작성
+- 빌드 → minikube image load → kubectl apply → env 전환 → 검증 → stub 복원 절차 문서화
+- 주소 정상 조회, ADDRESS_NOT_FOUND(999), ADDRESS_LOOKUP_FAILED(503) 세 시나리오
+
+### 트러블슈팅
+- 최신 이미지 미반영으로 503이 404처럼 보이는 현상 발생 → `kubectl rollout restart`로 해결
+- Kafka 문제처럼 보였던 상태 미반영 → rollout 완료 전 요청 발송이 원인
+
+---
+
+## Phase 20 — smoke script 자동화 및 GitHub Actions 연결
+
+### e2e-order-address-http-smoke.sh 작성
+- `scripts/smoke/e2e-order-address-http-smoke.sh` 신규 작성
+- 7단계 자동화: 이미지 빌드 → minikube load → address-api 배포 → order-api http 전환 → 3개 시나리오 검증 → stub 복원
+- `trap cleanup EXIT`으로 실패 시에도 stub 모드 복원 보장
+- `extract_error()` 헬퍼 함수 추가 (`.error.errorCode` 추출)
+- 기존 smoke script 패턴(jq fallback, extract(), POLL_INTERVAL, TIMEOUT) 재사용
+
+### smoke-tests.yml 업데이트
+- `target` 입력값에 `address-http` 옵션 추가 (happy / negative / address-http / all)
+- `smoke-test` 잡에 job-level `if` 추가 (`address-http` 단독 선택 시 생략)
+- `address-http-smoke` 잡 신규 추가
+  - `needs: smoke-test` + `always()` 조건으로 순차 실행 보장 (포트 8083 충돌 방지)
+  - 전용 preflight (docker, minikube, kubectl 확인)
+  - `e2e-order-address-http-smoke.sh` 실행

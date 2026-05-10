@@ -151,3 +151,132 @@ Service와 Endpoint는 정상적으로 구성되어 있었고 모든 API 검증�
 **재발 방지**
 - Docker Desktop 기반 Minikube 환경에서는 NodePort 직접 접근 대신 `port-forward` 또는 `minikube service` 사용
 - 배포 검증 체크리스트에 환경별 접근 방법 분기 추가 (위 내용은 `docs/` 배포 가이드에 반영)
+
+---
+
+## 2026-05-10 — Karpathy 스타일 CLAUDE.md 정비 및 address service 연동
+
+### 8. CLAUDE.md가 .gitignore에 포함되어 있었던 문제
+
+**발견 경로**
+Phase 3 작업을 시작하면서 `.gitignore` 내용을 확인하던 중 `CLAUDE.md`가 포함되어 있음을 발견.
+
+**영향**
+CLAUDE.md 변경이 커밋에 반영되지 않았습니다.
+하네스의 핵심 진입 파일이 버전 관리 밖에 있었으므로, 다른 환경에서 클론하거나 새 세션에서 시작하면
+기대하던 지침이 없는 상태로 진행될 수 있었습니다.
+하네스를 구성했어도 공유되지 않으면 실질적으로 없는 것과 같습니다.
+
+**수정**
+`.gitignore`에서 `CLAUDE.md` 항목 제거.
+CLAUDE.md를 커밋 대상으로 전환하여 변경 이력이 git에 남도록 수정.
+
+**재발 방지**
+- 하네스 파일(.claude/ 하위 전체, CLAUDE.md)이 .gitignore에 포함되어 있지 않은지 초기 점검 항목에 추가
+- 새 프로젝트에 하네스를 구성할 때 CLAUDE.md를 가장 먼저 커밋하는 순서로 진행
+
+---
+
+### 9. Karpathy 스타일 CLAUDE.md 도입 배경
+
+**발견 경로**
+Phase 2 이후 CLAUDE.md에 세부 내용이 누적되어 역할 경계가 흐려지는 경향을 관찰.
+rules 파일에 있어야 할 내용과 CLAUDE.md에 있는 내용이 부분적으로 중복되었습니다.
+
+**영향**
+어느 파일이 권위 있는 규칙인지 불명확해지면, Claude가 rules보다 CLAUDE.md의 암묵적 내용에 의존하거나
+두 파일의 지침이 충돌할 때 임의로 선택하는 상황이 생길 수 있습니다.
+
+**수정**
+CLAUDE.md를 다음 원칙으로 정비했습니다.
+- 고수준 원칙 5개만 유지: Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution / Project Context
+- 서비스별·도메인별 세부 규칙은 `.claude/rules/*.md`로 완전히 위임
+- CLAUDE.md 첫 문단에 "도메인 규칙은 rules, 반복 작업은 skills 참조"를 명시
+
+**재발 방지**
+- CLAUDE.md에 새 내용을 추가하기 전에 "이 내용이 rules 파일에 더 적합하지 않은가"를 먼저 판단
+- 특정 서비스에만 적용되는 규칙은 CLAUDE.md가 아닌 해당 서비스 rule 파일에 추가
+
+---
+
+### 10. AddressServiceClient stub/http 분리 작업에서 드러난 하네스 효과
+
+**발견 경로**
+order-api에 AddressServiceClient를 추가하는 작업 중 구조 선택 과정에서 관찰.
+
+**관찰 내용**
+`.claude/rules/order-api.md`의 트랜잭션 경계 규칙("@Transactional 내부에서 외부 서비스 호출 금지")이
+구현 단계에서 실제로 적용되었습니다.
+HTTP 구현체(`HttpAddressServiceClient`)를 호출하는 `resolveShippingAddress()`가 `@Transactional` 밖에서
+실행되도록 구조가 유지되었고, 재작업 없이 완료되었습니다.
+
+rules 파일이 없었다면 "HTTP 호출을 트랜잭션 밖에 두어야 한다"는 판단을 매 작업마다 설명해야 했을 것입니다.
+
+**재발 방지**
+- 향후 외부 서비스 클라이언트를 추가할 때 동일 원칙(`resolveX()` 호출은 트랜잭션 밖에서)이 rules 파일로 유지되도록 함
+
+---
+
+### 11. mock address-api + http mode smoke 자동화 과정에서 얻은 교훈
+
+**발견 경로**
+`e2e-order-address-http-smoke.sh` 작성 과정에서 기존 smoke script 구조와의 정합성을 맞추는 중 식별.
+
+**관찰 내용**
+기존 smoke script(`e2e-order-shipment-smoke.sh`, `e2e-order-invalid-sku-smoke.sh`)가 일관된 구조를 갖추고 있었기 때문에
+새 smoke script를 작성할 때 동일한 패턴을 재사용할 수 있었습니다.
+- `extract()` 함수 (`.data.*` 추출), `extract_error()` 함수 (`.error.errorCode` 추출)
+- jq 유무 감지 후 grep/sed fallback
+- `trap cleanup EXIT`로 stub 모드 복원 보장
+
+smoke script를 별도 파일로 분리하지 않고 smoke-tests.yml에 인라인으로 작성했다면,
+이 패턴을 재사용하기 어려웠을 것입니다.
+
+**재발 방지**
+- 새 시나리오 smoke script는 기존 구조(`extract()`, jq fallback, trap cleanup)를 그대로 따름
+- 공통 helper 함수가 늘어나면 별도 `.sh` 라이브러리 파일로 분리 검토
+
+---
+
+### 12. 최신 이미지 미반영으로 503이 404처럼 보였던 검증 이슈
+
+**발견 경로**
+mock address-api를 배포한 후 addressId=503 검증에서 예상했던 HTTP 503 대신 404가 반환됨.
+
+**원인**
+`docker build` 후 `minikube image load`를 수행했지만,
+기존에 실행 중이던 address-api Pod가 이전 이미지(503 stub 매핑이 없는 버전)를 그대로 사용하고 있었습니다.
+WireMock은 매핑이 없는 요청에 기본값 404를 반환하므로,
+addressId=503에 대한 매핑이 없는 이전 컨테이너가 404를 반환했습니다.
+
+**해결**
+`kubectl rollout restart deployment/address-api -n ecommerce`로 Pod를 재시작하여 새 이미지를 적용.
+이후 addressId=503 → HTTP 503 정상 반환 확인.
+
+**재발 방지**
+- `minikube image load` 후 반드시 `kubectl rollout restart` 또는 `kubectl rollout status` 확인
+- smoke script의 `[2/7]` 단계에서 `kubectl rollout status`가 완료된 후 검증을 진행하도록 구조화
+- 이미지 로드 후 "예상과 다른 응답"이 나오면 Pod 이미지 버전을 먼저 확인
+
+---
+
+### 13. Kafka 문제처럼 보였지만 실제 배포 반영 문제였던 사례
+
+**발견 경로**
+order-api를 http 모드로 전환한 후 addressId=1 주문에서 Kafka 이벤트 발행이 되지 않는 것처럼 보였음.
+`GET /api/orders/status/{idemKey}` 폴링에서 상태가 변하지 않아 Kafka consumer 문제로 오판.
+
+**원인**
+`kubectl set env`로 환경변수를 변경했지만, rollout 완료를 기다리지 않은 상태에서 주문 요청을 보냈습니다.
+이전 Pod(stub 모드)가 여전히 요청을 처리하고 있었고, stub 모드에서의 주소 조회는 정상이지만
+이전 이미지의 다른 설정 차이로 인해 처리가 지연된 것이었습니다.
+Kafka consumer는 정상 동작 중이었으나 요청이 의도한 Pod에 도달하지 못한 것이었습니다.
+
+**해결**
+`kubectl rollout status deployment/order-api -n ecommerce --timeout=120s`가 완료된 이후에 주문 요청 실행.
+이후 addressId=1 → status=CREATED, shipmentStatus=READY 정상 확인.
+
+**재발 방지**
+- `kubectl set env` 또는 deployment 변경 후에는 반드시 rollout status 확인 후 검증 진행
+- 비동기 처리 이슈처럼 보일 때 "배포가 실제로 반영되었는가"를 먼저 확인
+- smoke script 구조에서 env 변경 직후 `kubectl rollout status`를 필수 단계로 포함 (현재 `[3/7]` 단계에서 처리 중)
