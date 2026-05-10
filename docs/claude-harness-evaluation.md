@@ -290,7 +290,7 @@ Phase 2 하네스 구조는 유지하되 두 가지 문제를 해결한 단계�
 
 ### 다음 개선 우선순위
 
-1. **smoke 결과 보존** — 실행 결과를 파일로 저장하여 이력 비교 가능하게 구성
+1. ~~**smoke 결과 보존**~~ — smoke-tests.yml에서 `tee` + `upload-artifact`로 구현 완료
 2. **payload 유효성 검증** — null orderId로 배송 생성 방지
 3. **Testcontainers 통합 테스트** — DB/Kafka 실제 동작 검증
 4. **작업 시간 기록 도입** — 세션 시작/종료 시각을 feedback-log에 함께 기록

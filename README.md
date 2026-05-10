@@ -638,6 +638,7 @@ scripts/claude-guardrails.sh
     - 현재 smoke 스크립트가 `localhost:8083`, `localhost:8084`를 사용하므로 **GitHub-hosted runner에서는 바로 실행 불가**
     - self-hosted runner 또는 runner에서 접근 가능한 환경이 필요
     - `address-http` 시나리오는 runner에 `docker`, `minikube` 추가 필요 (`happy` / `negative` 는 kubectl만 필요)
+    - 각 시나리오 실행 로그는 GitHub Actions artifact로 자동 업로드됨 (성공/실패 무관)
 
 ### 운영/검증 자동화 보강
 

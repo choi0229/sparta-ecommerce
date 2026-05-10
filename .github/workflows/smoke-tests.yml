@@ -28,6 +28,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: 로그 디렉터리 생성
+        run: mkdir -p logs
+
       - name: '[Preflight] 도구 및 클러스터 접근 확인'
         run: |
           set -euo pipefail
@@ -126,11 +129,15 @@ jobs:
 
       - name: '[happy] order 생성 → shipmentStatus=READY/SHIPPED 검증'
         if: ${{ inputs.target == 'happy' || inputs.target == 'all' }}
-        run: bash scripts/smoke/e2e-order-shipment-smoke.sh
+        run: |
+          set -o pipefail
+          bash scripts/smoke/e2e-order-shipment-smoke.sh 2>&1 | tee logs/smoke-happy.log
 
       - name: '[negative] invalid SKU → status=FAILED, MISSING_SKU 검증'
         if: ${{ inputs.target == 'negative' || inputs.target == 'all' }}
-        run: bash scripts/smoke/e2e-order-invalid-sku-smoke.sh
+        run: |
+          set -o pipefail
+          bash scripts/smoke/e2e-order-invalid-sku-smoke.sh 2>&1 | tee logs/smoke-negative.log
 
       - name: '[Teardown] port-forward 프로세스 종료'
         if: always()
@@ -141,6 +148,14 @@ jobs:
           kill "${PF_LOGISTICS_PID:-}" 2>/dev/null \
             && echo "[OK] logistics-api port-forward 종료" \
             || echo "[SKIP] PF_LOGISTICS_PID 없음"
+
+      - name: 'smoke 결과 artifact 업로드'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-${{ inputs.target }}-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore
 
   address-http-smoke:
     name: Address HTTP Smoke (${{ inputs.target }})
@@ -153,6 +168,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: 로그 디렉터리 생성
+        run: mkdir -p logs
 
       - name: '[Preflight] 도구 및 클러스터 접근 확인'
         run: |
@@ -199,4 +217,14 @@ jobs:
         run: chmod +x scripts/smoke/e2e-order-address-http-smoke.sh
 
       - name: '[address-http] mock address-api 빌드 → http mode 검증 → stub 복원'
-        run: bash scripts/smoke/e2e-order-address-http-smoke.sh
+        run: |
+          set -o pipefail
+          bash scripts/smoke/e2e-order-address-http-smoke.sh 2>&1 | tee logs/smoke-address-http.log
+
+      - name: 'smoke 결과 artifact 업로드'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-address-http-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore
