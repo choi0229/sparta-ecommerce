@@ -55,7 +55,7 @@ is_null() {
 # ── 1단계: invalid SKU로 주문 생성 ──────────────────────────────────────────────
 echo ""
 echo "=== [1/2] POST /api/orders — invalid SKU로 주문 생성 ==="
-CREATE_BODY='{"userId":1,"items":[{"sku":"SKU-INVALID","quantity":1}]}'
+CREATE_BODY='{"userId":1,"items":[{"sku":"SKU-INVALID","quantity":1}],"shippingAddress":{"recipientName":"홍길동","recipientAddress":"서울시 강남구 테헤란로 1"}}'
 
 CREATE_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
