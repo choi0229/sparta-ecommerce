@@ -647,6 +647,11 @@ scripts/claude-guardrails.sh
 - `scripts/smoke/e2e-order-invalid-sku-smoke.sh`
     - negative smoke
     - invalid SKU → `FAILED + failureReason=MISSING_SKU[...]`
+- `scripts/smoke/e2e-order-address-http-smoke.sh`
+    - mock address-api 빌드/배포 → order-api http 모드 전환 → 3개 시나리오 검증 → stub 모드 복원
+    - addressId=1 → `status=CREATED, shipmentStatus=READY`
+    - addressId=999 → HTTP 404, `ADDRESS_NOT_FOUND`
+    - addressId=503 → HTTP 500, `ADDRESS_LOOKUP_FAILED`
 
 Guardrails 검사 항목: `.DS_Store`, `.env`, `secrets/`, 의도하지 않은 `payment-api` 디렉터리, Claude Code 세션 로그, 위험 명령 문자열(`rm -rf`, `DROP TABLE`, `TRUNCATE`, `kubectl delete` 등).
 
@@ -1072,6 +1077,14 @@ kubectl rollout status deployment/order-api -n ecommerce
 ```
 
 이 과정을 통해 기본 실행은 `stub`로 유지하면서도, 필요할 때는 mock `address-api`를 붙여 `http` 모드까지 검증할 수 있습니다.
+
+위 절차를 자동화한 스크립트:
+
+```bash
+bash scripts/smoke/e2e-order-address-http-smoke.sh
+```
+
+스크립트는 이미지 빌드부터 stub 모드 복원까지 전 과정을 처리하며, 실패 시에도 `trap`으로 stub 모드를 복원합니다.
 
 **배송 상태 변경**
 
