@@ -29,7 +29,6 @@ spec:
               value: "8083"
             - name: SPRING_DATASOURCE_URL
               value: "jdbc:postgresql://order-db:5432/orderdb"
-              #value: "jdbc:postgresql://localhost:5435/orderdb"
             - name: SPRING_DATASOURCE_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -42,3 +41,27 @@ spec:
                   key: DB_PASSWORD
             - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
               value: "kafka.ecommerce.svc.cluster.local:9092"
+
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 24
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
