@@ -124,7 +124,8 @@ kubectl set env deployment/order-api -n "${NAMESPACE}" \
   ADDRESS_CLIENT_READ_TIMEOUT_MS=2000
 
 kubectl rollout status deployment/order-api -n "${NAMESPACE}" --timeout=120s
-echo "[OK] order-api rollout 완료 (mode=http)"
+kubectl wait --for=condition=ready pod -l app=order-api -n "${NAMESPACE}" --timeout=120s
+echo "[OK] order-api rollout 완료 및 pod Ready 확인 (mode=http)"
 
 # ── 4단계: order-api port-forward 시작 ───────────────────────────────────────
 echo ""
@@ -133,16 +134,16 @@ echo "=== [4/7] order-api port-forward 시작 (localhost:8083) ==="
 kubectl port-forward svc/order-api-svc 8083:8083 -n "${NAMESPACE}" >"${PF_LOG}" 2>&1 &
 PF_PID=$!
 
-for i in $(seq 1 15); do
+for i in $(seq 1 30); do
   sleep 1
-  if curl -s --max-time 1 "${ORDER_API}/actuator/health" &>/dev/null; then
+  if curl -sS --max-time 2 "${ORDER_API}/actuator/health" >/dev/null 2>&1; then
     PF_READY=true
     break
   fi
 done
 
 if [[ "${PF_READY}" != "true" ]]; then
-  echo "[FAIL] port-forward 가 15초 내에 응답하지 않습니다."
+  echo "[FAIL] port-forward 가 30초 내에 응답하지 않습니다."
   echo "       port-forward 로그:"
   tail -50 "${PF_LOG}" || true
   exit 1
