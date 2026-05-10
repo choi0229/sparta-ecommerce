@@ -222,6 +222,20 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 
 현재는 실제 주소 서비스가 아직 없기 때문에 `StubAddressServiceClient`를 사용해 addressId 기반 흐름을 먼저 검증했습니다. 이 방식으로 기존 `shippingAddress` 직접 입력 경로를 깨지 않으면서, 이후 실제 주소 서비스로 자연스럽게 전환할 수 있는 확장 지점을 마련했습니다.
 
+
+### AddressServiceClient 설정 기반 분리 (stub ↔ http 전환 준비)
+
+실제 주소 서비스 연동으로 자연스럽게 확장할 수 있도록 `AddressServiceClient`를 설정 기반으로 분리했습니다.
+
+- `address.client.mode=stub|http` 설정 추가
+- 기본값은 `stub`로 두어 기존 addressId 기반 E2E 검증이 깨지지 않도록 유지
+- `HttpAddressServiceClient`를 추가해 향후 실제 주소 서비스의 `GET /addresses/{id}` 호출 구조를 준비
+- `AddressClientConfig`에서 mode에 따라 `StubAddressServiceClient` 또는 `HttpAddressServiceClient`를 bean으로 선택
+- `AddressClientProperties`로 `base-url`, `connect-timeout-ms`, `read-timeout-ms`를 설정 바인딩
+- HTTP 구현체는 `404 → ADDRESS_NOT_FOUND`, `5xx/타임아웃/기타 오류 → ADDRESS_LOOKUP_FAILED`로 예외를 매핑
+
+이를 통해 현재는 stub 기반 개발과 검증을 유지하면서도, 실제 주소 서비스가 준비되면 설정만 변경해 HTTP 기반 구현체로 전환할 수 있는 구조를 마련했습니다.
+
 ---
 
 ## 5. 이벤트 흐름
@@ -431,6 +445,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 | | 배송지 수정 API | `PATCH /shipments/{shipmentId}/address`로 `READY` 상태 배송의 현재 주소만 수정 |
 | | 배송지 변경 이력 저장 | `shipment_address_history`에 변경 전/후 주소와 변경 시각을 append-only로 저장 |
 | | addressId 기반 주문 배송지 해소 | `addressId`가 있으면 저장된 주소를 조회해 snapshot에 반영하고, 없으면 `shippingAddress` 직접 입력을 사용 |
+| | AddressServiceClient 설정 분리 | `address.client.mode=stub|http` 설정으로 stub/http 구현체를 전환 가능하게 준비 |
 | **Could-Have** | 데이터 유실 방지 | DB 저장/이벤트 발행 불일치 방지를 위해 **Transactional Outbox** |
 | | 운영 관측성 | Micrometer 기반 메트릭(Gauge/Counter) → `/actuator/prometheus` 노출 |
 | | smoke script 기반 운영 검증 | happy path / negative path를 bash script로 재현 가능 |
@@ -721,7 +736,11 @@ curl -X POST http://localhost:8083/api/orders \
         "sku": "SKU-TEST-001",
         "quantity": 1
       }
-    ]
+    ],
+    "shippingAddress": {
+      "recipientName": "홍길동",
+      "recipientAddress": "서울시 강남구 테헤란로 1"
+    }
   }'
 ```
 
@@ -923,6 +942,29 @@ curl -i -X POST http://localhost:8083/api/orders   -H "Content-Type: application
 - HTTP 404
 - `errorCode = ADDRESS_NOT_FOUND`
 - 주문 row 미생성
+
+**AddressServiceClient 설정값**
+
+```yaml
+address:
+  client:
+    mode: stub
+    base-url: http://address-api:8090
+    connect-timeout-ms: 1000
+    read-timeout-ms: 2000
+```
+
+기본값은 `stub`이며, 현재 로컬/Minikube 검증은 이 설정을 기준으로 동작합니다.
+
+**HTTP 구현체 전환 예시**
+
+```bash
+# 예시: 환경변수로 override
+export ADDRESS_CLIENT_MODE=http
+export ADDRESS_CLIENT_BASE_URL=http://address-api:8090
+```
+
+실제 `http` 모드 검증을 하려면 주소 서비스 서버가 먼저 준비되어 있어야 합니다. 현재 README의 수동 검증 예시는 기본 `stub` 모드 기준입니다.
 
 **배송 상태 변경**
 
@@ -1129,8 +1171,8 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 
 ### 도메인 / 운영
 - 사용자 주소 서비스 연동 고도화
-    - `StubAddressServiceClient`를 실제 HTTP 기반 구현체로 교체
-    - 주소 조회 타임아웃 / 5xx 응답 시 `ADDRESS_LOOKUP_FAILED` 처리
+    - 실제 address-api 서버 구축 후 `address.client.mode=http` 기반 E2E 검증
+    - Kubernetes `deployment.yaml`에 `ADDRESS_CLIENT_MODE`, `ADDRESS_CLIENT_BASE_URL` 반영
     - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
     - 삭제된 주소 / 비활성 주소 정책 확정
 - 배송지 변경 이력 관리 고도화
@@ -1175,3 +1217,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~`READY` 상태에서만 배송지 수정 허용 및 order snapshot 불변성 검증~~
 - ~~addressId 기반 주문 배송지 해소 추가 (`CreateOrderRequest.addressId`, `AddressServiceClient`, `StubAddressServiceClient`)~~
 - ~~addressId 우선 / shippingAddress fallback / 배송지 누락 400 / 잘못된 addressId 404 검증~~
+- ~~AddressServiceClient를 설정 기반(stub|http)으로 분리하고 HTTP 구현체/예외 매핑 준비~~
