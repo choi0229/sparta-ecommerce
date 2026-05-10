@@ -23,6 +23,7 @@
 - **inventory-api** (`:8082`): 재고 예약(Reservation), 결제 대기 TTL 만료, 재고 해제 및 보상 처리.
 - **logistics-api** (`:8084`): 배송 요청 생성, 배송 상태 관리, 배송 상태 이력 저장, 주문 이벤트 수신, Transactional Outbox 기반 배송 이벤트 발행.
 - **payment-api**: 독립 서비스가 아닌 `product-api` 내부에 약식 구현된 결제 흐름.
+- **address-api (mock)** (`:8090`): `order-api`의 http 모드 검증을 위한 WireMock 기반 주소 조회 테스트 서버 (`GET /addresses/{id}`).
 
 ---
 
@@ -235,6 +236,25 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 - HTTP 구현체는 `404 → ADDRESS_NOT_FOUND`, `5xx/타임아웃/기타 오류 → ADDRESS_LOOKUP_FAILED`로 예외를 매핑
 
 이를 통해 현재는 stub 기반 개발과 검증을 유지하면서도, 실제 주소 서비스가 준비되면 설정만 변경해 HTTP 기반 구현체로 전환할 수 있는 구조를 마련했습니다.
+
+
+### mock address-api 기반 http 모드 검증
+
+설정 기반 분리만으로 끝내지 않고, `WireMock` 기반의 경량 `mock address-api`를 추가해 `order-api`의 `mode=http` 동작을 실제 Minikube 환경에서 검증했습니다.
+
+- `address-api/Dockerfile`과 `address-api/mappings/addresses.json` 추가
+- `deployment/address-api/`에 mock 서버용 Deployment / Service 추가
+- `order-api`는 기본 설정은 그대로 두고, 검증 시점에만 환경변수로 `ADDRESS_CLIENT_MODE=http` 전환
+- `GET /addresses/1`, `/2`, `/3` 정상 응답
+- `GET /addresses/999` → 404
+- `GET /addresses/503` → 503
+
+실제 검증 결과:
+- `addressId=1` 주문 생성 성공 → `orders.recipient_*`에 mock 주소 저장
+- `addressId=999` → `ADDRESS_NOT_FOUND` (404)
+- `addressId=503` → `ADDRESS_LOOKUP_FAILED` (500)
+
+이를 통해 stub 기반 설계가 실제 HTTP 호출 기반 구현체로도 확장 가능함을 확인했고, 이후 실제 사용자 주소 서비스로 교체할 수 있는 검증된 전환 경로를 확보했습니다.
 
 ---
 
@@ -954,17 +974,104 @@ address:
     read-timeout-ms: 2000
 ```
 
-기본값은 `stub`이며, 현재 로컬/Minikube 검증은 이 설정을 기준으로 동작합니다.
+기본값은 `stub`이며, 평소 로컬/Minikube 검증은 이 설정을 기준으로 동작합니다.
 
-**HTTP 구현체 전환 예시**
+**mock address-api 빌드 및 배포 (http 모드 검증용)**
 
 ```bash
-# 예시: 환경변수로 override
-export ADDRESS_CLIENT_MODE=http
-export ADDRESS_CLIENT_BASE_URL=http://address-api:8090
+docker build -t sparta-msa-final-project-address-api:latest ./address-api
+minikube image load sparta-msa-final-project-address-api:latest
+kubectl apply -f deployment/address-api/
+kubectl rollout status deployment/address-api -n ecommerce
 ```
 
-실제 `http` 모드 검증을 하려면 주소 서비스 서버가 먼저 준비되어 있어야 합니다. 현재 README의 수동 검증 예시는 기본 `stub` 모드 기준입니다.
+**mock address-api 로컬 확인**
+
+```bash
+kubectl port-forward svc/address-api-svc 8090:8090 -n ecommerce
+
+curl -s http://localhost:8090/addresses/1 | jq .
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/addresses/999
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/addresses/503
+```
+
+기대 결과:
+- `/addresses/1` → `홍길동 / 서울시 강남구 테헤란로 1`
+- `/addresses/999` → `404`
+- `/addresses/503` → `503`
+
+**order-api를 http 모드로 임시 전환**
+
+```bash
+kubectl set env deployment/order-api -n ecommerce \
+  ADDRESS_CLIENT_MODE=http \
+  ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090 \
+  ADDRESS_CLIENT_CONNECT_TIMEOUT_MS=1000 \
+  ADDRESS_CLIENT_READ_TIMEOUT_MS=2000
+
+kubectl rollout status deployment/order-api -n ecommerce
+```
+
+**http 모드 성공 경로 검증**
+
+```bash
+curl -X POST http://localhost:8083/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": 1,
+    "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
+    "addressId": 1
+  }'
+
+curl http://localhost:8083/api/orders/status/<IDEM_KEY>
+# → { "status": "CREATED", "orderId": <ORDER_ID>, "shipmentStatus": "READY", ... }
+
+kubectl exec -n ecommerce order-db-0 -- psql -U postgres -d orderdb -c "
+SELECT id, order_no, status, recipient_name, recipient_address
+FROM orders
+WHERE id = <ORDER_ID>;
+"
+```
+
+기대 결과:
+- `recipient_name = 홍길동`
+- `recipient_address = 서울시 강남구 테헤란로 1`
+
+**http 모드 예외 매핑 검증**
+
+```bash
+# 404 -> ADDRESS_NOT_FOUND
+curl -i -X POST http://localhost:8083/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": 1,
+    "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
+    "addressId": 999
+  }'
+
+# 503 -> ADDRESS_LOOKUP_FAILED
+curl -i -X POST http://localhost:8083/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": 1,
+    "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
+    "addressId": 503
+  }'
+```
+
+**검증 후 stub 모드 복원**
+
+```bash
+kubectl set env deployment/order-api -n ecommerce \
+  ADDRESS_CLIENT_MODE- \
+  ADDRESS_CLIENT_BASE_URL- \
+  ADDRESS_CLIENT_CONNECT_TIMEOUT_MS- \
+  ADDRESS_CLIENT_READ_TIMEOUT_MS-
+
+kubectl rollout status deployment/order-api -n ecommerce
+```
+
+이 과정을 통해 기본 실행은 `stub`로 유지하면서도, 필요할 때는 mock `address-api`를 붙여 `http` 모드까지 검증할 수 있습니다.
 
 **배송 상태 변경**
 
@@ -1171,8 +1278,8 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 
 ### 도메인 / 운영
 - 사용자 주소 서비스 연동 고도화
-    - 실제 address-api 서버 구축 후 `address.client.mode=http` 기반 E2E 검증
-    - Kubernetes `deployment.yaml`에 `ADDRESS_CLIENT_MODE`, `ADDRESS_CLIENT_BASE_URL` 반영
+    - mock `address-api`를 실제 사용자 주소 관리 서버로 교체
+    - Kubernetes `deployment.yaml`에 `ADDRESS_CLIENT_MODE`, `ADDRESS_CLIENT_BASE_URL` 반영 여부 결정
     - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
     - 삭제된 주소 / 비활성 주소 정책 확정
 - 배송지 변경 이력 관리 고도화
@@ -1218,3 +1325,5 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~addressId 기반 주문 배송지 해소 추가 (`CreateOrderRequest.addressId`, `AddressServiceClient`, `StubAddressServiceClient`)~~
 - ~~addressId 우선 / shippingAddress fallback / 배송지 누락 400 / 잘못된 addressId 404 검증~~
 - ~~AddressServiceClient를 설정 기반(stub|http)으로 분리하고 HTTP 구현체/예외 매핑 준비~~
+- ~~WireMock 기반 mock `address-api` 추가 및 `mode=http` 검증 환경 구성~~
+- ~~`addressId=1` 성공 경로와 `999 -> ADDRESS_NOT_FOUND`, `503 -> ADDRESS_LOOKUP_FAILED` 검증~~
