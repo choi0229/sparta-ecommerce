@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: address-api
+  namespace: ecommerce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: address-api
+  template:
+    metadata:
+      labels:
+        app: address-api
+    spec:
+      containers:
+        - name: address-api
+          image: sparta-msa-final-project-address-api:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
