@@ -1,6 +1,5 @@
 package org.teamsparta.orderapi.domain.order.client;
 
-import org.springframework.stereotype.Component;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 
@@ -10,7 +9,6 @@ import java.util.Map;
  * address-api 미구축 시 사용하는 인메모리 Stub.
  * 실제 address-api가 준비되면 HTTP 구현체로 교체하고 이 클래스를 제거한다.
  */
-@Component
 public class StubAddressServiceClient implements AddressServiceClient {
 
     private static final Map<Long, AddressInfo> STORE = Map.of(
