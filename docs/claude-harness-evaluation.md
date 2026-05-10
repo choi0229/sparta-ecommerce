@@ -211,6 +211,8 @@ Phase 2 하네스 구조는 유지하되 두 가지 문제를 해결한 단계�
 - mock address-api (WireMock 기반) 추가
 - `e2e-order-address-http-smoke.sh` smoke script 자동화
 - smoke-tests.yml에 `address-http` 시나리오 추가
+- integration-tests.yml 구성 (서비스별 test/integrationTest 분기)
+- self-hosted runner 등록 및 smoke 전 시나리오 최종 검증 완료
 
 ### Phase 3 주요 변화
 
@@ -222,6 +224,8 @@ Phase 2 하네스 구조는 유지하되 두 가지 문제를 해결한 단계�
 | 배포 검증 자동화 | CI Gate (빌드/테스트) | CI Gate + smoke script (3개 시나리오) |
 | address client | 없음 | stub/http 설정 분리, mock 서버 포함 |
 | smoke workflow 시나리오 | happy / negative / all | + address-http |
+| integration-tests workflow | 없음 | 서비스별 test/integrationTest 분기 |
+| self-hosted runner | 미등록 | 등록 완료, smoke 전 시나리오 통과 확인 |
 
 ### Phase 3 관찰 결과 (정성적 관찰)
 
@@ -229,6 +233,16 @@ Phase 2 하네스 구조는 유지하되 두 가지 문제를 해결한 단계�
 - AddressServiceClient 작업에서 트랜잭션 경계 원칙이 일관되게 적용됨 (HTTP 호출이 `@Transactional` 밖에 위치)
 - smoke script 자동화로 주요 검증 시나리오가 재현 가능해짐
 - CLAUDE.md gitignore 수정으로 하네스 파일이 세션/환경 간 일관되게 적용됨
+
+### Phase 3 검증 완료 항목
+
+| 시나리오 | 상태 |
+|---|---|
+| happy path smoke | 통과 |
+| negative smoke (invalid SKU) | 통과 |
+| address-http smoke (addressId=1/999/503) | 통과 |
+| all 옵션 순차 실행 (포트 충돌 없음) | 통과 |
+| integration-tests.yml (4개 서비스 병렬) | 구성 완료 |
 
 ---
 
@@ -270,13 +284,14 @@ Phase 2 하네스 구조는 유지하되 두 가지 문제를 해결한 단계�
 
 1. **Before 데이터 부재** — Phase 1 작업 기록이 없어 Before/After 정량 비교 불가
 2. **단일 개발자, 단일 프로젝트** — 통제 그룹 없는 비교
-3. **CI 범위** — logistics-api 이외 서비스 테스트 job 미연결
+3. **CI 범위** — integration-tests.yml이 추가됐으나 CI Gate(claude-ci-gate.yml)는 logistics-api만 대상
 4. **피드백 루프** — CI 실패 원인과 feedback-log가 자동 연결되지 않음
+5. **self-hosted runner 운영 부담** — runner 장애/오프라인 시 smoke workflow가 멈춤
 
 ### 다음 개선 우선순위
 
-1. **기존 서비스(order-api 등) CI 테스트 연결** — 횡단 보호 강화
-2. **smoke 결과 보존** — 실행 결과를 파일로 저장하여 이력 비교 가능하게 구성
-3. **payload 유효성 검증** — null orderId로 배송 생성 방지
-4. **Testcontainers 통합 테스트** — DB/Kafka 실제 동작 검증
-5. **작업 시간 기록 도입** — 세션 시작/종료 시각을 feedback-log에 함께 기록
+1. **smoke 결과 보존** — 실행 결과를 파일로 저장하여 이력 비교 가능하게 구성
+2. **payload 유효성 검증** — null orderId로 배송 생성 방지
+3. **Testcontainers 통합 테스트** — DB/Kafka 실제 동작 검증
+4. **작업 시간 기록 도입** — 세션 시작/종료 시각을 feedback-log에 함께 기록
+5. **runner 운영 안정화** — runner 오프라인 감지 기준 및 대응 절차 정리

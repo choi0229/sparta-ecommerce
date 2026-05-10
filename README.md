@@ -1341,3 +1341,5 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~AddressServiceClient를 설정 기반(stub|http)으로 분리하고 HTTP 구현체/예외 매핑 준비~~
 - ~~WireMock 기반 mock `address-api` 추가 및 `mode=http` 검증 환경 구성~~
 - ~~`addressId=1` 성공 경로와 `999 -> ADDRESS_NOT_FOUND`, `503 -> ADDRESS_LOOKUP_FAILED` 검증~~
+- ~~address-http smoke script 자동화 및 smoke-tests.yml 연결 (7단계 전체 검증)~~
+- ~~integration-tests.yml 서비스별 test/integrationTest 분기 구성~~

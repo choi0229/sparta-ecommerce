@@ -280,3 +280,93 @@ Kafka consumer는 정상 동작 중이었으나 요청이 의도한 Pod에 도�
 - `kubectl set env` 또는 deployment 변경 후에는 반드시 rollout status 확인 후 검증 진행
 - 비동기 처리 이슈처럼 보일 때 "배포가 실제로 반영되었는가"를 먼저 확인
 - smoke script 구조에서 env 변경 직후 `kubectl rollout status`를 필수 단계로 포함 (현재 `[3/7]` 단계에서 처리 중)
+
+---
+
+## 2026-05-10 — smoke 안정화, integration-tests 분기, self-hosted runner 등록
+
+### 14. 배송지 필수 정책 변경으로 기존 smoke 스크립트가 실패한 사례
+
+**발견 경로**
+GitHub Actions Smoke Tests(all)에서 기존 happy smoke와 negative smoke 모두 `SHIPPING_ADDRESS_REQUIRED`로 실패.
+
+**원인**
+order-api에 `addressId` 또는 `shippingAddress` 중 하나를 반드시 포함해야 하는 정책이 추가되었습니다.
+기존 smoke script 요청 본문에 배송지 정보가 없어 정책 위반으로 거부되었습니다.
+smoke script는 작성 시점에는 유효했지만, API 정책이 변경되면서 조용히 실패했습니다.
+
+**수정**
+`e2e-order-shipment-smoke.sh`와 `e2e-order-invalid-sku-smoke.sh` 양쪽 CREATE_BODY에
+`"shippingAddress":{"recipientName":"홍길동","recipientAddress":"서울시 강남구 테헤란로 1"}` 추가.
+negative smoke는 SKU가 유효하지 않으므로 배송지는 정상값으로 두어 SKU 실패만 유도.
+
+**재발 방지**
+- API 요청 정책이 바뀌면 smoke script도 함께 검토
+- smoke 실패 시 "클러스터 문제" 전에 "요청 포맷 정책 위반" 가능성을 먼저 확인
+
+---
+
+### 15. port-forward가 종료 중인 이전 Pod에 연결되는 문제
+
+**발견 경로**
+address-http smoke [4/7] 단계에서 port-forward 프로세스가 실행됐지만 [5/7]에서 curl exit code 7(connection refused) 발생.
+
+**원인**
+`kubectl set env`로 환경변수를 변경하면 기존 Pod가 종료되면서 새 Pod가 생성됩니다.
+잠깐 동안 이전 Pod와 새 Pod가 동시에 존재합니다.
+`kubectl port-forward svc/<name>` 방식은 서비스가 선택하는 Pod에 연결되므로, 종료 중인 이전 Pod에 연결될 수 있었습니다.
+`kubectl wait --for=condition=ready pod -l app=order-api`도 이전 Pod가 ready 상태를 유지하는 동안은 통과됩니다.
+
+**수정**
+`--sort-by=.metadata.creationTimestamp | tail -n 1`로 가장 최근에 생성된 Pod 이름을 추출.
+해당 Pod에 직접 `kubectl wait`와 `kubectl port-forward pod/<name>`을 적용.
+
+**재발 방지**
+- rollout 후 port-forward 대상은 Service 경유보다 특정 Pod에 직접 연결하는 방식이 안정적
+- 새 Pod 이름 추출: `--sort-by=.metadata.creationTimestamp -o ... | tail -n 1`
+
+---
+
+### 16. integrationTest task가 없는 서비스에서 GitHub Actions 실패
+
+**발견 경로**
+integration-tests.yml에서 전체 서비스(all) 실행 시 `product-api`에서 `Task 'integrationTest' not found` 오류로 실패.
+
+**원인**
+`order-api`와 `logistics-api`는 `integrationTest` Gradle task가 정의되어 있지만,
+`product-api`와 `inventory-api`는 일반 `test` task만 존재합니다.
+모든 서비스에 동일 명령을 적용하면 task가 없는 서비스에서 빌드 오류가 발생합니다.
+
+**수정**
+workflow에서 서비스별 분기 추가:
+- `order-api`, `logistics-api`: `./gradlew integrationTest`
+- `product-api`, `inventory-api`: `./gradlew test`
+
+**재발 방지**
+- 새 서비스 추가 시 integrationTest task 유무를 integration-tests.yml 분기 조건에 함께 반영
+
+---
+
+### 17. smoke workflow가 self-hosted runner를 필요로 하는 이유
+
+**발견 경로**
+smoke-tests.yml을 등록했지만 runner가 없어 "Waiting for a runner to pick up this job" 상태에서 멈춤.
+
+**원인**
+smoke script가 `localhost:8083`, `localhost:8084`로 접근하는 구조이므로,
+runner 자체가 minikube 클러스터와 같은 머신에서 실행되어야 합니다.
+GitHub-hosted runner는 독립 VM에서 실행되므로 로컬 클러스터에 접근할 수 없습니다.
+address-http 시나리오는 추가로 `docker build`와 `minikube image load`도 필요합니다.
+
+**수정**
+`runs-on: self-hosted`로 설정. 로컬 머신에서 runner를 직접 등록하여 실행.
+runner 등록 후 happy / negative / address-http / all 시나리오가 모두 통과됨을 확인.
+
+**참고**
+public repo에서 self-hosted runner를 사용할 경우 외부 fork PR이 workflow를 악용할 수 있으므로,
+workflow_dispatch 전용으로 제한되어 있는지 확인하는 것이 권장됩니다.
+현재 smoke-tests.yml은 workflow_dispatch 전용으로만 트리거됩니다.
+
+**재발 방지**
+- smoke workflow는 self-hosted runner 없이는 진행되지 않음
+- runner 등록 방법은 `docs/runbooks/smoke-test-runner-setup.md` 참조

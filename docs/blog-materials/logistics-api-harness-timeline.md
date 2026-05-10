@@ -380,3 +380,58 @@ Phase 10 전후로 하네스 구조가 어떻게 달라졌는지 한눈에 보�
   - `needs: smoke-test` + `always()` 조건으로 순차 실행 보장 (포트 8083 충돌 방지)
   - 전용 preflight (docker, minikube, kubectl 확인)
   - `e2e-order-address-http-smoke.sh` 실행
+
+---
+
+## Phase 21 — address-http smoke 안정화
+
+### 기존 smoke 수정 — 배송지 필수 정책 반영
+- order-api에 `addressId` 또는 `shippingAddress` 필수 정책이 추가되어 기존 happy/negative smoke 실패 확인
+- `e2e-order-shipment-smoke.sh`, `e2e-order-invalid-sku-smoke.sh` CREATE_BODY에 `shippingAddress` 추가
+- negative smoke는 SKU를 `SKU-INVALID`로 유지하고 배송지만 정상값으로 수정
+
+### port-forward 불안정 → 최신 Pod 직접 연결로 전환
+- rollout 직후 이전 Pod와 새 Pod가 잠깐 공존하는 상태에서 `kubectl port-forward svc/` 방식이 이전 Pod에 연결되는 문제 발생
+- `--sort-by=.metadata.creationTimestamp | tail -n 1`로 최신 Pod 이름 추출
+- `kubectl wait`와 `kubectl port-forward`를 해당 Pod에 직접 지정
+
+### health check 대기 강화
+- `kubectl wait --for=condition=ready`만으로는 JVM HTTP 서버 초기화 완료를 보장하지 못함
+- health check 루프를 `seq 1 15` → `seq 1 30`으로 연장
+- curl 옵션을 `--max-time 2 >/dev/null 2>&1`로 강화
+
+### 디버깅 로그 보강
+- `PF_LOG=$(mktemp)`로 port-forward 출력 캡처
+- `PF_READY` 플래그로 health check 성공 여부 명시적 추적
+- `RUN_FAILED` 플래그로 실패 시에만 port-forward 로그 tail 출력
+- Step 5 curl을 `if ! CREATE_RESP=$(curl ...); then` 구조로 감싸 exit code 7 발생 시 진단 메시지 출력
+
+---
+
+## Phase 22 — integration-tests workflow 구성
+
+### 서비스별 test/integrationTest 분기
+- `integration-tests.yml` 신규 작성
+- 4개 서비스 병렬 matrix 실행 (`product-api`, `order-api`, `inventory-api`, `logistics-api`)
+- `order-api`, `logistics-api`: `./gradlew integrationTest`
+- `product-api`, `inventory-api`: `./gradlew test` (integrationTest task 없음)
+- 분기 이유: 서비스별 Gradle task 구성이 다르고 모든 서비스에 통일된 명령을 적용하면 task 미존재 오류 발생
+- `upload-artifact`로 각 서비스 테스트 결과 보존
+
+---
+
+## Phase 23 — self-hosted runner 등록 및 smoke 전 시나리오 최종 성공
+
+### self-hosted runner 등록
+- smoke-tests.yml이 `runs-on: self-hosted`로 설정되어 있어 runner 없이는 실행 불가
+- GitHub Actions Settings → Runners 화면에서 로컬 머신에 runner 등록
+- 등록 후 workflow가 정상 실행 가능 상태가 됨
+
+### smoke 전 시나리오 통과 확인
+- happy path smoke: `e2e-order-shipment-smoke.sh` 통과
+- negative smoke: `e2e-order-invalid-sku-smoke.sh` 통과
+- address-http smoke: `e2e-order-address-http-smoke.sh` 7단계 전체 통과
+  - [5/7] addressId=1 → status=CREATED, shipmentStatus=READY
+  - [6/7] addressId=999 → HTTP 404, errorCode=ADDRESS_NOT_FOUND
+  - [7/7] addressId=503 → HTTP 500, errorCode=ADDRESS_LOOKUP_FAILED
+- all 옵션으로 실행 시 happy/negative → address-http 순차 실행 (포트 충돌 없음)

@@ -503,3 +503,114 @@ rollout이 완료되지 않은 상태(`Waiting for rollout to finish`)라면 전
 - 비동기 처리 이슈(Kafka, Outbox)처럼 보일 때 "배포가 실제로 반영되었는가"를 먼저 확인합니다.
 - `kubectl set env` 또는 deployment 변경 후에는 반드시 `kubectl rollout status`로 완료를 확인한 뒤 검증합니다.
 - smoke script 구조에서 env 변경 직후 rollout status 확인 단계를 필수로 포함하면 이 오판을 방지합니다.
+
+---
+
+## 19. 배송지 필수 정책 변경으로 기존 happy/negative smoke 실패
+
+**현상**
+GitHub Actions Smoke Tests(all) 실행 시 기존 happy smoke와 negative smoke 모두 `SHIPPING_ADDRESS_REQUIRED`로 주문 생성 실패.
+
+**원인**
+order-api에 `addressId` 또는 `shippingAddress` 중 하나를 반드시 포함해야 하는 정책이 추가된 이후,
+기존 smoke script CREATE_BODY에는 배송지 정보가 없었습니다.
+smoke script 자체는 문법상 정상이지만, API 정책 변경에 의해 요청이 거부됩니다.
+
+**해결**
+두 smoke script CREATE_BODY에 `"shippingAddress":{"recipientName":"홍길동","recipientAddress":"서울시 강남구 테헤란로 1"}` 추가.
+negative smoke는 배송지는 정상값으로 두고 SKU를 `SKU-INVALID`로 유지.
+
+**교훈**
+- smoke script가 "최근 바꾼 것 없음" 상태에서 실패하면 API 정책 변경을 먼저 의심합니다.
+- 신규 정책 추가 시 기존 smoke script를 함께 검토하는 습관이 필요합니다.
+
+---
+
+## 20. port-forward가 종료 중인 이전 Pod에 연결되는 문제
+
+**현상**
+address-http smoke [4/7] port-forward 시작 후 [5/7] curl에서 exit code 7(connection refused) 발생.
+`PF_READY=true`가 되었음에도 이후 요청이 거부됨.
+
+**원인**
+rollout 이후 잠깐 동안 이전 Pod(종료 중)와 새 Pod가 동시에 존재합니다.
+`kubectl port-forward svc/<name>` 방식은 서비스 레이블 기반으로 Pod를 선택하므로, 종료 중인 이전 Pod에 연결될 수 있습니다.
+health check(`/actuator/health`) 타이밍에 따라 이전 Pod에서 응답이 돌아올 수도 있어 PF_READY가 true가 되더라도 이후 요청이 실패합니다.
+
+**해결**
+```bash
+ORDER_API_POD=$(kubectl get pods -n "${NAMESPACE}" -l app=order-api \
+  --sort-by=.metadata.creationTimestamp \
+  -o custom-columns=NAME:.metadata.name --no-headers | tail -n 1)
+kubectl wait --for=condition=ready pod/"${ORDER_API_POD}" -n "${NAMESPACE}" --timeout=120s
+kubectl port-forward pod/"${ORDER_API_POD}" 8083:8083 -n "${NAMESPACE}" &
+```
+
+**교훈**
+- rollout 이후 port-forward 대상은 Service 경유보다 최신 Pod에 직접 지정하는 방식이 안정적입니다.
+- `--sort-by=.metadata.creationTimestamp | tail -n 1` 패턴으로 최신 Pod 이름을 추출합니다.
+
+---
+
+## 21. rollout 완료 후에도 port-forward health check 타임아웃 발생
+
+**현상**
+`kubectl wait --for=condition=ready pod/<name>` 이 완료됐음에도 health check(`/actuator/health`) 루프가 응답을 받지 못해 timeout.
+
+**원인**
+`kubectl wait --for=condition=ready`는 kubelet 관점의 probe 통과 기준입니다.
+JVM 애플리케이션의 경우 probe 통과 이후에도 HTTP 서버가 완전히 초기화되는 데 추가 시간이 걸릴 수 있습니다.
+기존 구현은 port-forward 직후 15초(seq 1 15)만 대기하고 health check를 시도했습니다.
+
+**해결**
+health check 루프를 `seq 1 30`으로 연장하고, curl 옵션을 `curl -sS --max-time 2 >/dev/null 2>&1`로 강화.
+
+**교훈**
+- `kubectl wait --for=condition=ready`는 HTTP 레이어 준비를 보장하지 않습니다.
+- JVM 기반 서비스는 probe 통과 이후에도 몇 초 더 대기가 필요할 수 있습니다.
+
+---
+
+## 22. integrationTest task가 없는 서비스에서 GitHub Actions 실패
+
+**현상**
+integration-tests.yml 전체 실행(all) 시 `product-api`에서 `Task 'integrationTest' not found in root project` 오류.
+
+**원인**
+`order-api`와 `logistics-api`는 별도의 `integrationTest` Gradle task가 정의되어 있지만,
+`product-api`와 `inventory-api`는 표준 `test` task만 존재합니다.
+모든 서비스에 `./gradlew integrationTest`를 적용하면 task가 없는 서비스에서 빌드 실패합니다.
+
+**해결**
+workflow에 서비스별 분기 추가:
+```yaml
+if [[ "${{ matrix.service }}" == "order-api" || "${{ matrix.service }}" == "logistics-api" ]]; then
+  ./gradlew integrationTest
+else
+  ./gradlew test
+fi
+```
+
+**교훈**
+- 멀티 서비스 workflow에서 모든 서비스가 동일한 Gradle task를 갖는다고 가정하면 안 됩니다.
+- 새 서비스 추가 시 integrationTest task 유무를 workflow 분기 조건에 함께 반영합니다.
+
+---
+
+## 23. self-hosted runner 없이 smoke workflow 실행 시 무한 대기
+
+**현상**
+smoke-tests.yml을 push했지만 workflow가 "Waiting for a runner to pick up this job" 상태에서 진행되지 않음.
+
+**원인**
+smoke-tests.yml이 `runs-on: self-hosted`로 설정되어 있습니다.
+GitHub-hosted runner에서는 `localhost` 클러스터에 접근할 수 없으므로 의도적으로 self-hosted 전용으로 제한한 것입니다.
+self-hosted runner가 등록되어 있지 않으면 workflow는 runner를 기다리며 멈춥니다.
+
+**해결**
+로컬 머신에서 runner를 GitHub Actions Settings → Runners 화면을 통해 등록.
+runner가 online 상태가 된 이후 smoke workflow가 정상 실행되어 모든 시나리오 통과 확인.
+
+**교훈**
+- `runs-on: self-hosted` workflow는 runner를 별도로 등록하지 않으면 실행되지 않습니다.
+- workflow_dispatch 전용 트리거로 제한하면 외부 fork PR 실행 위험을 줄일 수 있습니다.
