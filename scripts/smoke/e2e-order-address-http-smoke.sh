@@ -30,7 +30,10 @@ IMAGE_NAME="sparta-msa-final-project-address-api:latest"
 POLL_INTERVAL=3
 TIMEOUT=60
 PF_PID=""
-RESP_TMP="/tmp/addr_smoke_resp.json"
+PF_LOG=$(mktemp)
+PF_READY=false
+RUN_FAILED=true
+RESP_TMP=$(mktemp)
 
 # ── 프로젝트 루트 확인 ─────────────────────────────────────────────────────────
 if [[ ! -d "./address-api" ]]; then
@@ -82,6 +85,12 @@ cleanup() {
     kill "${PF_PID}" 2>/dev/null || true
     echo "[cleanup] port-forward (PID=${PF_PID}) 종료"
   fi
+
+  if [[ "${RUN_FAILED}" == "true" && -f "${PF_LOG}" ]]; then
+    echo ""
+    echo "=== [cleanup] port-forward 최근 로그 (tail -50) ==="
+    tail -50 "${PF_LOG}" || true
+  fi
 }
 
 trap cleanup EXIT
@@ -121,15 +130,23 @@ echo "[OK] order-api rollout 완료 (mode=http)"
 echo ""
 echo "=== [4/7] order-api port-forward 시작 (localhost:8083) ==="
 
-kubectl port-forward svc/order-api-svc 8083:8083 -n "${NAMESPACE}" &>/dev/null &
+kubectl port-forward svc/order-api-svc 8083:8083 -n "${NAMESPACE}" >"${PF_LOG}" 2>&1 &
 PF_PID=$!
 
 for i in $(seq 1 15); do
   sleep 1
   if curl -s --max-time 1 "${ORDER_API}/actuator/health" &>/dev/null; then
+    PF_READY=true
     break
   fi
 done
+
+if [[ "${PF_READY}" != "true" ]]; then
+  echo "[FAIL] port-forward 가 15초 내에 응답하지 않습니다."
+  echo "       port-forward 로그:"
+  tail -50 "${PF_LOG}" || true
+  exit 1
+fi
 
 echo "[OK] port-forward 준비 완료 (PID=${PF_PID})"
 
@@ -137,9 +154,14 @@ echo "[OK] port-forward 준비 완료 (PID=${PF_PID})"
 echo ""
 echo "=== [5/7] addressId=1 성공 경로 검증 ==="
 
-CREATE_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
+if ! CREATE_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
-  -d '{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}],"addressId":1}')
+  -d '{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}],"addressId":1}'); then
+  echo "[FAIL] POST /api/orders 요청 실패 — port-forward 가 동작하지 않거나 order-api 응답 없음"
+  echo "       port-forward 로그:"
+  tail -50 "${PF_LOG}" || true
+  exit 1
+fi
 
 echo "응답: ${CREATE_RESP}"
 
@@ -224,6 +246,8 @@ if [[ "${ERROR_CODE}" != "ADDRESS_LOOKUP_FAILED" ]]; then
 fi
 
 echo "[OK] addressId=503 → HTTP 500, errorCode=ADDRESS_LOOKUP_FAILED"
+
+RUN_FAILED=false
 
 # ── 최종 결과 ──────────────────────────────────────────────────────────────────
 echo ""
