@@ -23,7 +23,8 @@
 - **inventory-api** (`:8082`): 재고 예약(Reservation), 결제 대기 TTL 만료, 재고 해제 및 보상 처리.
 - **logistics-api** (`:8084`): 배송 요청 생성, 배송 상태 관리, 배송 상태 이력 저장, 주문 이벤트 수신, Transactional Outbox 기반 배송 이벤트 발행.
 - **payment-api**: 독립 서비스가 아닌 `product-api` 내부에 약식 구현된 결제 흐름.
-- **address-api (mock)** (`:8090`): `order-api`의 http 모드 검증을 위한 WireMock 기반 주소 조회 테스트 서버 (`GET /addresses/{id}`).
+- **address-api** (`:8090`): Spring Boot + PostgreSQL 기반 주소 조회 서비스(MVP). `GET /addresses/{id}`를 제공하며 `order-api`의 `addressId` 기반 배송지 해소에 사용됩니다.
+- **address-api (mock)** (`:8090`): `address-http` smoke 검증 전용 WireMock 서버. `Dockerfile.mock`으로 별도 빌드되며 성공/404/503 시나리오를 재현합니다.
 
 ---
 
@@ -238,23 +239,46 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 이를 통해 현재는 stub 기반 개발과 검증을 유지하면서도, 실제 주소 서비스가 준비되면 설정만 변경해 HTTP 기반 구현체로 전환할 수 있는 구조를 마련했습니다.
 
 
+### address-api 실서비스 MVP 추가
+
+`addressId` 기반 주문 흐름을 stub / mock 수준에만 두지 않고, 실제 Spring Boot 서비스로 확장할 수 있도록 `address-api` MVP를 추가했습니다.
+
+- `address-api/Dockerfile`: Spring Boot 멀티스테이지 이미지
+- `deployment/infra/db/address-db.yaml`: address-db StatefulSet / Service
+- `deployment/address-api/deployment.yaml`: Spring Boot `address-api` Deployment / Service
+- `GET /addresses/{id}` 제공
+- PostgreSQL + Flyway 기반 `user_address` 테이블 및 seed data(`1`, `2`, `3`) 초기화
+- actuator health probe 적용 (`/actuator/health`)
+
+실제 수동 검증 결과:
+- `GET /addresses/1` → `홍길동 / 서울시 강남구 테헤란로 1`
+- `GET /addresses/999` → 404
+- `order-api`를 `ADDRESS_CLIENT_MODE=http`로 전환한 뒤 `addressId=1` 주문 생성 성공
+- 상태 조회 결과 `status=CREATED`, `orderId!=null`, `shipmentStatus=READY` 확인
+
+이를 통해 `HttpAddressServiceClient`가 real `address-api`와도 정상 연동됨을 검증했습니다.
+
 ### mock address-api 기반 http 모드 검증
 
-설정 기반 분리만으로 끝내지 않고, `WireMock` 기반의 경량 `mock address-api`를 추가해 `order-api`의 `mode=http` 동작을 실제 Minikube 환경에서 검증했습니다.
+반복 가능한 smoke 검증을 위해 `WireMock` 기반의 경량 `mock address-api`도 함께 유지합니다. 이 mock은 실서비스 대체가 아니라, **실패 경로(404 / 503)까지 포함한 재현 가능한 smoke 검증 자산**입니다.
 
-- `address-api/Dockerfile`과 `address-api/mappings/addresses.json` 추가
-- `deployment/address-api/`에 mock 서버용 Deployment / Service 추가
-- `order-api`는 기본 설정은 그대로 두고, 검증 시점에만 환경변수로 `ADDRESS_CLIENT_MODE=http` 전환
+- `address-api/Dockerfile.mock`과 `address-api/mappings/addresses.json` 사용
+- `address-http` smoke에서 mock 이미지를 빌드해 검증 시점에만 사용
 - `GET /addresses/1`, `/2`, `/3` 정상 응답
 - `GET /addresses/999` → 404
 - `GET /addresses/503` → 503
 
 실제 검증 결과:
-- `addressId=1` 주문 생성 성공 → `orders.recipient_*`에 mock 주소 저장
+- `addressId=1` 주문 생성 성공 → `orders.recipient_*` 반영
 - `addressId=999` → `ADDRESS_NOT_FOUND` (404)
 - `addressId=503` → `ADDRESS_LOOKUP_FAILED` (500)
 
-이를 통해 stub 기반 설계가 실제 HTTP 호출 기반 구현체로도 확장 가능함을 확인했고, 이후 실제 사용자 주소 서비스로 교체할 수 있는 검증된 전환 경로를 확보했습니다.
+즉 현재 구조는 다음과 같습니다.
+
+- **실서비스 경로**: Spring Boot `address-api` + `address-db`
+- **smoke 검증 경로**: `Dockerfile.mock` 기반 WireMock
+
+이렇게 분리함으로써 실서비스 검증과 반복 가능한 failure-path smoke를 동시에 유지할 수 있게 되었습니다.
 
 ---
 
@@ -581,16 +605,16 @@ curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 현재는 **DLQ 미도입**을 선택했습니다.
 
 - 이유
-    - FAILED 상태가 이미 DB-level 격리 역할을 수행
-    - `GET /admin/outbox?status=FAILED`로 즉시 조회 가능
-    - admin retry API로 수동 재처리 가능
-    - stale/high-retry/FAILED gauge/alert로 운영 신호 확보
-    - 현재 이벤트 종류가 제한적이어서 broken row가 대량 발생할 구조가 아님
+  - FAILED 상태가 이미 DB-level 격리 역할을 수행
+  - `GET /admin/outbox?status=FAILED`로 즉시 조회 가능
+  - admin retry API로 수동 재처리 가능
+  - stale/high-retry/FAILED gauge/alert로 운영 신호 확보
+  - 현재 이벤트 종류가 제한적이어서 broken row가 대량 발생할 구조가 아님
 
 - 재검토 기준
-    - FAILED row 일평균 100건 이상
-    - 자동 알림 연동이 필수인 시점
-    - 영구 실패와 재시도 가능 실패를 코드 레벨에서 구분해야 하는 시점
+  - FAILED row 일평균 100건 이상
+  - 자동 알림 연동이 필수인 시점
+  - 영구 실패와 재시도 가능 실패를 코드 레벨에서 구분해야 하는 시점
 
 관련 문서:
 - `docs/adr/001-outbox-dlq-decision.md`
@@ -635,25 +659,25 @@ scripts/claude-guardrails.sh
 - **CI Gate**: `guardrails` + 서비스별 unit test matrix(`product-api`, `order-api`, `inventory-api`, `logistics-api`) + `logistics-api build`
 - **integration-tests.yml**: `workflow_dispatch` 기반 통합 테스트 전용 워크플로
 - **smoke-tests.yml**: `workflow_dispatch` 기반 smoke 실행 워크플로 (`happy / negative / address-http / all` 선택)
-    - 현재 smoke 스크립트가 `localhost:8083`, `localhost:8084`를 사용하므로 **GitHub-hosted runner에서는 바로 실행 불가**
-    - self-hosted runner 또는 runner에서 접근 가능한 환경이 필요
-    - `address-http` 시나리오는 runner에 `docker`, `minikube` 추가 필요 (`happy` / `negative` 는 kubectl만 필요)
-    - 각 시나리오 실행 로그는 GitHub Actions artifact로 자동 업로드됨 (성공/실패 무관)
+  - 현재 smoke 스크립트가 `localhost:8083`, `localhost:8084`를 사용하므로 **GitHub-hosted runner에서는 바로 실행 불가**
+  - self-hosted runner 또는 runner에서 접근 가능한 환경이 필요
+  - `address-http` 시나리오는 runner에 `docker`, `minikube` 추가 필요 (`happy` / `negative` 는 kubectl만 필요)
+  - 각 시나리오 실행 로그는 GitHub Actions artifact로 자동 업로드됨 (성공/실패 무관)
 
 ### 운영/검증 자동화 보강
 
 - `scripts/smoke/e2e-order-shipment-smoke.sh`
-    - happy path smoke
-    - 주문 생성 → `shipmentStatus=READY`
-    - 배송 상태 변경 후 `shipmentStatus=SHIPPED`
+  - happy path smoke
+  - 주문 생성 → `shipmentStatus=READY`
+  - 배송 상태 변경 후 `shipmentStatus=SHIPPED`
 - `scripts/smoke/e2e-order-invalid-sku-smoke.sh`
-    - negative smoke
-    - invalid SKU → `FAILED + failureReason=MISSING_SKU[...]`
+  - negative smoke
+  - invalid SKU → `FAILED + failureReason=MISSING_SKU[...]`
 - `scripts/smoke/e2e-order-address-http-smoke.sh`
-    - mock address-api 빌드/배포 → order-api http 모드 전환 → 3개 시나리오 검증 → stub 모드 복원
-    - addressId=1 → `status=CREATED, shipmentStatus=READY`
-    - addressId=999 → HTTP 404, `ADDRESS_NOT_FOUND`
-    - addressId=503 → HTTP 500, `ADDRESS_LOOKUP_FAILED`
+  - mock address-api 빌드/배포 → order-api http 모드 전환 → 3개 시나리오 검증 → stub 모드 복원
+  - addressId=1 → `status=CREATED, shipmentStatus=READY`
+  - addressId=999 → HTTP 404, `ADDRESS_NOT_FOUND`
+  - addressId=503 → HTTP 500, `ADDRESS_LOOKUP_FAILED`
 
 Guardrails 검사 항목: `.DS_Store`, `.env`, `secrets/`, 의도하지 않은 `payment-api` 디렉터리, Claude Code 세션 로그, 위험 명령 문자열(`rm -rf`, `DROP TABLE`, `TRUNCATE`, `kubectl delete` 등).
 
@@ -662,9 +686,9 @@ Guardrails 검사 항목: `.DS_Store`, `.env`, `secrets/`, 의도하지 않은 `
 기존 `scripts/claude-guardrails.sh`는 CI에서만 쓰는 스크립트가 아니라, 로컬 Git hook으로도 자동 실행되도록 보강했습니다.
 
 - `.githooks/pre-commit`
-    - `git commit` 시 `scripts/claude-guardrails.sh` 자동 실행
+  - `git commit` 시 `scripts/claude-guardrails.sh` 자동 실행
 - `scripts/install-git-hooks.sh`
-    - `git config core.hooksPath .githooks` 설정용 1회 설치 스크립트
+  - `git config core.hooksPath .githooks` 설정용 1회 설치 스크립트
 ---
 
 ## 11. 프로젝트 실행 방법
@@ -983,10 +1007,54 @@ address:
 
 기본값은 `stub`이며, 평소 로컬/Minikube 검증은 이 설정을 기준으로 동작합니다.
 
-**mock address-api 빌드 및 배포 (http 모드 검증용)**
+**real address-api 빌드 및 배포 (Spring Boot MVP)**
 
 ```bash
+kubectl apply -f deployment/infra/db/address-db.yaml
+kubectl rollout status statefulset/address-db -n ecommerce --timeout=120s
+
 docker build -t sparta-msa-final-project-address-api:latest ./address-api
+minikube image load sparta-msa-final-project-address-api:latest
+
+kubectl apply -f deployment/address-api/deployment.yaml
+kubectl rollout status deployment/address-api -n ecommerce --timeout=120s
+```
+
+**real address-api 로컬 확인**
+
+```bash
+kubectl port-forward pod/<ADDRESS_API_POD> 8090:8080 -n ecommerce
+
+curl -s http://localhost:8090/addresses/1 | jq .
+curl -i http://localhost:8090/addresses/999
+```
+
+기대 결과:
+- `/addresses/1` → `홍길동 / 서울시 강남구 테헤란로 1`
+- `/addresses/999` → `404`
+- WireMock 헤더(`Matched-Stub-Id`, `Matched-Stub-Name`) 없음
+
+**order-api를 real address-api와 연동 검증**
+
+```bash
+kubectl set env deployment/order-api -n ecommerce   ADDRESS_CLIENT_MODE=http   ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090
+
+kubectl rollout status deployment/order-api -n ecommerce
+
+curl -i -X POST http://localhost:8083/api/orders   -H "Content-Type: application/json"   -d '{
+    "userId": 1,
+    "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
+    "addressId": 1
+  }'
+
+curl http://localhost:8083/api/orders/status/<IDEM_KEY>
+# → { "status": "CREATED", "orderId": <ORDER_ID>, "shipmentStatus": "READY", ... }
+```
+
+**mock address-api 빌드 및 배포 (address-http smoke 검증용)**
+
+```bash
+docker build -f ./address-api/Dockerfile.mock   -t sparta-msa-final-project-address-api:latest ./address-api
 minikube image load sparta-msa-final-project-address-api:latest
 kubectl apply -f deployment/address-api/
 kubectl rollout status deployment/address-api -n ecommerce
@@ -1007,24 +1075,18 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/addresses/503
 - `/addresses/999` → `404`
 - `/addresses/503` → `503`
 
-**order-api를 http 모드로 임시 전환**
+**order-api를 http 모드로 임시 전환 (mock 검증용)**
 
 ```bash
-kubectl set env deployment/order-api -n ecommerce \
-  ADDRESS_CLIENT_MODE=http \
-  ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090 \
-  ADDRESS_CLIENT_CONNECT_TIMEOUT_MS=1000 \
-  ADDRESS_CLIENT_READ_TIMEOUT_MS=2000
+kubectl set env deployment/order-api -n ecommerce   ADDRESS_CLIENT_MODE=http   ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090   ADDRESS_CLIENT_CONNECT_TIMEOUT_MS=1000   ADDRESS_CLIENT_READ_TIMEOUT_MS=2000
 
 kubectl rollout status deployment/order-api -n ecommerce
 ```
 
-**http 모드 성공 경로 검증**
+**http 모드 성공 경로 검증 (mock)**
 
 ```bash
-curl -X POST http://localhost:8083/api/orders \
-  -H "Content-Type: application/json" \
-  -d '{
+curl -X POST http://localhost:8083/api/orders   -H "Content-Type: application/json"   -d '{
     "userId": 1,
     "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
     "addressId": 1
@@ -1044,41 +1106,9 @@ WHERE id = <ORDER_ID>;
 - `recipient_name = 홍길동`
 - `recipient_address = 서울시 강남구 테헤란로 1`
 
-**http 모드 예외 매핑 검증**
-
-```bash
-# 404 -> ADDRESS_NOT_FOUND
-curl -i -X POST http://localhost:8083/api/orders \
-  -H "Content-Type: application/json" \
-  -d '{
-    "userId": 1,
-    "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
-    "addressId": 999
-  }'
-
-# 503 -> ADDRESS_LOOKUP_FAILED
-curl -i -X POST http://localhost:8083/api/orders \
-  -H "Content-Type: application/json" \
-  -d '{
-    "userId": 1,
-    "items": [{"sku": "SKU-TEST-001", "quantity": 1}],
-    "addressId": 503
-  }'
-```
-
-**검증 후 stub 모드 복원**
-
-```bash
-kubectl set env deployment/order-api -n ecommerce \
-  ADDRESS_CLIENT_MODE- \
-  ADDRESS_CLIENT_BASE_URL- \
-  ADDRESS_CLIENT_CONNECT_TIMEOUT_MS- \
-  ADDRESS_CLIENT_READ_TIMEOUT_MS-
-
-kubectl rollout status deployment/order-api -n ecommerce
-```
-
-이 과정을 통해 기본 실행은 `stub`로 유지하면서도, 필요할 때는 mock `address-api`를 붙여 `http` 모드까지 검증할 수 있습니다.
+이 과정을 통해 기본 실행은 `stub`로 유지하면서도,
+- 필요할 때는 **real `address-api`**와의 실제 연동을 검증할 수 있고
+- 반복 가능한 smoke에서는 **mock `address-api`**로 성공/실패 경로를 재현할 수 있습니다.
 
 위 절차를 자동화한 스크립트:
 
@@ -1237,11 +1267,11 @@ git commit --no-verify
    ```
 
 2. **product-api 실패 reply payload 확인**
-    - `idemKey`, `userId`, `requestItem`가 null 이 아닌지
-    - 실패 reply에도 correlation field가 유지되는지
+  - `idemKey`, `userId`, `requestItem`가 null 이 아닌지
+  - 실패 reply에도 correlation field가 유지되는지
 
 3. **order-api OrderEventConsumer 로그 확인**
-    - `success=false` 또는 `error!=null` 분기에서 `failOrder()` 호출 여부
+  - `success=false` 또는 `error!=null` 분기에서 `failOrder()` 호출 여부
 
 4. **negative smoke 재실행**
    ```bash
@@ -1293,28 +1323,28 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 
 ### 도메인 / 운영
 - 사용자 주소 서비스 연동 고도화
-    - mock `address-api`를 실제 사용자 주소 관리 서버로 교체
-    - Kubernetes `deployment.yaml`에 `ADDRESS_CLIENT_MODE`, `ADDRESS_CLIENT_BASE_URL` 반영 여부 결정
-    - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
-    - 삭제된 주소 / 비활성 주소 정책 확정
+  - Spring Boot 기반 `address-api` MVP는 완료되었으며, 다음 단계는 주소 생성/수정/목록/삭제까지 확장
+  - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
+  - 삭제된 주소 / 비활성 주소 정책 확정
+  - real / mock 이미지 태그 분리(`:real`, `:mock`) 검토
 - 배송지 변경 이력 관리 고도화
-    - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토
-    - 주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토
+  - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토
+  - 주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토
 - Outbox retry 정책 추가 고도화
-    - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
-    - DLQ 재검토 기준 도달 시 DB 기반 DLQ 도입
+  - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
+  - DLQ 재검토 기준 도달 시 DB 기반 DLQ 도입
 - `logistics_outbox_events` Gauge 부하 고려
-    - scrape 간격이 더 짧아지는 환경에서는 전용 스케줄러 기반 캐시 갱신 구조 검토
+  - scrape 간격이 더 짧아지는 환경에서는 전용 스케줄러 기반 캐시 갱신 구조 검토
 - Prometheus alert rule 실제 운영 적용
-    - Alertmanager / Slack / PagerDuty 연동
-    - FAILED / high-retry / stale recovery 기준의 알림 임계치 튜닝
+  - Alertmanager / Slack / PagerDuty 연동
+  - FAILED / high-retry / stale recovery 기준의 알림 임계치 튜닝
 
 ### Claude Code 하네스 / 자동화
 - self-hosted runner 운영 안정화
-    - runner 장애/오프라인 감지 기준 정리
-    - smoke / integration 수동 실행 결과 문서화
+  - runner 장애/오프라인 감지 기준 정리
+  - smoke / integration 수동 실행 결과 문서화
 - workflow 결과 요약 자동화
-    - 서비스별 test/integration/smoke 실행 결과를 README 또는 runbook에 연결
+  - 서비스별 test/integration/smoke 실행 결과를 README 또는 runbook에 연결
 
 ### 완료된 항목
 - ~~실제 Minikube/Kubernetes 환경에서 `logistics-api` 배포 검증~~
@@ -1344,3 +1374,5 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~`addressId=1` 성공 경로와 `999 -> ADDRESS_NOT_FOUND`, `503 -> ADDRESS_LOOKUP_FAILED` 검증~~
 - ~~address-http smoke script 자동화 및 smoke-tests.yml 연결 (7단계 전체 검증)~~
 - ~~integration-tests.yml 서비스별 test/integrationTest 분기 구성~~
+- ~~Spring Boot 기반 real `address-api` MVP 추가 (`GET /addresses/{id}`, PostgreSQL, Flyway, actuator probe)~~
+- ~~real `address-api` 배포 및 `order-api` http 모드 연동 수동 검증 완료 (`addressId=1 -> CREATED/READY`)~~
