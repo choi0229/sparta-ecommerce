@@ -23,8 +23,8 @@
 - **inventory-api** (`:8082`): 재고 예약(Reservation), 결제 대기 TTL 만료, 재고 해제 및 보상 처리.
 - **logistics-api** (`:8084`): 배송 요청 생성, 배송 상태 관리, 배송 상태 이력 저장, 주문 이벤트 수신, Transactional Outbox 기반 배송 이벤트 발행.
 - **payment-api**: 독립 서비스가 아닌 `product-api` 내부에 약식 구현된 결제 흐름.
-- **address-api** (`:8090`): Spring Boot + PostgreSQL 기반 주소 조회 서비스(MVP). `GET /addresses/{id}`를 제공하며 `order-api`의 `addressId` 기반 배송지 해소에 사용됩니다.
-- **address-api (mock)** (`:8090`): `address-http` smoke 검증 전용 WireMock 서버. `Dockerfile.mock`으로 별도 빌드되며 성공/404/503 시나리오를 재현합니다.
+- **address-api** (`:8090`, 이미지 태그 `:real`): Spring Boot + PostgreSQL 기반 주소 조회 서비스(MVP). `GET /addresses/{id}` 제공. `deployment/address-api/`로 배포.
+- **mock-address-api** (`:8090`, 이미지 태그 `:mock`): `address-http` smoke 전용 WireMock 서버. 성공/404/503 시나리오 재현. `deployment/mock-address-api/`로 배포.
 
 ---
 
@@ -239,46 +239,63 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 이를 통해 현재는 stub 기반 개발과 검증을 유지하면서도, 실제 주소 서비스가 준비되면 설정만 변경해 HTTP 기반 구현체로 전환할 수 있는 구조를 마련했습니다.
 
 
-### address-api 실서비스 MVP 추가
+### address-api / mock-address-api 분리 구조
 
-`addressId` 기반 주문 흐름을 stub / mock 수준에만 두지 않고, 실제 Spring Boot 서비스로 확장할 수 있도록 `address-api` MVP를 추가했습니다.
+real 검증과 smoke 검증을 이름·태그·배포 경로 기준으로 완전히 분리합니다.
 
-- `address-api/Dockerfile`: Spring Boot 멀티스테이지 이미지
-- `deployment/infra/db/address-db.yaml`: address-db StatefulSet / Service
-- `deployment/address-api/deployment.yaml`: Spring Boot `address-api` Deployment / Service
-- `GET /addresses/{id}` 제공
-- PostgreSQL + Flyway 기반 `user_address` 테이블 및 seed data(`1`, `2`, `3`) 초기화
-- actuator health probe 적용 (`/actuator/health`)
+| 구분 | 이미지 태그 | 배포 경로 | Service 이름 | 용도 |
+|---|---|---|---|---|
+| real | `:real` | `deployment/address-api/` | `address-api-svc` | 실서비스 연동 검증 |
+| mock | `:mock` | `deployment/mock-address-api/` | `mock-address-api-svc` | smoke 전용 (404/503 포함) |
 
-실제 수동 검증 결과:
+#### order-api ADDRESS_CLIENT_BASE_URL 설정 예시
+
+```bash
+# mock 검증용 (address-http smoke / WireMock)
+kubectl set env deployment/order-api -n ecommerce \
+  ADDRESS_CLIENT_MODE=http \
+  ADDRESS_CLIENT_BASE_URL=http://mock-address-api-svc:8090
+
+# real 검증용 (Spring Boot address-api)
+kubectl set env deployment/order-api -n ecommerce \
+  ADDRESS_CLIENT_MODE=http \
+  ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090
+```
+
+#### real address-api 배포 runbook
+
+```bash
+# 1. address-db 기동 (최초 1회)
+kubectl apply -f deployment/infra/db/address-db.yaml
+kubectl rollout status statefulset/address-db -n ecommerce --timeout=120s
+
+# 2. 이미지 빌드 및 minikube 로드
+docker build -t sparta-msa-final-project-address-api:real ./address-api
+minikube image load sparta-msa-final-project-address-api:real
+
+# 3. Deployment 적용
+kubectl apply -f deployment/address-api/
+kubectl rollout status deployment/address-api -n ecommerce --timeout=120s
+
+# 4. order-api를 real 모드로 전환
+kubectl set env deployment/order-api -n ecommerce \
+  ADDRESS_CLIENT_MODE=http \
+  ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090
+kubectl rollout status deployment/order-api -n ecommerce --timeout=120s
+```
+
+검증 완료 항목:
 - `GET /addresses/1` → `홍길동 / 서울시 강남구 테헤란로 1`
 - `GET /addresses/999` → 404
-- `order-api`를 `ADDRESS_CLIENT_MODE=http`로 전환한 뒤 `addressId=1` 주문 생성 성공
-- 상태 조회 결과 `status=CREATED`, `orderId!=null`, `shipmentStatus=READY` 확인
+- `order-api` http 모드에서 `addressId=1` 주문 생성 → `status=CREATED`, `shipmentStatus=READY`
 
-이를 통해 `HttpAddressServiceClient`가 real `address-api`와도 정상 연동됨을 검증했습니다.
+#### mock address-api (smoke 전용)
 
-### mock address-api 기반 http 모드 검증
+`address-http` smoke는 항상 `:mock` 태그 + `deployment/mock-address-api/`만 사용합니다. WireMock은 503 시나리오까지 재현 가능한 smoke 자산이며, 실서비스 대체가 아닙니다.
 
-반복 가능한 smoke 검증을 위해 `WireMock` 기반의 경량 `mock address-api`도 함께 유지합니다. 이 mock은 실서비스 대체가 아니라, **실패 경로(404 / 503)까지 포함한 재현 가능한 smoke 검증 자산**입니다.
-
-- `address-api/Dockerfile.mock`과 `address-api/mappings/addresses.json` 사용
-- `address-http` smoke에서 mock 이미지를 빌드해 검증 시점에만 사용
-- `GET /addresses/1`, `/2`, `/3` 정상 응답
-- `GET /addresses/999` → 404
-- `GET /addresses/503` → 503
-
-실제 검증 결과:
-- `addressId=1` 주문 생성 성공 → `orders.recipient_*` 반영
-- `addressId=999` → `ADDRESS_NOT_FOUND` (404)
-- `addressId=503` → `ADDRESS_LOOKUP_FAILED` (500)
-
-즉 현재 구조는 다음과 같습니다.
-
-- **실서비스 경로**: Spring Boot `address-api` + `address-db`
-- **smoke 검증 경로**: `Dockerfile.mock` 기반 WireMock
-
-이렇게 분리함으로써 실서비스 검증과 반복 가능한 failure-path smoke를 동시에 유지할 수 있게 되었습니다.
+- `address-api/Dockerfile.mock` + `address-api/mappings/addresses.json` 사용
+- `GET /addresses/999` → 404, `GET /addresses/503` → 503 재현
+- smoke script (`e2e-order-address-http-smoke.sh`) 에서 자동 빌드·배포·검증 후 order-api env 복원
 
 ---
 
@@ -1013,10 +1030,10 @@ address:
 kubectl apply -f deployment/infra/db/address-db.yaml
 kubectl rollout status statefulset/address-db -n ecommerce --timeout=120s
 
-docker build -t sparta-msa-final-project-address-api:latest ./address-api
-minikube image load sparta-msa-final-project-address-api:latest
+docker build -t sparta-msa-final-project-address-api:real ./address-api
+minikube image load sparta-msa-final-project-address-api:real
 
-kubectl apply -f deployment/address-api/deployment.yaml
+kubectl apply -f deployment/address-api/
 kubectl rollout status deployment/address-api -n ecommerce --timeout=120s
 ```
 
@@ -1054,16 +1071,17 @@ curl http://localhost:8083/api/orders/status/<IDEM_KEY>
 **mock address-api 빌드 및 배포 (address-http smoke 검증용)**
 
 ```bash
-docker build -f ./address-api/Dockerfile.mock   -t sparta-msa-final-project-address-api:latest ./address-api
-minikube image load sparta-msa-final-project-address-api:latest
-kubectl apply -f deployment/address-api/
-kubectl rollout status deployment/address-api -n ecommerce
+docker build -f ./address-api/Dockerfile.mock \
+  -t sparta-msa-final-project-address-api:mock ./address-api
+minikube image load sparta-msa-final-project-address-api:mock
+kubectl apply -f deployment/mock-address-api/
+kubectl rollout status deployment/mock-address-api -n ecommerce --timeout=120s
 ```
 
 **mock address-api 로컬 확인**
 
 ```bash
-kubectl port-forward svc/address-api-svc 8090:8090 -n ecommerce
+kubectl port-forward svc/mock-address-api-svc 8090:8090 -n ecommerce
 
 curl -s http://localhost:8090/addresses/1 | jq .
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/addresses/999
@@ -1078,9 +1096,13 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/addresses/503
 **order-api를 http 모드로 임시 전환 (mock 검증용)**
 
 ```bash
-kubectl set env deployment/order-api -n ecommerce   ADDRESS_CLIENT_MODE=http   ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090   ADDRESS_CLIENT_CONNECT_TIMEOUT_MS=1000   ADDRESS_CLIENT_READ_TIMEOUT_MS=2000
+kubectl set env deployment/order-api -n ecommerce \
+  ADDRESS_CLIENT_MODE=http \
+  ADDRESS_CLIENT_BASE_URL=http://mock-address-api-svc:8090 \
+  ADDRESS_CLIENT_CONNECT_TIMEOUT_MS=1000 \
+  ADDRESS_CLIENT_READ_TIMEOUT_MS=2000
 
-kubectl rollout status deployment/order-api -n ecommerce
+kubectl rollout status deployment/order-api -n ecommerce --timeout=120s
 ```
 
 **http 모드 성공 경로 검증 (mock)**
@@ -1195,6 +1217,7 @@ git commit --no-verify
 **Smoke Tests**
 - `target=happy`
 - `target=negative`
+- `target=address-http`
 - `target=all`
 
 **Integration Tests**
@@ -1326,7 +1349,6 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
   - Spring Boot 기반 `address-api` MVP는 완료되었으며, 다음 단계는 주소 생성/수정/목록/삭제까지 확장
   - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
   - 삭제된 주소 / 비활성 주소 정책 확정
-  - real / mock 이미지 태그 분리(`:real`, `:mock`) 검토
 - 배송지 변경 이력 관리 고도화
   - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토
   - 주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토
@@ -1376,3 +1398,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~integration-tests.yml 서비스별 test/integrationTest 분기 구성~~
 - ~~Spring Boot 기반 real `address-api` MVP 추가 (`GET /addresses/{id}`, PostgreSQL, Flyway, actuator probe)~~
 - ~~real `address-api` 배포 및 `order-api` http 모드 연동 수동 검증 완료 (`addressId=1 -> CREATED/READY`)~~
+- ~~real / mock address-api 이미지 태그 분리 (`address-api:real` / `mock-address-api:mock`, 배포 경로 및 Service 이름까지 완전 분리)~~
