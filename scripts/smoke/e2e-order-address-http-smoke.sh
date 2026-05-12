@@ -5,7 +5,7 @@
 # 사전 조건:
 #   - minikube 가 실행 중이어야 한다.
 #   - order-api Deployment 가 ecommerce namespace 에 배포되어 있어야 한다.
-#   - ./address-api/Dockerfile 과 ./address-api/mappings/ 가 존재해야 한다.
+#   - ./address-api/Dockerfile.mock 과 ./address-api/mappings/ 가 존재해야 한다.
 #   - docker, kubectl, minikube 명령이 PATH 에 있어야 한다.
 #   - 프로젝트 루트 디렉토리에서 실행해야 한다.
 #
@@ -26,7 +26,7 @@ set -euo pipefail
 
 ORDER_API="http://localhost:8083"
 NAMESPACE="ecommerce"
-IMAGE_NAME="sparta-msa-final-project-address-api:latest"
+IMAGE_NAME="sparta-msa-final-project-address-api:mock"
 POLL_INTERVAL=3
 TIMEOUT=60
 PF_PID=""
@@ -110,9 +110,9 @@ echo "[OK] minikube image load 완료"
 echo ""
 echo "=== [2/7] address-api Deployment 적용 ==="
 
-kubectl apply -f deployment/address-api/
-kubectl rollout status deployment/address-api -n "${NAMESPACE}" --timeout=120s
-echo "[OK] address-api rollout 완료"
+kubectl apply -f deployment/mock-address-api/
+kubectl rollout status deployment/mock-address-api -n "${NAMESPACE}" --timeout=120s
+echo "[OK] mock-address-api rollout 완료"
 
 # ── 3단계: order-api http 모드 전환 및 rollout 대기 ───────────────────────────
 echo ""
@@ -120,7 +120,7 @@ echo "=== [3/7] order-api http 모드 전환 ==="
 
 kubectl set env deployment/order-api -n "${NAMESPACE}" \
   ADDRESS_CLIENT_MODE=http \
-  ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090 \
+  ADDRESS_CLIENT_BASE_URL=http://mock-address-api-svc:8090 \
   ADDRESS_CLIENT_CONNECT_TIMEOUT_MS=1000 \
   ADDRESS_CLIENT_READ_TIMEOUT_MS=2000
 

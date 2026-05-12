@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: address-api
-          image: sparta-msa-final-project-address-api:latest
+          image: sparta-msa-final-project-address-api:real
           imagePullPolicy: Never
           ports:
             - containerPort: 8080
