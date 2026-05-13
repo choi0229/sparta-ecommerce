@@ -1051,6 +1051,40 @@ curl -i http://localhost:8090/addresses/999
 - `/addresses/999` → `404`
 - WireMock 헤더(`Matched-Stub-Id`, `Matched-Stub-Name`) 없음
 
+**address-api CRUD 검증**
+
+```bash
+# 목록 조회 (userId=1의 활성 주소)
+curl -s "http://localhost:8090/addresses?userId=1" | jq .
+
+# 주소 생성 (isDefault=true → 기존 기본 배송지 자동 해제)
+curl -s -X POST http://localhost:8090/addresses \
+  -H "Content-Type: application/json" \
+  -d '{"userId":1,"recipientName":"신규주소","recipientAddress":"대전시 유성구 테크노2로 1","isDefault":true}' | jq .
+
+# 기본 배송지 1개 확인
+curl -s "http://localhost:8090/addresses?userId=1" | jq '[.[] | select(.isDefault==true)]'
+# 기대: 1개만
+
+# 주소 수정 (recipientName만 변경, 나머지 null → 미수정)
+curl -s -X PATCH http://localhost:8090/addresses/2 \
+  -H "Content-Type: application/json" \
+  -d '{"recipientName":"수정된이름","recipientAddress":null,"isDefault":null}' | jq .
+
+# 주소 삭제 (soft delete)
+curl -i -X DELETE http://localhost:8090/addresses/3
+# 기대: 204 No Content
+
+# 삭제 후 단건 조회 → 404
+curl -i http://localhost:8090/addresses/3
+
+# 삭제된 addressId로 주문 생성 → ADDRESS_NOT_FOUND
+curl -i -X POST http://localhost:8083/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}],"addressId":3}'
+# 기대: HTTP 404, errorCode=ADDRESS_NOT_FOUND
+```
+
 **order-api를 real address-api와 연동 검증**
 
 ```bash
