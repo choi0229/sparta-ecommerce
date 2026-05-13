@@ -23,7 +23,7 @@
 - **inventory-api** (`:8082`): 재고 예약(Reservation), 결제 대기 TTL 만료, 재고 해제 및 보상 처리.
 - **logistics-api** (`:8084`): 배송 요청 생성, 배송 상태 관리, 배송 상태 이력 저장, 주문 이벤트 수신, Transactional Outbox 기반 배송 이벤트 발행.
 - **payment-api**: 독립 서비스가 아닌 `product-api` 내부에 약식 구현된 결제 흐름.
-- **address-api** (`:8090`, 이미지 태그 `:real`): Spring Boot + PostgreSQL 기반 주소 조회 서비스(MVP). `GET /addresses/{id}` 제공. `deployment/address-api/`로 배포.
+- **address-api** (`:8090`, 이미지 태그 `:real`): Spring Boot + PostgreSQL 기반 사용자 주소 관리 서비스. CRUD API 제공(`GET /addresses/{id}`, `GET /addresses?userId`, `POST`, `PATCH`, `DELETE` soft delete), 기본 배송지 1개 partial unique index, 삭제된 주소 조회 제외. order-api의 `addressId` 기반 배송지 해소에 사용. `deployment/address-api/`로 배포.
 - **mock-address-api** (`:8090`, 이미지 태그 `:mock`): `address-http` smoke 전용 WireMock 서버. 성공/404/503 시나리오 재현. `deployment/mock-address-api/`로 배포.
 
 ---
@@ -222,7 +222,7 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 - 둘 다 없으면 `SHIPPING_ADDRESS_REQUIRED`로 주문 차단
 - 존재하지 않는 `addressId`는 `ADDRESS_NOT_FOUND`로 주문 차단
 
-현재는 실제 주소 서비스가 아직 없기 때문에 `StubAddressServiceClient`를 사용해 addressId 기반 흐름을 먼저 검증했습니다. 이 방식으로 기존 `shippingAddress` 직접 입력 경로를 깨지 않으면서, 이후 실제 주소 서비스로 자연스럽게 전환할 수 있는 확장 지점을 마련했습니다.
+초기에는 `StubAddressServiceClient`를 사용해 addressId 기반 흐름을 먼저 검증했습니다. 이후 real `address-api`(Spring Boot + PostgreSQL)를 구축하고 `HttpAddressServiceClient`로 전환해 실제 서비스 연동까지 완성했습니다. 기존 `shippingAddress` 직접 입력 경로는 그대로 유지됩니다.
 
 
 ### AddressServiceClient 설정 기반 분리 (stub ↔ http 전환 준비)
@@ -236,7 +236,7 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 - `AddressClientProperties`로 `base-url`, `connect-timeout-ms`, `read-timeout-ms`를 설정 바인딩
 - HTTP 구현체는 `404 → ADDRESS_NOT_FOUND`, `5xx/타임아웃/기타 오류 → ADDRESS_LOOKUP_FAILED`로 예외를 매핑
 
-이를 통해 현재는 stub 기반 개발과 검증을 유지하면서도, 실제 주소 서비스가 준비되면 설정만 변경해 HTTP 기반 구현체로 전환할 수 있는 구조를 마련했습니다.
+초기에는 stub 기반으로 개발·검증하고, 이후 real `address-api` 구축 후 설정 변경만으로 HTTP 구현체로 전환해 실제 서비스 연동을 완성했습니다.
 
 
 ### address-api / mock-address-api 분리 구조
@@ -288,6 +288,17 @@ kubectl rollout status deployment/order-api -n ecommerce --timeout=120s
 - `GET /addresses/1` → `홍길동 / 서울시 강남구 테헤란로 1`
 - `GET /addresses/999` → 404
 - `order-api` http 모드에서 `addressId=1` 주문 생성 → `status=CREATED`, `shipmentStatus=READY`
+- CRUD API 및 soft delete → `e2e-order-address-real-smoke.sh` 전 과정 검증 완료
+
+### real address-api 사용자 주소 관리 서비스 확장
+
+MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했습니다.
+
+- **CRUD API**: `GET /addresses?userId`, `POST /addresses`, `PATCH /addresses/{id}`, `DELETE /addresses/{id}` (soft delete)
+- **Bean Validation**: POST — `userId` NotNull, `recipientName`/`recipientAddress` NotBlank. PATCH — null은 미수정 허용, 비어 있는 문자열은 400 차단
+- **soft delete**: `deleted=true` 처리 후 조회 제외. 삭제된 `addressId`로 order-api 주문 생성 시 `ADDRESS_NOT_FOUND`(404) 차단
+- **기본 배송지 1개 정책**: 사용자별 `is_default=true` 행을 최대 1개로 제한하는 partial unique index (V3 Flyway). 새 기본 배송지 지정 시 기존 기본 배송지 자동 해제
+- **real smoke 자동화**: `e2e-order-address-real-smoke.sh` — 주소 생성 → 주문 polling → soft delete → `ADDRESS_NOT_FOUND` 차단 검증 6단계 자동화
 
 #### mock address-api (smoke 전용)
 
@@ -1413,10 +1424,11 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 ## 13. 향후 개선 과제
 
 ### 도메인 / 운영
-- 사용자 주소 서비스 연동 고도화
-  - Spring Boot 기반 `address-api` MVP는 완료되었으며, 다음 단계는 주소 생성/수정/목록/삭제까지 확장
+- 사용자 주소 서비스 고도화
+  - 주소 소유자 검증 (요청 userId와 address.userId 불일치 차단)
+  - 인증 연계 시 userId 헤더 기반 검증으로 전환
+  - 기본 배송지 동시 변경 시 race condition 테스트 보강
   - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
-  - 삭제된 주소 / 비활성 주소 정책 확정
 - 배송지 변경 이력 관리 고도화
   - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토
   - 주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토
