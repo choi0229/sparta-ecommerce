@@ -221,6 +221,7 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 - `addressId`와 `shippingAddress`가 동시에 오면 `addressId`를 우선 사용
 - 둘 다 없으면 `SHIPPING_ADDRESS_REQUIRED`로 주문 차단
 - 존재하지 않는 `addressId`는 `ADDRESS_NOT_FOUND`로 주문 차단
+- **주소 소유자 검증**: `HttpAddressServiceClient`가 `GET /addresses/{id}?userId={userId}` 형태로 호출해, address-api에서 `order.userId == address.userId` 불일치 시 404를 반환하면 order-api는 `ADDRESS_NOT_FOUND`로 차단. 보안상 소유자 불일치와 미존재를 동일하게 처리.
 
 초기에는 `StubAddressServiceClient`를 사용해 addressId 기반 흐름을 먼저 검증했습니다. 이후 real `address-api`(Spring Boot + PostgreSQL)를 구축하고 `HttpAddressServiceClient`로 전환해 실제 서비스 연동까지 완성했습니다. 기존 `shippingAddress` 직접 입력 경로는 그대로 유지됩니다.
 
@@ -298,7 +299,7 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 - **Bean Validation**: POST — `userId` NotNull, `recipientName`/`recipientAddress` NotBlank. PATCH — null은 미수정 허용, 비어 있는 문자열은 400 차단
 - **soft delete**: `deleted=true` 처리 후 조회 제외. 삭제된 `addressId`로 order-api 주문 생성 시 `ADDRESS_NOT_FOUND`(404) 차단
 - **기본 배송지 1개 정책**: 사용자별 `is_default=true` 행을 최대 1개로 제한하는 partial unique index (V3 Flyway). 새 기본 배송지 지정 시 기존 기본 배송지 자동 해제
-- **real smoke 자동화**: `e2e-order-address-real-smoke.sh` — 주소 생성 → 주문 polling → soft delete → `ADDRESS_NOT_FOUND` 차단 검증 6단계 자동화
+- **real smoke 자동화**: `e2e-order-address-real-smoke.sh` — 7단계 자동화: 주소 생성(userId=9001) → 정상 주문 polling → 다른 userId(9002)로 같은 addressId 주문 시 `ADDRESS_NOT_FOUND` 차단 → soft delete → 삭제된 addressId로 주문 `ADDRESS_NOT_FOUND` 차단
 
 #### mock address-api (smoke 전용)
 
@@ -1425,8 +1426,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 
 ### 도메인 / 운영
 - 사용자 주소 서비스 고도화
-  - 주소 소유자 검증 (요청 userId와 address.userId 불일치 차단)
-  - 인증 연계 시 userId 헤더 기반 검증으로 전환
+  - 인증 연계 시 userId 헤더 기반 검증으로 전환 (현재는 request.userId 신뢰)
   - 기본 배송지 동시 변경 시 race condition 테스트 보강
   - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
 - 배송지 변경 이력 관리 고도화
@@ -1481,3 +1481,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~real / mock address-api 이미지 태그 분리 (`address-api:real` / `mock-address-api:mock`, 배포 경로 및 Service 이름까지 완전 분리)~~
 - ~~real address-api CRUD API 추가 (GET /addresses?userId, POST, PATCH, DELETE soft delete, partial unique index, Bean Validation)~~
 - ~~real address-api smoke 자동화 (`e2e-order-address-real-smoke.sh` — 주소 생성 → 주문 polling → 삭제 → ADDRESS_NOT_FOUND 차단 검증)~~
+- ~~주소 소유자 검증 추가 (`GET /addresses/{id}?userId=` 소유자 확인, 불일치 시 `ADDRESS_NOT_FOUND` 차단, smoke 7단계로 자동 검증)~~

@@ -18,7 +18,7 @@ public class StubAddressServiceClient implements AddressServiceClient {
     );
 
     @Override
-    public AddressInfo findById(Long addressId) {
+    public AddressInfo findById(Long addressId, Long userId) {
         AddressInfo info = STORE.get(addressId);
         if (info == null) {
             throw new DomainException(DomainExceptionCode.ADDRESS_NOT_FOUND);

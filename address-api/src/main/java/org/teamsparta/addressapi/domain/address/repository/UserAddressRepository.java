@@ -13,6 +13,8 @@ public interface UserAddressRepository extends JpaRepository<UserAddress, Long> 
 
     Optional<UserAddress> findByIdAndDeletedFalse(Long id);
 
+    Optional<UserAddress> findByIdAndUserIdAndDeletedFalse(Long id, Long userId);
+
     List<UserAddress> findByUserIdAndDeletedFalse(Long userId);
 
     // clearAutomatically=true: JPQL bulk update 후 L1 캐시 무효화

@@ -16,9 +16,10 @@
 #   bash scripts/smoke/e2e-order-address-real-smoke.sh
 #
 # 성공 조건:
-#   [4/6] POST /addresses(userId=9001) → 주소 생성 성공, addressId 추출
-#   [5/6] POST /api/orders(addressId=<생성된 ID>) → status=CREATED, shipmentStatus=READY
-#   [6/6] DELETE /addresses/{id} → 204, GET → 404, POST /api/orders → HTTP 404 + ADDRESS_NOT_FOUND
+#   [4/7] POST /addresses(userId=9001) → 주소 생성 성공, addressId 추출
+#   [5/7] POST /api/orders(userId=9001, addressId=<생성된 ID>) → status=CREATED, shipmentStatus=READY
+#   [6/7] POST /api/orders(userId=9002, 같은 addressId) → HTTP 404 ADDRESS_NOT_FOUND (소유자 불일치)
+#   [7/7] DELETE /addresses/{id} → 204, GET → 404, POST /api/orders → HTTP 404 + ADDRESS_NOT_FOUND
 #
 # 종료 코드:
 #   0 = 성공
@@ -226,13 +227,13 @@ if [[ -z "${CREATED_ADDRESS_ID}" ]]; then
 fi
 echo "[OK] 테스트 주소 생성 완료 — addressId=${CREATED_ADDRESS_ID}"
 
-# ── 5단계: 주문 생성 및 상태 polling (addressId=생성된 ID) ────────────────────
+# ── 5단계: 주문 생성 및 상태 polling (소유자 일치 — userId=9001) ──────────────
 echo ""
-echo "=== [5/6] 주문 생성 및 상태 조회 (addressId=${CREATED_ADDRESS_ID}) ==="
+echo "=== [5/7] 주문 생성 및 상태 조회 (userId=${SMOKE_USER_ID}, addressId=${CREATED_ADDRESS_ID}) ==="
 
 if ! CREATE_ORDER_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
-  -d "{\"userId\":1,\"items\":[{\"sku\":\"SKU-TEST-001\",\"quantity\":1}],\"addressId\":${CREATED_ADDRESS_ID}}"); then
+  -d "{\"userId\":${SMOKE_USER_ID},\"items\":[{\"sku\":\"SKU-TEST-001\",\"quantity\":1}],\"addressId\":${CREATED_ADDRESS_ID}}"); then
   echo "[FAIL] POST /api/orders 요청 실패 — port-forward 가 동작하지 않거나 order-api 응답 없음"
   exit 1
 fi
@@ -267,13 +268,39 @@ while true; do
   elapsed=$((elapsed + POLL_INTERVAL))
 done
 
-echo "[OK] addressId=${CREATED_ADDRESS_ID} → status=CREATED, shipmentStatus=READY"
+echo "[OK] userId=${SMOKE_USER_ID}, addressId=${CREATED_ADDRESS_ID} → status=CREATED, shipmentStatus=READY"
 
-# ── 6단계: 주소 삭제 → 차단 검증 ─────────────────────────────────────────────
+# ── 6단계: 소유자 불일치 → ADDRESS_NOT_FOUND 차단 검증 ────────────────────────
 echo ""
-echo "=== [6/6] 주소 삭제 후 ADDRESS_NOT_FOUND 검증 ==="
+echo "=== [6/7] 소유자 불일치 검증 (userId=9002, addressId=${CREATED_ADDRESS_ID}) ==="
 
-# 6-1: DELETE → 204
+HTTP_CODE=$(curl -s -o "${RESP_TMP}" -w "%{http_code}" \
+  -X POST "${ORDER_API}/api/orders" \
+  -H "Content-Type: application/json" \
+  -d "{\"userId\":9002,\"items\":[{\"sku\":\"SKU-TEST-001\",\"quantity\":1}],\"addressId\":${CREATED_ADDRESS_ID}}")
+
+RESP_BODY=$(cat "${RESP_TMP}")
+echo "HTTP ${HTTP_CODE}: ${RESP_BODY}"
+
+ERROR_CODE=$(extract_error "${RESP_BODY}")
+
+if [[ "${HTTP_CODE}" != "404" ]]; then
+  echo "[FAIL] 소유자 불일치 — 예상 HTTP 404, 실제 HTTP ${HTTP_CODE}"
+  exit 1
+fi
+
+if [[ "${ERROR_CODE}" != "ADDRESS_NOT_FOUND" ]]; then
+  echo "[FAIL] 소유자 불일치 — 예상 errorCode=ADDRESS_NOT_FOUND, 실제 ${ERROR_CODE:-null}"
+  exit 1
+fi
+
+echo "[OK] userId=9002 + addressId=${CREATED_ADDRESS_ID} → HTTP 404, errorCode=ADDRESS_NOT_FOUND (소유자 불일치 차단)"
+
+# ── 7단계: 주소 삭제 → 차단 검증 ─────────────────────────────────────────────
+echo ""
+echo "=== [7/7] 주소 삭제 후 ADDRESS_NOT_FOUND 검증 ==="
+
+# 7-1: DELETE → 204
 DELETE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
   -X DELETE "${ADDRESS_API}/addresses/${CREATED_ADDRESS_ID}")
 
@@ -283,7 +310,7 @@ if [[ "${DELETE_CODE}" != "204" ]]; then
 fi
 echo "[OK] DELETE /addresses/${CREATED_ADDRESS_ID} → HTTP 204"
 
-# 6-2: GET 삭제된 주소 → 404
+# 7-2: GET 삭제된 주소 → 404
 GET_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
   "${ADDRESS_API}/addresses/${CREATED_ADDRESS_ID}")
 
@@ -293,11 +320,11 @@ if [[ "${GET_CODE}" != "404" ]]; then
 fi
 echo "[OK] GET /addresses/${CREATED_ADDRESS_ID} (삭제 후) → HTTP 404"
 
-# 6-3: 삭제된 addressId로 주문 생성 → ADDRESS_NOT_FOUND
+# 7-3: 삭제된 addressId로 주문 생성 → ADDRESS_NOT_FOUND
 HTTP_CODE=$(curl -s -o "${RESP_TMP}" -w "%{http_code}" \
   -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
-  -d "{\"userId\":1,\"items\":[{\"sku\":\"SKU-TEST-001\",\"quantity\":1}],\"addressId\":${CREATED_ADDRESS_ID}}")
+  -d "{\"userId\":${SMOKE_USER_ID},\"items\":[{\"sku\":\"SKU-TEST-001\",\"quantity\":1}],\"addressId\":${CREATED_ADDRESS_ID}}")
 
 RESP_BODY=$(cat "${RESP_TMP}")
 echo "HTTP ${HTTP_CODE}: ${RESP_BODY}"
@@ -321,8 +348,9 @@ RUN_FAILED=false
 # ── 최종 결과 ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== real address-api smoke test 결과 ==="
-echo "[PASS] [4/6] POST /addresses(userId=${SMOKE_USER_ID}) → addressId=${CREATED_ADDRESS_ID} 생성"
-echo "[PASS] [5/6] addressId=${CREATED_ADDRESS_ID} → status=CREATED, shipmentStatus=READY"
-echo "[PASS] [6/6] 주소 삭제 후 → HTTP 204 / GET 404 / 주문 HTTP 404 ADDRESS_NOT_FOUND"
+echo "[PASS] [4/7] POST /addresses(userId=${SMOKE_USER_ID}) → addressId=${CREATED_ADDRESS_ID} 생성"
+echo "[PASS] [5/7] userId=${SMOKE_USER_ID}, addressId=${CREATED_ADDRESS_ID} → status=CREATED, shipmentStatus=READY"
+echo "[PASS] [6/7] userId=9002 + addressId=${CREATED_ADDRESS_ID} → HTTP 404 ADDRESS_NOT_FOUND (소유자 불일치)"
+echo "[PASS] [7/7] 주소 삭제 후 → HTTP 204 / GET 404 / 주문 HTTP 404 ADDRESS_NOT_FOUND"
 echo "       idemKey = ${IDEM_KEY}"
 exit 0

@@ -476,13 +476,13 @@ public class OrderServiceTest {
     @DisplayName("addressId 경로 — client 조회 결과가 ShippingAddress로 주입되고 OutboxEvent 저장")
     void createOrder_withAddressId_usesClientResult() throws Exception {
         CreateOrderRequest request = new CreateOrderRequest(1L, ITEMS, 1L, null);
-        given(addressServiceClient.findById(1L))
+        given(addressServiceClient.findById(1L, 1L))
                 .willReturn(new AddressServiceClient.AddressInfo("홍길동", "서울시 강남구 테헤란로 1"));
         given(objectMapper.writeValueAsString(any())).willReturn("{}");
 
         orderService.createOrder(request, IDEM_KEY);
 
-        then(addressServiceClient).should(times(1)).findById(1L);
+        then(addressServiceClient).should(times(1)).findById(1L, 1L);
         then(outboxEventRepository).should(times(1)).save(any());
     }
 
@@ -493,13 +493,13 @@ public class OrderServiceTest {
                 1L, ITEMS, 2L,
                 new CreateOrderRequest.ShippingAddress("김철수(직접)", "부산시(직접)")
         );
-        given(addressServiceClient.findById(2L))
+        given(addressServiceClient.findById(2L, 1L))
                 .willReturn(new AddressServiceClient.AddressInfo("김철수", "부산시 해운대구 달맞이길 2"));
         given(objectMapper.writeValueAsString(any())).willReturn("{}");
 
         orderService.createOrder(request, IDEM_KEY);
 
-        then(addressServiceClient).should(times(1)).findById(2L);
+        then(addressServiceClient).should(times(1)).findById(2L, 1L);
         then(outboxEventRepository).should(times(1)).save(any());
     }
 
@@ -520,7 +520,21 @@ public class OrderServiceTest {
     @DisplayName("address service 조회 실패(ADDRESS_NOT_FOUND) 시 주문 차단")
     void createOrder_addressNotFound_throwsException() {
         CreateOrderRequest request = new CreateOrderRequest(1L, ITEMS, 999L, null);
-        given(addressServiceClient.findById(999L))
+        given(addressServiceClient.findById(999L, 1L))
+                .willThrow(new DomainException(DomainExceptionCode.ADDRESS_NOT_FOUND));
+
+        assertThatThrownBy(() -> orderService.createOrder(request, IDEM_KEY))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining(DomainExceptionCode.ADDRESS_NOT_FOUND.getMessage());
+
+        then(outboxEventRepository).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("addressId 소유자 불일치(ADDRESS_NOT_FOUND) 시 주문 차단")
+    void createOrder_addressOwnerMismatch_throwsAddressNotFound() {
+        CreateOrderRequest request = new CreateOrderRequest(9002L, ITEMS, 1L, null);
+        given(addressServiceClient.findById(1L, 9002L))
                 .willThrow(new DomainException(DomainExceptionCode.ADDRESS_NOT_FOUND));
 
         assertThatThrownBy(() -> orderService.createOrder(request, IDEM_KEY))

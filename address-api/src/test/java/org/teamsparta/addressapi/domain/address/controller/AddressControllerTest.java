@@ -9,6 +9,11 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.teamsparta.addressapi.domain.address.service.AddressService;
 
+import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
+import org.teamsparta.addressapi.global.exception.AddressNotFoundException;
+
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -86,5 +91,25 @@ class AddressControllerTest {
                                 {"recipientName":null,"recipientAddress":null,"isDefault":null}
                                 """))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/{id}?userId=정상소유자 → 200")
+    void getAddress_ownerMatch_returns200() throws Exception {
+        when(addressService.findById(1L, 1L))
+                .thenReturn(new AddressResponse("홍길동", "서울시 강남구"));
+
+        mockMvc.perform(get("/addresses/1").param("userId", "1"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/{id}?userId=다른사용자 → 404")
+    void getAddress_ownerMismatch_returns404() throws Exception {
+        when(addressService.findById(1L, 9002L))
+                .thenThrow(new AddressNotFoundException(1L));
+
+        mockMvc.perform(get("/addresses/1").param("userId", "9002"))
+                .andExpect(status().isNotFound());
     }
 }

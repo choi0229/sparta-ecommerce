@@ -34,24 +34,54 @@ class AddressServiceTest {
     private AddressService addressService;
 
     @Test
-    @DisplayName("존재하지 않거나 삭제된 주소 조회 시 AddressNotFoundException 발생")
+    @DisplayName("userId null — 존재하지 않거나 삭제된 주소 조회 시 AddressNotFoundException 발생")
     void findById_notFound_throws() {
         when(userAddressRepository.findByIdAndDeletedFalse(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> addressService.findById(99L))
+        assertThatThrownBy(() -> addressService.findById(99L, null))
                 .isInstanceOf(AddressNotFoundException.class);
     }
 
     @Test
-    @DisplayName("활성 주소 조회 시 AddressResponse 반환 (order-api 계약 유지)")
+    @DisplayName("userId null — 활성 주소 조회 시 AddressResponse 반환 (order-api 계약 유지)")
     void findById_active_returnsAddressResponse() {
         UserAddress address = UserAddress.create(1L, "홍길동", "서울시 강남구", true);
         when(userAddressRepository.findByIdAndDeletedFalse(1L)).thenReturn(Optional.of(address));
 
-        AddressResponse result = addressService.findById(1L);
+        AddressResponse result = addressService.findById(1L, null);
 
         assertThat(result.recipientName()).isEqualTo("홍길동");
         assertThat(result.recipientAddress()).isEqualTo("서울시 강남구");
+    }
+
+    @Test
+    @DisplayName("userId 일치 — 소유자 검증 통과 후 AddressResponse 반환")
+    void findById_ownerMatch_returnsAddressResponse() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시 강남구", true);
+        when(userAddressRepository.findByIdAndUserIdAndDeletedFalse(1L, 1L)).thenReturn(Optional.of(address));
+
+        AddressResponse result = addressService.findById(1L, 1L);
+
+        assertThat(result.recipientName()).isEqualTo("홍길동");
+        assertThat(result.recipientAddress()).isEqualTo("서울시 강남구");
+    }
+
+    @Test
+    @DisplayName("userId 불일치 — 소유자 검증 실패 시 AddressNotFoundException 발생")
+    void findById_ownerMismatch_throws() {
+        when(userAddressRepository.findByIdAndUserIdAndDeletedFalse(1L, 9002L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> addressService.findById(1L, 9002L))
+                .isInstanceOf(AddressNotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("userId 일치하더라도 삭제된 주소는 AddressNotFoundException 발생")
+    void findById_deleted_ownerMatch_throws() {
+        when(userAddressRepository.findByIdAndUserIdAndDeletedFalse(1L, 1L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> addressService.findById(1L, 1L))
+                .isInstanceOf(AddressNotFoundException.class);
     }
 
     @Test

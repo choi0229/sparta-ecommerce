@@ -29,8 +29,9 @@ public class AddressController {
     private final AddressService addressService;
 
     @GetMapping("/{id}")
-    public AddressResponse getAddress(@PathVariable Long id) {
-        return addressService.findById(id);
+    public AddressResponse getAddress(@PathVariable Long id,
+                                      @RequestParam(required = false) Long userId) {
+        return addressService.findById(id, userId);
     }
 
     @GetMapping

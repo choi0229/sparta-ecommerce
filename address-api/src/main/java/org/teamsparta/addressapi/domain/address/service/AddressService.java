@@ -19,11 +19,14 @@ public class AddressService {
 
     private final UserAddressRepository userAddressRepository;
 
-    // order-api 연동용 — 기존 응답 계약 유지
+    // order-api 연동용 — 응답 계약 유지. userId가 null이면 소유자 검증 없이 조회.
     @Transactional(readOnly = true)
-    public AddressResponse findById(Long id) {
-        UserAddress address = userAddressRepository.findByIdAndDeletedFalse(id)
-                .orElseThrow(() -> new AddressNotFoundException(id));
+    public AddressResponse findById(Long id, Long userId) {
+        UserAddress address = (userId != null)
+                ? userAddressRepository.findByIdAndUserIdAndDeletedFalse(id, userId)
+                        .orElseThrow(() -> new AddressNotFoundException(id))
+                : userAddressRepository.findByIdAndDeletedFalse(id)
+                        .orElseThrow(() -> new AddressNotFoundException(id));
         return new AddressResponse(address.getRecipientName(), address.getRecipientAddress());
     }
 

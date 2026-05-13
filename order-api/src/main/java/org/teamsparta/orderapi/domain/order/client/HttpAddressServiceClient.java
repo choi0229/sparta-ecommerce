@@ -25,10 +25,10 @@ public class HttpAddressServiceClient implements AddressServiceClient {
     }
 
     @Override
-    public AddressInfo findById(Long addressId) {
+    public AddressInfo findById(Long addressId, Long userId) {
         try {
-            AddressApiResponse response = restTemplate.getForObject(
-                    baseUrl + "/addresses/" + addressId, AddressApiResponse.class);
+            String url = baseUrl + "/addresses/" + addressId + "?userId=" + userId;
+            AddressApiResponse response = restTemplate.getForObject(url, AddressApiResponse.class);
             if (response == null) {
                 throw new DomainException(DomainExceptionCode.ADDRESS_LOOKUP_FAILED);
             }

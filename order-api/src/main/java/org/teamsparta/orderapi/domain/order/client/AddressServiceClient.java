@@ -2,7 +2,7 @@ package org.teamsparta.orderapi.domain.order.client;
 
 public interface AddressServiceClient {
 
-    AddressInfo findById(Long addressId);
+    AddressInfo findById(Long addressId, Long userId);
 
     record AddressInfo(String recipientName, String recipientAddress) {}
 }

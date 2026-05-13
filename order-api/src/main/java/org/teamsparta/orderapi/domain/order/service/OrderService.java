@@ -75,7 +75,7 @@ public class OrderService {
             log.warn("addressId와 shippingAddress가 동시에 전달됨. addressId 우선 사용. addressId={}", request.addressId());
         }
         if (request.addressId() != null) {
-            AddressServiceClient.AddressInfo info = addressServiceClient.findById(request.addressId());
+            AddressServiceClient.AddressInfo info = addressServiceClient.findById(request.addressId(), request.userId());
             return new CreateOrderRequest.ShippingAddress(info.recipientName(), info.recipientAddress());
         }
         if (request.shippingAddress() != null) {
