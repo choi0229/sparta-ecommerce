@@ -695,6 +695,21 @@ scripts/claude-guardrails.sh
   - addressId=1 → `status=CREATED, shipmentStatus=READY`
   - addressId=999 → HTTP 404, `ADDRESS_NOT_FOUND`
   - addressId=503 → HTTP 500, `ADDRESS_LOOKUP_FAILED`
+- `scripts/smoke/e2e-order-address-real-smoke.sh`
+  - real address-api + order-api 연동 e2e 검증 (address-api, address-db, order-api 모두 필요)
+  - 주소 생성(userId=9001) → 주문 생성 polling → 주소 soft delete → ADDRESS_NOT_FOUND 차단 확인
+  - 6단계: 사전 조건 확인 → real 모드 전환 → port-forward → 주소 생성 → 주문 polling → 삭제 차단 검증
+
+**mock smoke vs real smoke 비교**
+
+| 항목 | mock (`e2e-order-address-http-smoke.sh`) | real (`e2e-order-address-real-smoke.sh`) |
+|---|---|---|
+| address-api | WireMock (`:mock`) | Spring Boot + PostgreSQL (`:real`) |
+| 필요 리소스 | order-api | order-api + address-api + address-db |
+| docker 빌드 | 필요 (이미지 빌드 포함) | 불필요 (이미 배포된 real 사용) |
+| 시나리오 | 성공/404/503 고정 응답 재현 | 실제 CRUD + soft delete + 주문 차단 |
+| 재현성 | 항상 동일 (stub) | DB 상태에 따라 달라질 수 있음 |
+| CI 적합성 | self-hosted runner (docker, minikube 필요) | self-hosted runner (minikube 필요) |
 
 Guardrails 검사 항목: `.DS_Store`, `.env`, `secrets/`, 의도하지 않은 `payment-api` 디렉터리, Claude Code 세션 로그, 위험 명령 문자열(`rm -rf`, `DROP TABLE`, `TRUNCATE`, `kubectl delete` 등).
 
@@ -1174,6 +1189,25 @@ bash scripts/smoke/e2e-order-address-http-smoke.sh
 
 스크립트는 이미지 빌드부터 stub 모드 복원까지 전 과정을 처리하며, 실패 시에도 `trap`으로 stub 모드를 복원합니다.
 
+**real address-api smoke (order-api + address-api + address-db 연동 검증)**
+
+`address-api`(`:real`), `address-db`, `order-api` 가 모두 `ecommerce` namespace에 배포된 상태에서 실행합니다.
+
+```bash
+bash scripts/smoke/e2e-order-address-real-smoke.sh
+```
+
+스크립트는 다음 6단계를 자동으로 처리합니다.
+
+1. `kubectl`/`curl` 및 필수 Deployment 존재 여부 확인
+2. `order-api` 를 real http 모드로 전환 (`ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090`)
+3. `order-api`(8083) + `address-api-svc`(8090) port-forward 시작 및 readiness 대기
+4. `POST /addresses` — smoke 전용 userId=9001 주소 생성, `id` 추출
+5. `POST /api/orders` — 생성된 `addressId` 로 주문 → `status=CREATED, shipmentStatus=READY` polling
+6. `DELETE /addresses/{id}` → 204, `GET /addresses/{id}` → 404, 주문 재시도 → HTTP 404 `ADDRESS_NOT_FOUND` 확인
+
+실패 시에도 `trap`으로 order-api env를 복원하고 port-forward를 종료합니다. real address-api smoke는 GitHub-hosted runner에서 직접 실행할 수 없으며, minikube + address-db 가 준비된 self-hosted runner 또는 로컬 환경에서 실행합니다.
+
 **배송 상태 변경**
 
 ```bash
@@ -1433,3 +1467,5 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~Spring Boot 기반 real `address-api` MVP 추가 (`GET /addresses/{id}`, PostgreSQL, Flyway, actuator probe)~~
 - ~~real `address-api` 배포 및 `order-api` http 모드 연동 수동 검증 완료 (`addressId=1 -> CREATED/READY`)~~
 - ~~real / mock address-api 이미지 태그 분리 (`address-api:real` / `mock-address-api:mock`, 배포 경로 및 Service 이름까지 완전 분리)~~
+- ~~real address-api CRUD API 추가 (GET /addresses?userId, POST, PATCH, DELETE soft delete, partial unique index, Bean Validation)~~
+- ~~real address-api smoke 자동화 (`e2e-order-address-real-smoke.sh` — 주소 생성 → 주문 polling → 삭제 → ADDRESS_NOT_FOUND 차단 검증)~~
