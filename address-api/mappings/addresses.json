@@ -2,7 +2,7 @@
   "mappings": [
     {
       "name": "get-address-1",
-      "request": { "method": "GET", "url": "/addresses/1" },
+      "request": { "method": "GET", "urlPath": "/addresses/1" },
       "response": {
         "status": 200,
         "headers": { "Content-Type": "application/json" },
@@ -14,7 +14,7 @@
     },
     {
       "name": "get-address-2",
-      "request": { "method": "GET", "url": "/addresses/2" },
+      "request": { "method": "GET", "urlPath": "/addresses/2" },
       "response": {
         "status": 200,
         "headers": { "Content-Type": "application/json" },
@@ -26,7 +26,7 @@
     },
     {
       "name": "get-address-3",
-      "request": { "method": "GET", "url": "/addresses/3" },
+      "request": { "method": "GET", "urlPath": "/addresses/3" },
       "response": {
         "status": 200,
         "headers": { "Content-Type": "application/json" },
@@ -38,12 +38,12 @@
     },
     {
       "name": "get-address-999-not-found",
-      "request": { "method": "GET", "url": "/addresses/999" },
+      "request": { "method": "GET", "urlPath": "/addresses/999" },
       "response": { "status": 404 }
     },
     {
       "name": "get-address-503-simulated-error",
-      "request": { "method": "GET", "url": "/addresses/503" },
+      "request": { "method": "GET", "urlPath": "/addresses/503" },
       "response": {
         "status": 503,
         "body": "Service Unavailable"

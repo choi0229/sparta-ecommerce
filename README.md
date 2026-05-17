@@ -308,6 +308,7 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 - `address-api/Dockerfile.mock` + `address-api/mappings/addresses.json` 사용
 - `GET /addresses/999` → 404, `GET /addresses/503` → 503 재현
 - smoke script (`e2e-order-address-http-smoke.sh`) 에서 자동 빌드·배포·검증 후 order-api env 복원
+- mapping은 `urlPath` 기준 매칭 — order-api가 `GET /addresses/{id}?userId={userId}` 형태로 호출하더라도 query string을 무시하고 path만으로 매칭함 (owner 검증은 real smoke에서 담당)
 
 ---
 
