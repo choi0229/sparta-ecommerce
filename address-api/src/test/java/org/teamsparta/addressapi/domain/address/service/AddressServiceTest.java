@@ -7,8 +7,12 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.teamsparta.addressapi.domain.address.dto.AddressCreateRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressHistoryPageResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressHistoryResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressPatchRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
@@ -25,6 +29,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -319,20 +324,42 @@ class AddressServiceTest {
                 .isInstanceOf(AddressNotFoundException.class);
     }
 
-    // ── 이력 조회 ────────────────────────────────────────────────────────────────
+    // ── 이력 조회 (페이징/필터) ──────────────────────────────────────────────────
 
     @Test
-    @DisplayName("본인 userId로 이력 조회 시 이력 목록 반환")
-    void findHistories_ownerMatch_returnsHistories() {
+    @DisplayName("본인 userId, actionType 없음 → 전체 이력 페이지 반환")
+    void findHistories_noActionType_returnsPage() {
         UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
         UserAddressHistory h = UserAddressHistory.forCreate(address);
+        PageRequest pageable = PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt"));
         when(userAddressRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(address));
-        when(userAddressHistoryRepository.findByAddressIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(h));
+        when(userAddressHistoryRepository.findByAddressId(1L, pageable))
+                .thenReturn(new PageImpl<>(List.of(h), pageable, 1));
 
-        List<AddressHistoryResponse> result = addressService.findHistories(1L, 1L);
+        AddressHistoryPageResponse result = addressService.findHistories(1L, 1L, 0, 20, null);
 
-        assertThat(result).hasSize(1);
-        assertThat(result.get(0).actionType()).isEqualTo("CREATE");
+        assertThat(result.content()).hasSize(1);
+        assertThat(result.content().get(0).actionType()).isEqualTo("CREATE");
+        assertThat(result.totalElements()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("actionType=UPDATE → UPDATE 이력만 반환")
+    void findHistories_withActionType_returnsFilteredPage() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
+        UserAddressHistory h = UserAddressHistory.forUpdate(
+                1L, 1L, "홍길동", "서울시", false, "김철수", "부산시", true);
+        PageRequest pageable = PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt"));
+        when(userAddressRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(address));
+        when(userAddressHistoryRepository.findByAddressIdAndActionType(
+                1L, UserAddressHistory.ActionType.UPDATE, pageable))
+                .thenReturn(new PageImpl<>(List.of(h), pageable, 1));
+
+        AddressHistoryPageResponse result = addressService.findHistories(
+                1L, 1L, 0, 20, UserAddressHistory.ActionType.UPDATE);
+
+        assertThat(result.content()).hasSize(1);
+        assertThat(result.content().get(0).actionType()).isEqualTo("UPDATE");
     }
 
     @Test
@@ -340,46 +367,64 @@ class AddressServiceTest {
     void findHistories_ownerMismatch_throws() {
         when(userAddressRepository.findByIdAndUserId(1L, 9002L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> addressService.findHistories(1L, 9002L))
+        assertThatThrownBy(() -> addressService.findHistories(1L, 9002L, 0, 20, null))
                 .isInstanceOf(AddressNotFoundException.class);
     }
 
     @Test
     @DisplayName("soft delete된 주소라도 본인 userId면 이력 조회 가능")
-    void findHistories_deletedAddress_ownerMatch_returnsHistories() {
+    void findHistories_deletedAddress_ownerMatch_returnsPage() {
         UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
         address.softDelete();
         UserAddressHistory h = UserAddressHistory.forDelete(address);
+        PageRequest pageable = PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt"));
         when(userAddressRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(address));
-        when(userAddressHistoryRepository.findByAddressIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(h));
+        when(userAddressHistoryRepository.findByAddressId(1L, pageable))
+                .thenReturn(new PageImpl<>(List.of(h), pageable, 1));
 
-        List<AddressHistoryResponse> result = addressService.findHistories(1L, 1L);
+        AddressHistoryPageResponse result = addressService.findHistories(1L, 1L, 0, 20, null);
 
-        assertThat(result).hasSize(1);
-        assertThat(result.get(0).actionType()).isEqualTo("DELETE");
+        assertThat(result.content()).hasSize(1);
+        assertThat(result.content().get(0).actionType()).isEqualTo("DELETE");
     }
 
     @Test
-    @DisplayName("이력은 changedAt DESC 순서로 반환된다 (리포지토리 정렬 위임 검증)")
-    void findHistories_returnedInRepoOrder() {
+    @DisplayName("page/size가 Pageable에 올바르게 전달된다")
+    void findHistories_pageablePassedCorrectly() {
         UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
-        LocalDateTime older = LocalDateTime.now().minusHours(1);
-        LocalDateTime newer = LocalDateTime.now();
-
-        UserAddressHistory first = UserAddressHistory.forCreate(address);
-        UserAddressHistory second = UserAddressHistory.forUpdate(
-                null, 1L,
-                "홍길동", "서울시", false,
-                "김철수", "부산시", false);
-
         when(userAddressRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(address));
-        when(userAddressHistoryRepository.findByAddressIdOrderByCreatedAtDesc(1L))
-                .thenReturn(List.of(second, first));
+        when(userAddressHistoryRepository.findByAddressId(any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
 
-        List<AddressHistoryResponse> result = addressService.findHistories(1L, 1L);
+        addressService.findHistories(1L, 1L, 2, 5, null);
 
-        assertThat(result).hasSize(2);
-        assertThat(result.get(0).actionType()).isEqualTo("UPDATE");
-        assertThat(result.get(1).actionType()).isEqualTo("CREATE");
+        ArgumentCaptor<org.springframework.data.domain.Pageable> captor =
+                ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        verify(userAddressHistoryRepository).findByAddressId(eq(1L), captor.capture());
+        assertThat(captor.getValue().getPageNumber()).isEqualTo(2);
+        assertThat(captor.getValue().getPageSize()).isEqualTo(5);
+        assertThat(captor.getValue().getSort().getOrderFor("createdAt").getDirection())
+                .isEqualTo(Sort.Direction.DESC);
+    }
+
+    @Test
+    @DisplayName("page < 0 → IllegalArgumentException")
+    void findHistories_negativePage_throws() {
+        assertThatThrownBy(() -> addressService.findHistories(1L, 1L, -1, 20, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("size = 0 → IllegalArgumentException")
+    void findHistories_zeroSize_throws() {
+        assertThatThrownBy(() -> addressService.findHistories(1L, 1L, 0, 0, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("size > 100 → IllegalArgumentException")
+    void findHistories_sizeTooLarge_throws() {
+        assertThatThrownBy(() -> addressService.findHistories(1L, 1L, 0, 101, null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -8,15 +8,17 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
-import org.teamsparta.addressapi.domain.address.dto.AddressHistoryResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressHistoryPageResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
+import org.teamsparta.addressapi.domain.address.entity.UserAddressHistory;
 import org.teamsparta.addressapi.domain.address.service.AddressService;
 import org.teamsparta.addressapi.global.exception.AddressNotFoundException;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -31,6 +33,9 @@ class AddressControllerTest {
 
     @MockBean
     private AddressService addressService;
+
+    private static final AddressHistoryPageResponse EMPTY_PAGE =
+            new AddressHistoryPageResponse(List.of(), 0, 20, 0L, 0, false);
 
     @Test
     @DisplayName("POST /addresses — userId null → 400")
@@ -134,23 +139,32 @@ class AddressControllerTest {
     }
 
     @Test
-    @DisplayName("GET /addresses/{id}/histories?userId=소유자 → 200")
+    @DisplayName("GET /addresses/{id}/histories?userId=소유자 → 200 (기본 page=0, size=20)")
     void listHistories_ownerMatch_returns200() throws Exception {
-        AddressHistoryResponse resp = new AddressHistoryResponse(
-                1L, 1L, 1L, "CREATE",
-                null, null, null,
-                "홍길동", "서울시", false,
-                LocalDateTime.now());
-        when(addressService.findHistories(1L, 1L)).thenReturn(List.of(resp));
+        when(addressService.findHistories(eq(1L), eq(1L), eq(0), eq(20), isNull()))
+                .thenReturn(EMPTY_PAGE);
 
         mockMvc.perform(get("/addresses/1/histories").param("userId", "1"))
                 .andExpect(status().isOk());
     }
 
     @Test
+    @DisplayName("GET /addresses/{id}/histories?userId=소유자&actionType=UPDATE → 200")
+    void listHistories_actionTypeUpdate_returns200() throws Exception {
+        when(addressService.findHistories(eq(1L), eq(1L), eq(0), eq(20),
+                eq(UserAddressHistory.ActionType.UPDATE)))
+                .thenReturn(EMPTY_PAGE);
+
+        mockMvc.perform(get("/addresses/1/histories")
+                        .param("userId", "1")
+                        .param("actionType", "UPDATE"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     @DisplayName("GET /addresses/{id}/histories?userId=다른사용자 → 404")
     void listHistories_ownerMismatch_returns404() throws Exception {
-        when(addressService.findHistories(1L, 9002L))
+        when(addressService.findHistories(eq(1L), eq(9002L), eq(0), eq(20), isNull()))
                 .thenThrow(new AddressNotFoundException(1L));
 
         mockMvc.perform(get("/addresses/1/histories").param("userId", "9002"))
@@ -161,6 +175,51 @@ class AddressControllerTest {
     @DisplayName("GET /addresses/{id}/histories — userId 미전달 → 400")
     void listHistories_missingUserId_returns400() throws Exception {
         mockMvc.perform(get("/addresses/1/histories"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/{id}/histories?actionType=INVALID → 400")
+    void listHistories_invalidActionType_returns400() throws Exception {
+        mockMvc.perform(get("/addresses/1/histories")
+                        .param("userId", "1")
+                        .param("actionType", "INVALID"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/{id}/histories?page=-1 → 400")
+    void listHistories_negativePage_returns400() throws Exception {
+        when(addressService.findHistories(eq(1L), eq(1L), eq(-1), eq(20), isNull()))
+                .thenThrow(new IllegalArgumentException("page >= 0, 0 < size <= 100"));
+
+        mockMvc.perform(get("/addresses/1/histories")
+                        .param("userId", "1")
+                        .param("page", "-1"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/{id}/histories?size=0 → 400")
+    void listHistories_zeroSize_returns400() throws Exception {
+        when(addressService.findHistories(eq(1L), eq(1L), eq(0), eq(0), isNull()))
+                .thenThrow(new IllegalArgumentException("page >= 0, 0 < size <= 100"));
+
+        mockMvc.perform(get("/addresses/1/histories")
+                        .param("userId", "1")
+                        .param("size", "0"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/{id}/histories?size=101 → 400")
+    void listHistories_sizeTooLarge_returns400() throws Exception {
+        when(addressService.findHistories(eq(1L), eq(1L), eq(0), eq(101), isNull()))
+                .thenThrow(new IllegalArgumentException("page >= 0, 0 < size <= 100"));
+
+        mockMvc.perform(get("/addresses/1/histories")
+                        .param("userId", "1")
+                        .param("size", "101"))
                 .andExpect(status().isBadRequest());
     }
 }

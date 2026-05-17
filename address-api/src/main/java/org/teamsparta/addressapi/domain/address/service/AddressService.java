@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.addressapi.domain.address.dto.AddressCreateRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressHistoryPageResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressHistoryResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressPatchRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
@@ -13,6 +14,10 @@ import org.teamsparta.addressapi.domain.address.entity.UserAddressHistory;
 import org.teamsparta.addressapi.domain.address.repository.UserAddressHistoryRepository;
 import org.teamsparta.addressapi.domain.address.repository.UserAddressRepository;
 import org.teamsparta.addressapi.global.exception.AddressNotFoundException;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 
 import java.util.List;
 import java.util.Objects;
@@ -117,12 +122,19 @@ public class AddressService {
     }
 
     @Transactional(readOnly = true)
-    public List<AddressHistoryResponse> findHistories(Long addressId, Long userId) {
+    public AddressHistoryPageResponse findHistories(
+            Long addressId, Long userId, int page, int size,
+            UserAddressHistory.ActionType actionType) {
+        if (page < 0 || size <= 0 || size > 100) {
+            throw new IllegalArgumentException("page >= 0, 0 < size <= 100");
+        }
         userAddressRepository.findByIdAndUserId(addressId, userId)
                 .orElseThrow(() -> new AddressNotFoundException(addressId));
-        return userAddressHistoryRepository.findByAddressIdOrderByCreatedAtDesc(addressId).stream()
-                .map(AddressHistoryResponse::from)
-                .toList();
+        PageRequest pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<UserAddressHistory> result = (actionType != null)
+                ? userAddressHistoryRepository.findByAddressIdAndActionType(addressId, actionType, pageable)
+                : userAddressHistoryRepository.findByAddressId(addressId, pageable);
+        return AddressHistoryPageResponse.from(result);
     }
 
     @Transactional

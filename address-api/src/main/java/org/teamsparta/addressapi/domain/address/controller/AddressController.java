@@ -15,9 +15,10 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.teamsparta.addressapi.domain.address.dto.AddressCreateRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
-import org.teamsparta.addressapi.domain.address.dto.AddressHistoryResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressHistoryPageResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressPatchRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
+import org.teamsparta.addressapi.domain.address.entity.UserAddressHistory;
 import org.teamsparta.addressapi.domain.address.service.AddressService;
 
 import java.util.List;
@@ -59,8 +60,12 @@ public class AddressController {
     }
 
     @GetMapping("/{id}/histories")
-    public List<AddressHistoryResponse> listHistories(@PathVariable Long id,
-                                                      @RequestParam Long userId) {
-        return addressService.findHistories(id, userId);
+    public AddressHistoryPageResponse listHistories(
+            @PathVariable Long id,
+            @RequestParam Long userId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) UserAddressHistory.ActionType actionType) {
+        return addressService.findHistories(id, userId, page, size, actionType);
     }
 }

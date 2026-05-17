@@ -23,7 +23,7 @@
 - **inventory-api** (`:8082`): 재고 예약(Reservation), 결제 대기 TTL 만료, 재고 해제 및 보상 처리.
 - **logistics-api** (`:8084`): 배송 요청 생성, 배송 상태 관리, 배송 상태 이력 저장, 주문 이벤트 수신, Transactional Outbox 기반 배송 이벤트 발행.
 - **payment-api**: 독립 서비스가 아닌 `product-api` 내부에 약식 구현된 결제 흐름.
-- **address-api** (`:8090`, 이미지 태그 `:real`): Spring Boot + PostgreSQL 기반 사용자 주소 관리 서비스. CRUD API 제공(`GET /addresses/{id}`, `GET /addresses?userId`, `POST`, `PATCH`, `DELETE` soft delete), 기본 배송지 1개 partial unique index, 삭제된 주소 조회 제외, 주소 변경/삭제 이력 저장(`user_address_history`) 및 이력 조회 API(`GET /addresses/{id}/histories?userId=`). order-api의 `addressId` 기반 배송지 해소에 사용. `deployment/address-api/`로 배포.
+- **address-api** (`:8090`, 이미지 태그 `:real`): Spring Boot + PostgreSQL 기반 사용자 주소 관리 서비스. CRUD API 제공(`GET /addresses/{id}`, `GET /addresses?userId`, `POST`, `PATCH`, `DELETE` soft delete), 기본 배송지 1개 partial unique index, 삭제된 주소 조회 제외, 주소 변경/삭제 이력 저장(`user_address_history`) 및 이력 조회 API(`GET /addresses/{id}/histories?userId=&page=&size=&actionType=`). order-api의 `addressId` 기반 배송지 해소에 사용. `deployment/address-api/`로 배포.
 - **mock-address-api** (`:8090`, 이미지 태그 `:mock`): `address-http` smoke 전용 WireMock 서버. 성공/404/503 시나리오 재현. `deployment/mock-address-api/`로 배포.
 
 ---
@@ -312,14 +312,16 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 - **트랜잭션 경계**: 이력 저장은 주소 변경과 동일한 `@Transactional` 내에서 수행 — 이력 저장 실패 시 주소 변경도 함께 롤백
 - **V4 Flyway**: `V4__add_user_address_history.sql`로 테이블 추가
 
-### 주소 변경 이력 조회 API
+### 주소 변경 이력 조회 API (페이징/필터)
 
-`GET /addresses/{id}/histories?userId={userId}` — 특정 주소의 변경 이력을 최신순(changedAt DESC)으로 조회합니다.
+`GET /addresses/{id}/histories?userId={userId}&page=0&size=20&actionType=UPDATE`
 
 - **소유자 검증**: `userId`와 `address.userId` 불일치 시 404. 존재하지 않는 주소도 동일하게 404로 처리해 소유 여부를 외부에 노출하지 않음
-- **삭제된 주소 조회 가능**: soft delete된 주소라도 본인 소유라면 이력 조회 허용. 삭제 이력 확인이 목적이기 때문. 기존 `GET /addresses/{id}?userId=`는 `deleted=false` 조건 그대로 유지
-- **userId 필수**: 쿼리 파라미터 누락 시 400
-- **응답**: `AddressHistoryResponse` — id, addressId, userId, actionType, before_*/after_* 필드, changedAt
+- **삭제된 주소 조회 가능**: soft delete된 주소라도 본인 소유라면 이력 조회 허용. 기존 `GET /addresses/{id}?userId=`는 `deleted=false` 조건 그대로 유지
+- **페이징**: `page` (기본값 0), `size` (기본값 20, 최대 100). page < 0 / size ≤ 0 / size > 100 → 400
+- **actionType 필터**: `CREATE` / `UPDATE` / `DELETE` 중 하나. 생략 시 전체 조회. 잘못된 값 → 400
+- **정렬**: changedAt DESC (엔티티 필드명 `createdAt` 기준. changedAt은 history row가 생성된 시각)
+- **응답**: `AddressHistoryPageResponse` — content(List), page, size, totalElements, totalPages, hasNext
 
 #### mock address-api (smoke 전용)
 
@@ -1526,3 +1528,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~사용자 주소 변경/삭제 이력 저장 (`user_address_history`, V4 Flyway) — CREATE/UPDATE/DELETE 이력 append-only, 동일 값 UPDATE 미저장, 이력 저장 실패 시 주소 변경도 롤백~~
 - ~~주소 변경 이력 조회 API 추가 (`GET /addresses/{id}/histories?userId=`) — 소유자 검증, deleted 주소 조회 허용, changedAt DESC 정렬~~
 - ~~기본 배송지 자동 해제 이력 저장 — 새 기본 배송지 지정 시 기존 default 주소의 isDefault 변경을 actionType=UPDATE 이력으로 저장. CREATE/UPDATE 모두 적용~~
+- ~~주소 변경 이력 조회 API 페이징/actionType 필터 추가 (page/size/actionType, 최대 size=100, 잘못된 값 400)~~
