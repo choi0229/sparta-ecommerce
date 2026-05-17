@@ -26,10 +26,15 @@ set -euo pipefail
 
 ORDER_API="http://localhost:8083"
 NAMESPACE="ecommerce"
-IMAGE_NAME="sparta-msa-final-project-address-api:mock"
+# :mock 고정 태그를 재사용하면 Minikube containerd 캐시가 교체되지 않을 수 있다.
+# 매 실행마다 타임스탬프 기반 고유 태그를 사용해 이미지 교체를 보장한다.
+IMAGE_TAG="mock-$(date +%Y%m%d%H%M%S)"
+IMAGE_NAME="sparta-msa-final-project-address-api:${IMAGE_TAG}"
 POLL_INTERVAL=3
-# Kafka/Outbox 기반 비동기 처리라 self-hosted runner/minikube 환경에서 30초를 초과할 수 있음
-MAX_WAIT_SECONDS=60
+# step 3에서 order-api를 재배포하면 새 Pod의 Kafka 컨슈머 그룹 리밸런싱이 완료될 때까지
+# (최대 60-90초) 메시지를 소비할 수 없다. 리밸런싱 + product-api 처리 + 재고/Saga 완료를
+# 포함한 전체 파이프라인 완료에 120초를 허용한다.
+MAX_WAIT_SECONDS=120
 PF_PID=""
 ORDER_API_POD=""
 PF_LOG=$(mktemp)
@@ -131,13 +136,18 @@ echo "[OK] docker build 완료: ${IMAGE_NAME}"
 minikube image load "${IMAGE_NAME}"
 echo "[OK] minikube image load 완료"
 
-# ── 2단계: address-api 배포 및 readiness 확인 ─────────────────────────────────
+# ── 2단계: address-api 배포 및 이미지 교체 ────────────────────────────────────
+# apply로 Deployment를 생성/확인한 뒤, set image로 새 고유 태그를 명시 지정한다.
+# 고유 태그를 사용하므로 rollout restart 없이 Deployment spec 변경만으로 Pod가 교체된다.
 echo ""
-echo "=== [2/7] address-api Deployment 적용 ==="
+echo "=== [2/7] mock-address-api Deployment 적용 및 이미지 교체 (태그: ${IMAGE_TAG}) ==="
 
 kubectl apply -f deployment/mock-address-api/
+kubectl set image deployment/mock-address-api \
+  mock-address-api="${IMAGE_NAME}" \
+  -n "${NAMESPACE}"
 kubectl rollout status deployment/mock-address-api -n "${NAMESPACE}" --timeout=120s
-echo "[OK] mock-address-api rollout 완료"
+echo "[OK] mock-address-api rollout 완료 (이미지: ${IMAGE_NAME})"
 
 # ── 3단계: order-api http 모드 전환 및 rollout 대기 ───────────────────────────
 echo ""
@@ -233,7 +243,7 @@ while true; do
   fi
 
   if [[ ${elapsed} -ge ${MAX_WAIT_SECONDS} ]]; then
-    echo "[FAIL] ${MAX_WAIT_SECONDS}초 안에 status=CREATED, shipmentStatus=READY 에 도달하지 못했습니다."
+    echo "[FAIL] ${MAX_WAIT_SECONDS}초 안에 status=CREATED, shipmentStatus=READY 에 도달하지 못했습니다. (Kafka 리밸런싱+product-api 처리 포함)"
     echo "       최종 응답: ${STATUS_RESP}"
     echo ""
     echo "=== [진단] 클러스터 pod 상태 ==="

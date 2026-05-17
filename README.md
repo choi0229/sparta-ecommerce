@@ -309,6 +309,7 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 - `GET /addresses/999` → 404, `GET /addresses/503` → 503 재현
 - smoke script (`e2e-order-address-http-smoke.sh`) 에서 자동 빌드·배포·검증 후 order-api env 복원
 - mapping은 `urlPath` 기준 매칭 — order-api가 `GET /addresses/{id}?userId={userId}` 형태로 호출하더라도 query string을 무시하고 path만으로 매칭함 (owner 검증은 real smoke에서 담당)
+- `:mock` 태그를 재사용하므로 Deployment spec 변경 없이 image load만으로는 Pod가 교체되지 않음 — smoke script에서 `kubectl rollout restart`로 강제 재시작해 새 mapping을 반드시 반영함
 
 ---
 
