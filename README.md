@@ -312,6 +312,15 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 - **트랜잭션 경계**: 이력 저장은 주소 변경과 동일한 `@Transactional` 내에서 수행 — 이력 저장 실패 시 주소 변경도 함께 롤백
 - **V4 Flyway**: `V4__add_user_address_history.sql`로 테이블 추가
 
+### 사용자 기본 배송지 조회 API
+
+`GET /addresses/default?userId={userId}`
+
+- **userId 필수**: 미전달 시 400. `userId`에 해당하는 active(deleted=false) 기본 배송지 반환
+- **기본 배송지 없음**: 404 반환. soft delete된 주소는 결과에서 제외
+- **라우팅 우선순위**: Spring MVC literal path(`/default`)가 template(`/{id}`)보다 우선 처리되므로 `/addresses/{id}`와 충돌 없음
+- **응답**: `AddressDetailResponse` — id, userId, recipientName, recipientAddress, isDefault
+
 ### 주소 변경 이력 조회 API (페이징/필터)
 
 `GET /addresses/{id}/histories?userId={userId}&page=0&size=20&actionType=UPDATE`
@@ -1529,3 +1538,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~주소 변경 이력 조회 API 추가 (`GET /addresses/{id}/histories?userId=`) — 소유자 검증, deleted 주소 조회 허용, changedAt DESC 정렬~~
 - ~~기본 배송지 자동 해제 이력 저장 — 새 기본 배송지 지정 시 기존 default 주소의 isDefault 변경을 actionType=UPDATE 이력으로 저장. CREATE/UPDATE 모두 적용~~
 - ~~주소 변경 이력 조회 API 페이징/actionType 필터 추가 (page/size/actionType, 최대 size=100, 잘못된 값 400)~~
+- ~~사용자 기본 배송지 조회 API 추가 (`GET /addresses/default?userId=`) — userId 필수(400), 기본 배송지 없으면 404, deleted 제외~~

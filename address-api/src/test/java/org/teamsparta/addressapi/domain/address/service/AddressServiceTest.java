@@ -427,4 +427,28 @@ class AddressServiceTest {
         assertThatThrownBy(() -> addressService.findHistories(1L, 1L, 0, 101, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    @DisplayName("기본 배송지 존재 → AddressDetailResponse 반환")
+    void findDefaultAddress_exists_returnsDetail() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시 강남구", true);
+        when(userAddressRepository.findByUserIdAndIsDefaultTrueAndDeletedFalse(1L))
+                .thenReturn(Optional.of(address));
+
+        AddressDetailResponse response = addressService.findDefaultAddress(1L);
+
+        assertThat(response.recipientName()).isEqualTo("홍길동");
+        assertThat(response.recipientAddress()).isEqualTo("서울시 강남구");
+        assertThat(response.isDefault()).isTrue();
+    }
+
+    @Test
+    @DisplayName("기본 배송지 없음 → AddressNotFoundException")
+    void findDefaultAddress_notExists_throws() {
+        when(userAddressRepository.findByUserIdAndIsDefaultTrueAndDeletedFalse(99L))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> addressService.findDefaultAddress(99L))
+                .isInstanceOf(AddressNotFoundException.class);
+    }
 }

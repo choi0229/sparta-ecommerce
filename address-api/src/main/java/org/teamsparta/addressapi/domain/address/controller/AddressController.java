@@ -30,6 +30,11 @@ public class AddressController {
 
     private final AddressService addressService;
 
+    @GetMapping("/default")
+    public AddressDetailResponse getDefaultAddress(@RequestParam Long userId) {
+        return addressService.findDefaultAddress(userId);
+    }
+
     @GetMapping("/{id}")
     public AddressResponse getAddress(@PathVariable Long id,
                                       @RequestParam(required = false) Long userId) {

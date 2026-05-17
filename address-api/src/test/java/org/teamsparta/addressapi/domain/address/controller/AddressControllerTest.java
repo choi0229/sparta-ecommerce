@@ -8,6 +8,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressHistoryPageResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
 import org.teamsparta.addressapi.domain.address.entity.UserAddressHistory;
@@ -209,6 +210,43 @@ class AddressControllerTest {
                         .param("userId", "1")
                         .param("size", "0"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/default?userId=정상 → 200")
+    void getDefaultAddress_exists_returns200() throws Exception {
+        when(addressService.findDefaultAddress(1L))
+                .thenReturn(new AddressDetailResponse(1L, 1L, "홍길동", "서울시 강남구", true));
+
+        mockMvc.perform(get("/addresses/default").param("userId", "1"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/default?userId=없는유저 → 404")
+    void getDefaultAddress_notExists_returns404() throws Exception {
+        when(addressService.findDefaultAddress(99L))
+                .thenThrow(new AddressNotFoundException(99L));
+
+        mockMvc.perform(get("/addresses/default").param("userId", "99"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/default — userId 미전달 → 400")
+    void getDefaultAddress_missingUserId_returns400() throws Exception {
+        mockMvc.perform(get("/addresses/default"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/default — literal path가 /{id} template보다 우선 처리됨")
+    void getDefaultAddress_literalPathPriorityOverTemplate() throws Exception {
+        when(addressService.findDefaultAddress(1L))
+                .thenReturn(new AddressDetailResponse(1L, 1L, "홍길동", "서울시 강남구", true));
+
+        mockMvc.perform(get("/addresses/default").param("userId", "1"))
+                .andExpect(status().isOk());
     }
 
     @Test

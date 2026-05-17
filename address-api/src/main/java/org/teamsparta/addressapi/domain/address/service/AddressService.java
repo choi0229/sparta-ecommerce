@@ -137,6 +137,13 @@ public class AddressService {
         return AddressHistoryPageResponse.from(result);
     }
 
+    @Transactional(readOnly = true)
+    public AddressDetailResponse findDefaultAddress(Long userId) {
+        return userAddressRepository.findByUserIdAndIsDefaultTrueAndDeletedFalse(userId)
+                .map(AddressDetailResponse::from)
+                .orElseThrow(() -> new AddressNotFoundException(userId));
+    }
+
     @Transactional
     public void delete(Long id) {
         UserAddress address = userAddressRepository.findByIdAndDeletedFalse(id)
