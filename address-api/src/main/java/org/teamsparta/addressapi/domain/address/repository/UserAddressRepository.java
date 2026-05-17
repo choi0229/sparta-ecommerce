@@ -18,6 +18,9 @@ public interface UserAddressRepository extends JpaRepository<UserAddress, Long> 
     // 이력 조회용 소유자 검증 — deleted 여부와 관계없이 소유자 확인
     Optional<UserAddress> findByIdAndUserId(Long id, Long userId);
 
+    // 새 기본 배송지 지정 전 기존 기본 배송지 확인 — 자동 해제 이력 저장용
+    Optional<UserAddress> findByUserIdAndIsDefaultTrueAndDeletedFalse(Long userId);
+
     List<UserAddress> findByUserIdAndDeletedFalse(Long userId);
 
     // clearAutomatically=true: JPQL bulk update 후 L1 캐시 무효화

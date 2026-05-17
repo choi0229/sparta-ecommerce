@@ -26,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -151,6 +152,44 @@ class AddressServiceTest {
     }
 
     @Test
+    @DisplayName("CREATE isDefault=true + 기존 default 존재 → 자동 해제 UPDATE 이력 + 새 주소 CREATE 이력 (총 2건)")
+    void create_isDefault_withExistingDefault_savesAutoUnsetAndCreateHistory() {
+        UserAddress existingDefault = UserAddress.create(1L, "기존이름", "기존주소", true);
+        AddressCreateRequest request = new AddressCreateRequest(1L, "홍길동", "서울시", true);
+        UserAddress saved = UserAddress.create(1L, "홍길동", "서울시", true);
+        when(userAddressRepository.findByUserIdAndIsDefaultTrueAndDeletedFalse(1L))
+                .thenReturn(Optional.of(existingDefault));
+        when(userAddressRepository.save(any())).thenReturn(saved);
+
+        addressService.create(request);
+
+        ArgumentCaptor<UserAddressHistory> captor = ArgumentCaptor.forClass(UserAddressHistory.class);
+        verify(userAddressHistoryRepository, times(2)).save(captor.capture());
+        List<UserAddressHistory> histories = captor.getAllValues();
+        assertThat(histories.get(0).getActionType()).isEqualTo(UserAddressHistory.ActionType.UPDATE);
+        assertThat(histories.get(0).getBeforeIsDefault()).isTrue();
+        assertThat(histories.get(0).getAfterIsDefault()).isFalse();
+        assertThat(histories.get(0).getBeforeRecipientName()).isEqualTo("기존이름");
+        assertThat(histories.get(1).getActionType()).isEqualTo(UserAddressHistory.ActionType.CREATE);
+    }
+
+    @Test
+    @DisplayName("CREATE isDefault=true + 기존 default 없음 → CREATE 이력만 저장 (총 1건)")
+    void create_isDefault_withoutExistingDefault_savesCreateHistoryOnly() {
+        AddressCreateRequest request = new AddressCreateRequest(1L, "홍길동", "서울시", true);
+        UserAddress saved = UserAddress.create(1L, "홍길동", "서울시", true);
+        when(userAddressRepository.findByUserIdAndIsDefaultTrueAndDeletedFalse(1L))
+                .thenReturn(Optional.empty());
+        when(userAddressRepository.save(any())).thenReturn(saved);
+
+        addressService.create(request);
+
+        ArgumentCaptor<UserAddressHistory> captor = ArgumentCaptor.forClass(UserAddressHistory.class);
+        verify(userAddressHistoryRepository, times(1)).save(captor.capture());
+        assertThat(captor.getValue().getActionType()).isEqualTo(UserAddressHistory.ActionType.CREATE);
+    }
+
+    @Test
     @DisplayName("존재하지 않는 주소 수정 시 AddressNotFoundException 발생")
     void update_notFound_throws() {
         when(userAddressRepository.findByIdAndDeletedFalse(99L)).thenReturn(Optional.empty());
@@ -186,6 +225,47 @@ class AddressServiceTest {
         assertThat(history.getActionType()).isEqualTo(UserAddressHistory.ActionType.UPDATE);
         assertThat(history.getBeforeRecipientName()).isEqualTo("홍길동");
         assertThat(history.getAfterRecipientName()).isEqualTo("김철수");
+    }
+
+    @Test
+    @DisplayName("UPDATE isDefault=true + 다른 기존 default 존재 → 자동 해제 UPDATE 이력 + 수정 대상 UPDATE 이력 (총 2건)")
+    void update_isDefault_withOtherExistingDefault_savesAutoUnsetAndUpdateHistory() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
+        UserAddress existingDefault = UserAddress.create(1L, "기존이름", "기존주소", true);
+        when(userAddressRepository.findByIdAndDeletedFalse(1L)).thenReturn(Optional.of(address));
+        when(userAddressRepository.findByUserIdAndIsDefaultTrueAndDeletedFalse(1L))
+                .thenReturn(Optional.of(existingDefault));
+        when(userAddressRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        addressService.update(1L, new AddressPatchRequest(null, null, true));
+
+        ArgumentCaptor<UserAddressHistory> captor = ArgumentCaptor.forClass(UserAddressHistory.class);
+        verify(userAddressHistoryRepository, times(2)).save(captor.capture());
+        List<UserAddressHistory> histories = captor.getAllValues();
+        // 첫 번째: 기존 default 자동 해제
+        assertThat(histories.get(0).getActionType()).isEqualTo(UserAddressHistory.ActionType.UPDATE);
+        assertThat(histories.get(0).getBeforeIsDefault()).isTrue();
+        assertThat(histories.get(0).getAfterIsDefault()).isFalse();
+        assertThat(histories.get(0).getBeforeRecipientName()).isEqualTo("기존이름");
+        // 두 번째: 수정 대상 isDefault false→true
+        assertThat(histories.get(1).getActionType()).isEqualTo(UserAddressHistory.ActionType.UPDATE);
+        assertThat(histories.get(1).getBeforeIsDefault()).isFalse();
+        assertThat(histories.get(1).getAfterIsDefault()).isTrue();
+    }
+
+    @Test
+    @DisplayName("UPDATE isDefault=true + 수정 대상이 이미 default → 자동 해제 이력 저장 안 함")
+    void update_isDefault_alreadyDefault_doesNotSaveAutoUnsetHistory() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시", true);
+        when(userAddressRepository.findByIdAndDeletedFalse(1L)).thenReturn(Optional.of(address));
+        when(userAddressRepository.save(any())).thenReturn(address);
+
+        addressService.update(1L, new AddressPatchRequest(null, null, true));
+
+        // findByUserIdAndIsDefaultTrueAndDeletedFalse 호출 자체가 없어야 한다
+        verify(userAddressRepository, never()).findByUserIdAndIsDefaultTrueAndDeletedFalse(any());
+        // 변경 없음(isDefault true→true) + 자동 해제 없음 → 이력 저장 없음
+        verify(userAddressHistoryRepository, never()).save(any());
     }
 
     @Test

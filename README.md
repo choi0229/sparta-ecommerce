@@ -308,6 +308,7 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 - **CREATE**: `after_*` = 생성 값, `before_*` = null, `action_type=CREATE`
 - **UPDATE**: 실제 변경이 있을 때만 저장 — `before_*` = 변경 전 값, `after_*` = 변경 후 값, `action_type=UPDATE`. 동일한 값으로 재요청하면 이력 미저장
 - **DELETE**: `before_*` = soft delete 전 값, `after_*` = null, `action_type=DELETE`
+- **기본 배송지 자동 해제 이력**: 새 기본 배송지 지정 시 기존 기본 배송지의 `isDefault=true→false` 변경도 `actionType=UPDATE` 이력으로 저장. CREATE/UPDATE 모두 동일하게 적용. isDefault=true 요청 시 이미 그 주소가 기본 배송지인 경우에는 자동 해제 이력 미저장
 - **트랜잭션 경계**: 이력 저장은 주소 변경과 동일한 `@Transactional` 내에서 수행 — 이력 저장 실패 시 주소 변경도 함께 롤백
 - **V4 Flyway**: `V4__add_user_address_history.sql`로 테이블 추가
 
@@ -1471,7 +1472,6 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - address-api 이력 고도화
   - 관리자용 전체 이력 조회/검색 API (userId 무관, 날짜 범위 필터 등)
   - 이력 보존 기간 정책 (예: N개월 초과 이력 자동 삭제 또는 아카이빙)
-  - 자동 기본 배송지 해제(`clearDefaultsByUserId`) 이력 저장 여부 검토
 - Outbox retry 정책 추가 고도화
   - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
   - DLQ 재검토 기준 도달 시 DB 기반 DLQ 도입
@@ -1525,3 +1525,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~기본 배송지 1개 정책 동시성 검증 추가 (Testcontainers + PostgreSQL partial unique index 기반, 순차/동시 시나리오, partial index 위반 시 409 Conflict 매핑)~~
 - ~~사용자 주소 변경/삭제 이력 저장 (`user_address_history`, V4 Flyway) — CREATE/UPDATE/DELETE 이력 append-only, 동일 값 UPDATE 미저장, 이력 저장 실패 시 주소 변경도 롤백~~
 - ~~주소 변경 이력 조회 API 추가 (`GET /addresses/{id}/histories?userId=`) — 소유자 검증, deleted 주소 조회 허용, changedAt DESC 정렬~~
+- ~~기본 배송지 자동 해제 이력 저장 — 새 기본 배송지 지정 시 기존 default 주소의 isDefault 변경을 actionType=UPDATE 이력으로 저장. CREATE/UPDATE 모두 적용~~

@@ -44,7 +44,17 @@ public class AddressService {
 
     @Transactional
     public AddressDetailResponse create(AddressCreateRequest request) {
+        UserAddressHistory autoUnsetHistory = null;
         if (request.isDefault()) {
+            // clearDefaultsByUserId 전에 기존 default를 조회해 이력 값을 캡처한다.
+            // clearAutomatically=true bulk update 이후에는 L1 캐시가 초기화되므로 미리 확보한다.
+            autoUnsetHistory = userAddressRepository
+                    .findByUserIdAndIsDefaultTrueAndDeletedFalse(request.userId())
+                    .map(existing -> UserAddressHistory.forUpdate(
+                            existing.getId(), existing.getUserId(),
+                            existing.getRecipientName(), existing.getRecipientAddress(), true,
+                            existing.getRecipientName(), existing.getRecipientAddress(), false))
+                    .orElse(null);
             userAddressRepository.clearDefaultsByUserId(request.userId());
         }
         UserAddress address = UserAddress.create(
@@ -54,6 +64,9 @@ public class AddressService {
                 request.isDefault()
         );
         UserAddress saved = userAddressRepository.save(address);
+        if (autoUnsetHistory != null) {
+            userAddressHistoryRepository.save(autoUnsetHistory);
+        }
         userAddressHistoryRepository.save(UserAddressHistory.forCreate(saved));
         return AddressDetailResponse.from(saved);
     }
@@ -67,11 +80,28 @@ public class AddressService {
         String beforeAddr = address.getRecipientAddress();
         boolean beforeDefault = address.isDefault();
 
+        // 수정 대상이 이미 기본 배송지가 아닐 때만 다른 기존 default를 찾는다.
+        // isDefault=true인 채로 isDefault=true를 다시 요청하면 자기 자신만 영향을 받으므로 이력 불필요.
+        UserAddressHistory autoUnsetHistory = null;
+        if (Boolean.TRUE.equals(request.isDefault()) && !address.isDefault()) {
+            autoUnsetHistory = userAddressRepository
+                    .findByUserIdAndIsDefaultTrueAndDeletedFalse(address.getUserId())
+                    .map(existing -> UserAddressHistory.forUpdate(
+                            existing.getId(), existing.getUserId(),
+                            existing.getRecipientName(), existing.getRecipientAddress(), true,
+                            existing.getRecipientName(), existing.getRecipientAddress(), false))
+                    .orElse(null);
+        }
+
         if (Boolean.TRUE.equals(request.isDefault())) {
             userAddressRepository.clearDefaultsByUserId(address.getUserId());
         }
         address.update(request.recipientName(), request.recipientAddress(), request.isDefault());
         UserAddress saved = userAddressRepository.save(address);
+
+        if (autoUnsetHistory != null) {
+            userAddressHistoryRepository.save(autoUnsetHistory);
+        }
 
         boolean changed = !Objects.equals(beforeName, saved.getRecipientName())
                 || !Objects.equals(beforeAddr, saved.getRecipientAddress())
