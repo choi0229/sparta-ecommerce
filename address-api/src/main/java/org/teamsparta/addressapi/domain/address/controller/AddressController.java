@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.teamsparta.addressapi.domain.address.dto.AddressCreateRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressHistoryResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressPatchRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
 import org.teamsparta.addressapi.domain.address.service.AddressService;
@@ -55,5 +56,11 @@ public class AddressController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteAddress(@PathVariable Long id) {
         addressService.delete(id);
+    }
+
+    @GetMapping("/{id}/histories")
+    public List<AddressHistoryResponse> listHistories(@PathVariable Long id,
+                                                      @RequestParam Long userId) {
+        return addressService.findHistories(id, userId);
     }
 }

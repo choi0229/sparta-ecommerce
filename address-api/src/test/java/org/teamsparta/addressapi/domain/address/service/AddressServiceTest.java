@@ -9,6 +9,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.teamsparta.addressapi.domain.address.dto.AddressCreateRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressHistoryResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressPatchRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
 import org.teamsparta.addressapi.domain.address.entity.UserAddress;
@@ -17,6 +18,7 @@ import org.teamsparta.addressapi.domain.address.repository.UserAddressHistoryRep
 import org.teamsparta.addressapi.domain.address.repository.UserAddressRepository;
 import org.teamsparta.addressapi.global.exception.AddressNotFoundException;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -235,5 +237,69 @@ class AddressServiceTest {
 
         assertThatThrownBy(() -> addressService.delete(99L))
                 .isInstanceOf(AddressNotFoundException.class);
+    }
+
+    // ── 이력 조회 ────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("본인 userId로 이력 조회 시 이력 목록 반환")
+    void findHistories_ownerMatch_returnsHistories() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
+        UserAddressHistory h = UserAddressHistory.forCreate(address);
+        when(userAddressRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(address));
+        when(userAddressHistoryRepository.findByAddressIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(h));
+
+        List<AddressHistoryResponse> result = addressService.findHistories(1L, 1L);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).actionType()).isEqualTo("CREATE");
+    }
+
+    @Test
+    @DisplayName("다른 userId로 이력 조회 시 AddressNotFoundException 발생")
+    void findHistories_ownerMismatch_throws() {
+        when(userAddressRepository.findByIdAndUserId(1L, 9002L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> addressService.findHistories(1L, 9002L))
+                .isInstanceOf(AddressNotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("soft delete된 주소라도 본인 userId면 이력 조회 가능")
+    void findHistories_deletedAddress_ownerMatch_returnsHistories() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
+        address.softDelete();
+        UserAddressHistory h = UserAddressHistory.forDelete(address);
+        when(userAddressRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(address));
+        when(userAddressHistoryRepository.findByAddressIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(h));
+
+        List<AddressHistoryResponse> result = addressService.findHistories(1L, 1L);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).actionType()).isEqualTo("DELETE");
+    }
+
+    @Test
+    @DisplayName("이력은 changedAt DESC 순서로 반환된다 (리포지토리 정렬 위임 검증)")
+    void findHistories_returnedInRepoOrder() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
+        LocalDateTime older = LocalDateTime.now().minusHours(1);
+        LocalDateTime newer = LocalDateTime.now();
+
+        UserAddressHistory first = UserAddressHistory.forCreate(address);
+        UserAddressHistory second = UserAddressHistory.forUpdate(
+                null, 1L,
+                "홍길동", "서울시", false,
+                "김철수", "부산시", false);
+
+        when(userAddressRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(address));
+        when(userAddressHistoryRepository.findByAddressIdOrderByCreatedAtDesc(1L))
+                .thenReturn(List.of(second, first));
+
+        List<AddressHistoryResponse> result = addressService.findHistories(1L, 1L);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).actionType()).isEqualTo("UPDATE");
+        assertThat(result.get(1).actionType()).isEqualTo("CREATE");
     }
 }

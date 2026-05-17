@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.addressapi.domain.address.dto.AddressCreateRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressHistoryResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressPatchRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
 import org.teamsparta.addressapi.domain.address.entity.UserAddress;
@@ -83,6 +84,15 @@ public class AddressService {
                             saved.getRecipientName(), saved.getRecipientAddress(), saved.isDefault()));
         }
         return AddressDetailResponse.from(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AddressHistoryResponse> findHistories(Long addressId, Long userId) {
+        userAddressRepository.findByIdAndUserId(addressId, userId)
+                .orElseThrow(() -> new AddressNotFoundException(addressId));
+        return userAddressHistoryRepository.findByAddressIdOrderByCreatedAtDesc(addressId).stream()
+                .map(AddressHistoryResponse::from)
+                .toList();
     }
 
     @Transactional

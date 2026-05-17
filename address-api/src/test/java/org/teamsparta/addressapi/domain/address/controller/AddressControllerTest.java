@@ -8,10 +8,13 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
-import org.teamsparta.addressapi.domain.address.service.AddressService;
-
+import org.teamsparta.addressapi.domain.address.dto.AddressHistoryResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
+import org.teamsparta.addressapi.domain.address.service.AddressService;
 import org.teamsparta.addressapi.global.exception.AddressNotFoundException;
+
+import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -128,5 +131,36 @@ class AddressControllerTest {
 
         mockMvc.perform(get("/addresses/1").param("userId", "9002"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/{id}/histories?userId=소유자 → 200")
+    void listHistories_ownerMatch_returns200() throws Exception {
+        AddressHistoryResponse resp = new AddressHistoryResponse(
+                1L, 1L, 1L, "CREATE",
+                null, null, null,
+                "홍길동", "서울시", false,
+                LocalDateTime.now());
+        when(addressService.findHistories(1L, 1L)).thenReturn(List.of(resp));
+
+        mockMvc.perform(get("/addresses/1/histories").param("userId", "1"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/{id}/histories?userId=다른사용자 → 404")
+    void listHistories_ownerMismatch_returns404() throws Exception {
+        when(addressService.findHistories(1L, 9002L))
+                .thenThrow(new AddressNotFoundException(1L));
+
+        mockMvc.perform(get("/addresses/1/histories").param("userId", "9002"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/{id}/histories — userId 미전달 → 400")
+    void listHistories_missingUserId_returns400() throws Exception {
+        mockMvc.perform(get("/addresses/1/histories"))
+                .andExpect(status().isBadRequest());
     }
 }
