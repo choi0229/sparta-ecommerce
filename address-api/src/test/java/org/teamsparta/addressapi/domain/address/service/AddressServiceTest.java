@@ -13,6 +13,7 @@ import org.springframework.data.domain.Sort;
 import org.teamsparta.addressapi.domain.address.dto.AddressCreateRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressHistoryPageResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressPageResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressHistoryResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressPatchRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
@@ -450,5 +451,73 @@ class AddressServiceTest {
 
         assertThatThrownBy(() -> addressService.findDefaultAddress(99L))
                 .isInstanceOf(AddressNotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("페이징 목록 조회 성공 — content 반환")
+    void findPageByUserId_success() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시 강남구", true);
+        PageImpl<UserAddress> pageResult = new PageImpl<>(List.of(address),
+                PageRequest.of(0, 20), 1);
+        when(userAddressRepository.findByUserIdAndDeletedFalse(eq(1L), any()))
+                .thenReturn(pageResult);
+
+        AddressPageResponse response = addressService.findPageByUserId(1L, 0, 20);
+
+        assertThat(response.content()).hasSize(1);
+        assertThat(response.totalElements()).isEqualTo(1L);
+        assertThat(response.hasNext()).isFalse();
+    }
+
+    @Test
+    @DisplayName("주소 0건이어도 empty page 반환 — 200")
+    void findPageByUserId_empty_returnsEmptyPage() {
+        PageImpl<UserAddress> empty = new PageImpl<>(List.of(),
+                PageRequest.of(0, 20), 0);
+        when(userAddressRepository.findByUserIdAndDeletedFalse(eq(99L), any()))
+                .thenReturn(empty);
+
+        AddressPageResponse response = addressService.findPageByUserId(99L, 0, 20);
+
+        assertThat(response.content()).isEmpty();
+        assertThat(response.totalElements()).isZero();
+    }
+
+    @Test
+    @DisplayName("page < 0 → IllegalArgumentException")
+    void findPageByUserId_negativePage_throws() {
+        assertThatThrownBy(() -> addressService.findPageByUserId(1L, -1, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("size = 0 → IllegalArgumentException")
+    void findPageByUserId_zeroSize_throws() {
+        assertThatThrownBy(() -> addressService.findPageByUserId(1L, 0, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("size > 100 → IllegalArgumentException")
+    void findPageByUserId_sizeTooLarge_throws() {
+        assertThatThrownBy(() -> addressService.findPageByUserId(1L, 0, 101))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("Pageable 정렬이 isDefault DESC, id DESC인지 확인")
+    void findPageByUserId_pageableSort_isDefaultDescIdDesc() {
+        PageImpl<UserAddress> empty = new PageImpl<>(List.of(),
+                PageRequest.of(0, 20), 0);
+        ArgumentCaptor<org.springframework.data.domain.Pageable> captor =
+                ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        when(userAddressRepository.findByUserIdAndDeletedFalse(eq(1L), captor.capture()))
+                .thenReturn(empty);
+
+        addressService.findPageByUserId(1L, 0, 20);
+
+        Sort sort = captor.getValue().getSort();
+        assertThat(sort.getOrderFor("isDefault").getDirection()).isEqualTo(Sort.Direction.DESC);
+        assertThat(sort.getOrderFor("id").getDirection()).isEqualTo(Sort.Direction.DESC);
     }
 }

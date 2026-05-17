@@ -295,7 +295,8 @@ kubectl rollout status deployment/order-api -n ecommerce --timeout=120s
 
 MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했습니다.
 
-- **CRUD API**: `GET /addresses?userId`, `POST /addresses`, `PATCH /addresses/{id}`, `DELETE /addresses/{id}` (soft delete)
+- **CRUD API**: `GET /addresses?userId` (전체 목록 조회, 유지), `POST /addresses`, `PATCH /addresses/{id}`, `DELETE /addresses/{id}` (soft delete)
+- **주소 목록 페이징 조회**: `GET /addresses/page?userId={userId}&page=0&size=20` — deleted=false만 포함, 기본 배송지 우선(`isDefault DESC, id DESC`), size 최대 100, page/size 범위 위반 시 400. 응답: `AddressPageResponse`(content, page, size, totalElements, totalPages, hasNext)
 - **Bean Validation**: POST — `userId` NotNull, `recipientName`/`recipientAddress` NotBlank. PATCH — null은 미수정 허용, 비어 있는 문자열은 400 차단
 - **soft delete**: `deleted=true` 처리 후 조회 제외. 삭제된 `addressId`로 order-api 주문 생성 시 `ADDRESS_NOT_FOUND`(404) 차단
 - **기본 배송지 1개 정책**: 사용자별 `is_default=true` 행을 최대 1개로 제한하는 partial unique index (V3 Flyway). 새 기본 배송지 지정 시 기존 기본 배송지 자동 해제
@@ -1539,3 +1540,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~기본 배송지 자동 해제 이력 저장 — 새 기본 배송지 지정 시 기존 default 주소의 isDefault 변경을 actionType=UPDATE 이력으로 저장. CREATE/UPDATE 모두 적용~~
 - ~~주소 변경 이력 조회 API 페이징/actionType 필터 추가 (page/size/actionType, 최대 size=100, 잘못된 값 400)~~
 - ~~사용자 기본 배송지 조회 API 추가 (`GET /addresses/default?userId=`) — userId 필수(400), 기본 배송지 없으면 404, deleted 제외~~
+- ~~사용자 주소 목록 페이징 조회 API 추가 (`GET /addresses/page?userId=&page=&size=`) — deleted=false, isDefault DESC/id DESC 정렬, size 최대 100, 잘못된 값 400~~

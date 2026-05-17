@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.teamsparta.addressapi.domain.address.dto.AddressCreateRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressHistoryPageResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressPageResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressPatchRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
 import org.teamsparta.addressapi.domain.address.entity.UserAddressHistory;
@@ -33,6 +34,14 @@ public class AddressController {
     @GetMapping("/default")
     public AddressDetailResponse getDefaultAddress(@RequestParam Long userId) {
         return addressService.findDefaultAddress(userId);
+    }
+
+    @GetMapping("/page")
+    public AddressPageResponse listAddressesPage(
+            @RequestParam Long userId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return addressService.findPageByUserId(userId, page, size);
     }
 
     @GetMapping("/{id}")

@@ -10,6 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressHistoryPageResponse;
+import org.teamsparta.addressapi.domain.address.dto.AddressPageResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
 import org.teamsparta.addressapi.domain.address.entity.UserAddressHistory;
 import org.teamsparta.addressapi.domain.address.service.AddressService;
@@ -259,5 +260,82 @@ class AddressControllerTest {
                         .param("userId", "1")
                         .param("size", "101"))
                 .andExpect(status().isBadRequest());
+    }
+
+    private static final AddressPageResponse EMPTY_ADDRESS_PAGE =
+            new AddressPageResponse(List.of(), 0, 20, 0L, 0, false);
+
+    @Test
+    @DisplayName("GET /addresses/page?userId=1 → 200")
+    void listAddressesPage_returns200() throws Exception {
+        when(addressService.findPageByUserId(1L, 0, 20)).thenReturn(EMPTY_ADDRESS_PAGE);
+
+        mockMvc.perform(get("/addresses/page").param("userId", "1"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/page?userId=1&page=1&size=5 → 200")
+    void listAddressesPage_withPageAndSize_returns200() throws Exception {
+        when(addressService.findPageByUserId(1L, 1, 5))
+                .thenReturn(new AddressPageResponse(List.of(), 1, 5, 0L, 0, false));
+
+        mockMvc.perform(get("/addresses/page")
+                        .param("userId", "1")
+                        .param("page", "1")
+                        .param("size", "5"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/page — userId 미전달 → 400")
+    void listAddressesPage_missingUserId_returns400() throws Exception {
+        mockMvc.perform(get("/addresses/page"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/page?page=-1 → 400")
+    void listAddressesPage_negativePage_returns400() throws Exception {
+        when(addressService.findPageByUserId(1L, -1, 20))
+                .thenThrow(new IllegalArgumentException("page >= 0, 0 < size <= 100"));
+
+        mockMvc.perform(get("/addresses/page")
+                        .param("userId", "1")
+                        .param("page", "-1"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/page?size=0 → 400")
+    void listAddressesPage_zeroSize_returns400() throws Exception {
+        when(addressService.findPageByUserId(1L, 0, 0))
+                .thenThrow(new IllegalArgumentException("page >= 0, 0 < size <= 100"));
+
+        mockMvc.perform(get("/addresses/page")
+                        .param("userId", "1")
+                        .param("size", "0"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/page?size=101 → 400")
+    void listAddressesPage_sizeTooLarge_returns400() throws Exception {
+        when(addressService.findPageByUserId(1L, 0, 101))
+                .thenThrow(new IllegalArgumentException("page >= 0, 0 < size <= 100"));
+
+        mockMvc.perform(get("/addresses/page")
+                        .param("userId", "1")
+                        .param("size", "101"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /addresses/page — literal path가 /addresses/{id}보다 우선 처리됨")
+    void listAddressesPage_literalPathPriorityOverTemplate() throws Exception {
+        when(addressService.findPageByUserId(1L, 0, 20)).thenReturn(EMPTY_ADDRESS_PAGE);
+
+        mockMvc.perform(get("/addresses/page").param("userId", "1"))
+                .andExpect(status().isOk());
     }
 }

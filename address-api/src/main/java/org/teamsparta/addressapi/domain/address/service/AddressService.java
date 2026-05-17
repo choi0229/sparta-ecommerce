@@ -18,6 +18,7 @@ import org.teamsparta.addressapi.global.exception.AddressNotFoundException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.teamsparta.addressapi.domain.address.dto.AddressPageResponse;
 
 import java.util.List;
 import java.util.Objects;
@@ -135,6 +136,18 @@ public class AddressService {
                 ? userAddressHistoryRepository.findByAddressIdAndActionType(addressId, actionType, pageable)
                 : userAddressHistoryRepository.findByAddressId(addressId, pageable);
         return AddressHistoryPageResponse.from(result);
+    }
+
+    @Transactional(readOnly = true)
+    public AddressPageResponse findPageByUserId(Long userId, int page, int size) {
+        if (page < 0 || size <= 0 || size > 100) {
+            throw new IllegalArgumentException("page >= 0, 0 < size <= 100");
+        }
+        PageRequest pageable = PageRequest.of(page, size,
+                Sort.by(Sort.Direction.DESC, "isDefault")
+                        .and(Sort.by(Sort.Direction.DESC, "id")));
+        Page<UserAddress> result = userAddressRepository.findByUserIdAndDeletedFalse(userId, pageable);
+        return AddressPageResponse.from(result);
     }
 
     @Transactional(readOnly = true)
