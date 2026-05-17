@@ -3,6 +3,7 @@ package org.teamsparta.addressapi.domain.address.service;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -11,6 +12,8 @@ import org.teamsparta.addressapi.domain.address.dto.AddressDetailResponse;
 import org.teamsparta.addressapi.domain.address.dto.AddressPatchRequest;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
 import org.teamsparta.addressapi.domain.address.entity.UserAddress;
+import org.teamsparta.addressapi.domain.address.entity.UserAddressHistory;
+import org.teamsparta.addressapi.domain.address.repository.UserAddressHistoryRepository;
 import org.teamsparta.addressapi.domain.address.repository.UserAddressRepository;
 import org.teamsparta.addressapi.global.exception.AddressNotFoundException;
 
@@ -29,6 +32,9 @@ class AddressServiceTest {
 
     @Mock
     private UserAddressRepository userAddressRepository;
+
+    @Mock
+    private UserAddressHistoryRepository userAddressHistoryRepository;
 
     @InjectMocks
     private AddressService addressService;
@@ -125,6 +131,24 @@ class AddressServiceTest {
     }
 
     @Test
+    @DisplayName("주소 생성 시 CREATE 이력이 저장된다")
+    void create_savesHistory() {
+        AddressCreateRequest request = new AddressCreateRequest(1L, "홍길동", "서울시", false);
+        UserAddress saved = UserAddress.create(1L, "홍길동", "서울시", false);
+        when(userAddressRepository.save(any())).thenReturn(saved);
+
+        addressService.create(request);
+
+        ArgumentCaptor<UserAddressHistory> captor = ArgumentCaptor.forClass(UserAddressHistory.class);
+        verify(userAddressHistoryRepository).save(captor.capture());
+        UserAddressHistory history = captor.getValue();
+        assertThat(history.getActionType()).isEqualTo(UserAddressHistory.ActionType.CREATE);
+        assertThat(history.getAfterRecipientName()).isEqualTo("홍길동");
+        assertThat(history.getAfterRecipientAddress()).isEqualTo("서울시");
+        assertThat(history.getBeforeRecipientName()).isNull();
+    }
+
+    @Test
     @DisplayName("존재하지 않는 주소 수정 시 AddressNotFoundException 발생")
     void update_notFound_throws() {
         when(userAddressRepository.findByIdAndDeletedFalse(99L)).thenReturn(Optional.empty());
@@ -146,6 +170,35 @@ class AddressServiceTest {
     }
 
     @Test
+    @DisplayName("실제 변경이 있을 때 UPDATE 이력이 저장된다")
+    void update_withChange_savesHistory() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
+        when(userAddressRepository.findByIdAndDeletedFalse(1L)).thenReturn(Optional.of(address));
+        when(userAddressRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        addressService.update(1L, new AddressPatchRequest("김철수", null, null));
+
+        ArgumentCaptor<UserAddressHistory> captor = ArgumentCaptor.forClass(UserAddressHistory.class);
+        verify(userAddressHistoryRepository).save(captor.capture());
+        UserAddressHistory history = captor.getValue();
+        assertThat(history.getActionType()).isEqualTo(UserAddressHistory.ActionType.UPDATE);
+        assertThat(history.getBeforeRecipientName()).isEqualTo("홍길동");
+        assertThat(history.getAfterRecipientName()).isEqualTo("김철수");
+    }
+
+    @Test
+    @DisplayName("변경 내용이 없으면 UPDATE 이력을 저장하지 않는다")
+    void update_withNoChange_doesNotSaveHistory() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시", false);
+        when(userAddressRepository.findByIdAndDeletedFalse(1L)).thenReturn(Optional.of(address));
+        when(userAddressRepository.save(any())).thenReturn(address);
+
+        addressService.update(1L, new AddressPatchRequest(null, null, null));
+
+        verify(userAddressHistoryRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("soft delete — deleted 플래그가 설정되고 isDefault가 해제됨")
     void delete_softDeletesAddress() {
         UserAddress address = UserAddress.create(1L, "홍길동", "서울시", true);
@@ -156,6 +209,23 @@ class AddressServiceTest {
         assertThat(address.isDeleted()).isTrue();
         assertThat(address.isDefault()).isFalse();
         verify(userAddressRepository).save(address);
+    }
+
+    @Test
+    @DisplayName("주소 삭제 시 DELETE 이력이 삭제 전 값으로 저장된다")
+    void delete_savesHistory() {
+        UserAddress address = UserAddress.create(1L, "홍길동", "서울시", true);
+        when(userAddressRepository.findByIdAndDeletedFalse(1L)).thenReturn(Optional.of(address));
+
+        addressService.delete(1L);
+
+        ArgumentCaptor<UserAddressHistory> captor = ArgumentCaptor.forClass(UserAddressHistory.class);
+        verify(userAddressHistoryRepository).save(captor.capture());
+        UserAddressHistory history = captor.getValue();
+        assertThat(history.getActionType()).isEqualTo(UserAddressHistory.ActionType.DELETE);
+        assertThat(history.getBeforeRecipientName()).isEqualTo("홍길동");
+        assertThat(history.getBeforeIsDefault()).isTrue();
+        assertThat(history.getAfterRecipientName()).isNull();
     }
 
     @Test

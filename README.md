@@ -23,7 +23,7 @@
 - **inventory-api** (`:8082`): 재고 예약(Reservation), 결제 대기 TTL 만료, 재고 해제 및 보상 처리.
 - **logistics-api** (`:8084`): 배송 요청 생성, 배송 상태 관리, 배송 상태 이력 저장, 주문 이벤트 수신, Transactional Outbox 기반 배송 이벤트 발행.
 - **payment-api**: 독립 서비스가 아닌 `product-api` 내부에 약식 구현된 결제 흐름.
-- **address-api** (`:8090`, 이미지 태그 `:real`): Spring Boot + PostgreSQL 기반 사용자 주소 관리 서비스. CRUD API 제공(`GET /addresses/{id}`, `GET /addresses?userId`, `POST`, `PATCH`, `DELETE` soft delete), 기본 배송지 1개 partial unique index, 삭제된 주소 조회 제외. order-api의 `addressId` 기반 배송지 해소에 사용. `deployment/address-api/`로 배포.
+- **address-api** (`:8090`, 이미지 태그 `:real`): Spring Boot + PostgreSQL 기반 사용자 주소 관리 서비스. CRUD API 제공(`GET /addresses/{id}`, `GET /addresses?userId`, `POST`, `PATCH`, `DELETE` soft delete), 기본 배송지 1개 partial unique index, 삭제된 주소 조회 제외, 주소 변경/삭제 이력 저장(`user_address_history`). order-api의 `addressId` 기반 배송지 해소에 사용. `deployment/address-api/`로 배포.
 - **mock-address-api** (`:8090`, 이미지 태그 `:mock`): `address-http` smoke 전용 WireMock 서버. 성공/404/503 시나리오 재현. `deployment/mock-address-api/`로 배포.
 
 ---
@@ -300,6 +300,17 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 - **soft delete**: `deleted=true` 처리 후 조회 제외. 삭제된 `addressId`로 order-api 주문 생성 시 `ADDRESS_NOT_FOUND`(404) 차단
 - **기본 배송지 1개 정책**: 사용자별 `is_default=true` 행을 최대 1개로 제한하는 partial unique index (V3 Flyway). 새 기본 배송지 지정 시 기존 기본 배송지 자동 해제
 - **real smoke 자동화**: `e2e-order-address-real-smoke.sh` — 7단계 자동화: 주소 생성(userId=9001) → 정상 주문 polling → 다른 userId(9002)로 같은 addressId 주문 시 `ADDRESS_NOT_FOUND` 차단 → soft delete → 삭제된 addressId로 주문 `ADDRESS_NOT_FOUND` 차단
+
+### 사용자 주소 변경/삭제 이력 저장
+
+주소 CRUD 작업마다 변경 전/후 값을 `user_address_history` 테이블에 append-only로 저장합니다.
+
+- **CREATE**: `after_*` = 생성 값, `before_*` = null, `action_type=CREATE`
+- **UPDATE**: 실제 변경이 있을 때만 저장 — `before_*` = 변경 전 값, `after_*` = 변경 후 값, `action_type=UPDATE`. 동일한 값으로 재요청하면 이력 미저장
+- **DELETE**: `before_*` = soft delete 전 값, `after_*` = null, `action_type=DELETE`
+- **트랜잭션 경계**: 이력 저장은 주소 변경과 동일한 `@Transactional` 내에서 수행 — 이력 저장 실패 시 주소 변경도 함께 롤백
+- **조회 API 없음**: 내부 저장 전용 (`user_address_history` 직접 조회는 운영 DB 쿼리로 대응)
+- **V4 Flyway**: `V4__add_user_address_history.sql`로 테이블 추가
 
 #### mock address-api (smoke 전용)
 
@@ -1500,3 +1511,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~real address-api smoke 자동화 (`e2e-order-address-real-smoke.sh` — 주소 생성 → 주문 polling → 삭제 → ADDRESS_NOT_FOUND 차단 검증)~~
 - ~~주소 소유자 검증 추가 (`GET /addresses/{id}?userId=` 소유자 확인, 불일치 시 `ADDRESS_NOT_FOUND` 차단, smoke 7단계로 자동 검증)~~
 - ~~기본 배송지 1개 정책 동시성 검증 추가 (Testcontainers + PostgreSQL partial unique index 기반, 순차/동시 시나리오, partial index 위반 시 409 Conflict 매핑)~~
+- ~~사용자 주소 변경/삭제 이력 저장 (`user_address_history`, V4 Flyway) — CREATE/UPDATE/DELETE 이력 append-only, 동일 값 UPDATE 미저장, 이력 저장 실패 시 주소 변경도 롤백~~
