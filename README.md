@@ -1427,7 +1427,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 ### 도메인 / 운영
 - 사용자 주소 서비스 고도화
   - 인증 연계 시 userId 헤더 기반 검증으로 전환 (현재는 request.userId 신뢰)
-  - 기본 배송지 동시 변경 시 race condition 테스트 보강
+  - 기본 배송지 동시 변경 시 race condition 테스트 보강 → Testcontainers(PostgreSQL) 기반 통합 테스트로 완료됨 (아래 완료 항목 참조)
   - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
 - 배송지 변경 이력 관리 고도화
   - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토
@@ -1482,3 +1482,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~real address-api CRUD API 추가 (GET /addresses?userId, POST, PATCH, DELETE soft delete, partial unique index, Bean Validation)~~
 - ~~real address-api smoke 자동화 (`e2e-order-address-real-smoke.sh` — 주소 생성 → 주문 polling → 삭제 → ADDRESS_NOT_FOUND 차단 검증)~~
 - ~~주소 소유자 검증 추가 (`GET /addresses/{id}?userId=` 소유자 확인, 불일치 시 `ADDRESS_NOT_FOUND` 차단, smoke 7단계로 자동 검증)~~
+- ~~기본 배송지 1개 정책 동시성 검증 추가 (Testcontainers + PostgreSQL partial unique index 기반, 순차/동시 시나리오, partial index 위반 시 409 Conflict 매핑)~~

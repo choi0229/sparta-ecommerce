@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.teamsparta.addressapi.domain.address.service.AddressService;
@@ -12,6 +13,7 @@ import org.teamsparta.addressapi.domain.address.service.AddressService;
 import org.teamsparta.addressapi.domain.address.dto.AddressResponse;
 import org.teamsparta.addressapi.global.exception.AddressNotFoundException;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -91,6 +93,21 @@ class AddressControllerTest {
                                 {"recipientName":null,"recipientAddress":null,"isDefault":null}
                                 """))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("POST /addresses — partial unique index 충돌(기본 배송지 중복) → 409")
+    void createAddress_defaultConflict_returns409() throws Exception {
+        when(addressService.create(any()))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement; constraint [ux_user_address_default_active]"));
+
+        mockMvc.perform(post("/addresses")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"userId":1,"recipientName":"홍길동","recipientAddress":"서울시","isDefault":true}
+                                """))
+                .andExpect(status().isConflict());
     }
 
     @Test
