@@ -692,6 +692,8 @@ scripts/claude-guardrails.sh
   - self-hosted runner 또는 runner에서 접근 가능한 환경이 필요
   - `address-http` 시나리오는 runner에 `docker`, `minikube` 추가 필요 (`happy` / `negative` 는 kubectl만 필요)
   - 각 시나리오 실행 로그는 GitHub Actions artifact로 자동 업로드됨 (성공/실패 무관)
+  - happy path polling: `MAX_WAIT_SECONDS=60` (Kafka/Outbox 비동기 처리로 minikube 환경에서 30초를 초과할 수 있음)
+  - port-forward 충돌 시 기존 kubectl port-forward 프로세스만 자동 정리 후 재시도; 다른 프로세스가 점유 시 즉시 실패
 
 ### 운영/검증 자동화 보강
 
@@ -806,6 +808,19 @@ bash scripts/smoke/e2e-order-shipment-smoke.sh
 검증 내용:
 - 1차: `status=CREATED`, `shipmentStatus=READY`
 - 2차: `PATCH /shipments/{id}/status` 후 `status=CREATED`, `shipmentStatus=SHIPPED`
+
+> **Polling timeout**: Kafka/Outbox 기반 비동기 처리로 self-hosted runner/minikube 환경에서 30초를 초과할 수 있다. `MAX_WAIT_SECONDS=60`(happy path) / `MAX_WAIT_SECONDS=30`(negative)으로 설정되어 있다. timeout 발생 시 pod 상태, order-api/logistics-api/product-api 로그가 자동 출력된다.
+
+**Troubleshooting — port-forward 충돌**
+
+같은 포트에 이전 실행의 kubectl port-forward가 남아 있으면 smoke script가 자동으로 감지해 kubectl port-forward 프로세스만 종료한다. kubectl port-forward가 아닌 프로세스가 점유 중이면 즉시 실패하고 수동 종료를 안내한다.
+
+```bash
+# 수동 정리 (필요 시)
+lsof -ti :8083 | xargs kill 2>/dev/null || true
+lsof -ti :8084 | xargs kill 2>/dev/null || true
+lsof -ti :8090 | xargs kill 2>/dev/null || true
+```
 
 **negative smoke (invalid SKU)**
 

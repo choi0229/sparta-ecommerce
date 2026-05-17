@@ -28,7 +28,8 @@ ORDER_API="http://localhost:8083"
 NAMESPACE="ecommerce"
 IMAGE_NAME="sparta-msa-final-project-address-api:mock"
 POLL_INTERVAL=3
-TIMEOUT=60
+# Kafka/Outbox 기반 비동기 처리라 self-hosted runner/minikube 환경에서 30초를 초과할 수 있음
+MAX_WAIT_SECONDS=60
 PF_PID=""
 ORDER_API_POD=""
 PF_LOG=$(mktemp)
@@ -69,6 +70,30 @@ extract_error() {
     echo "$json" | grep -o '"errorCode"[[:space:]]*:[[:space:]]*"[^"]*"' \
                  | sed 's/.*:[[:space:]]*//' \
                  | tr -d '"'
+  fi
+}
+
+# 해당 포트를 사용 중인 kubectl port-forward가 있으면 종료한다.
+# kubectl port-forward가 아닌 프로세스는 건드리지 않고 즉시 실패한다.
+kill_existing_kubectl_pf() {
+  local port="$1"
+  local existing_pid
+  existing_pid=$(lsof -ti :"${port}" 2>/dev/null | head -1 || true)
+  if [[ -z "$existing_pid" ]]; then
+    return 0
+  fi
+  local proc_cmd
+  proc_cmd=$(ps -p "$existing_pid" -o args= 2>/dev/null || true)
+  if [[ "$proc_cmd" == *"kubectl port-forward"* ]]; then
+    echo "[INFO] Port ${port} 에 기존 kubectl port-forward (PID=${existing_pid}) 발견 — 종료 중..."
+    kill "$existing_pid" 2>/dev/null || true
+    sleep 1
+    echo "[OK] 기존 kubectl port-forward 종료 완료"
+  else
+    echo "[FAIL] Port ${port} 를 사용 중인 프로세스(PID=${existing_pid})가 kubectl port-forward가 아닙니다."
+    echo "       cmd: ${proc_cmd:-unknown}"
+    echo "       수동으로 종료 후 재실행하세요."
+    exit 1
   fi
 }
 
@@ -138,8 +163,24 @@ echo "[OK] order-api rollout 완료 및 pod Ready 확인 (mode=http)"
 echo ""
 echo "=== [4/7] order-api port-forward 시작 (localhost:8083) ==="
 
+kill_existing_kubectl_pf 8083
+
 kubectl port-forward pod/"${ORDER_API_POD}" 8083:8083 -n "${NAMESPACE}" >"${PF_LOG}" 2>&1 &
 PF_PID=$!
+
+# PF 시작 직후 프로세스 생존 확인 및 포트 충돌 감지
+sleep 2
+if ! kill -0 "${PF_PID}" 2>/dev/null; then
+  echo "[FAIL] port-forward 프로세스(PID=${PF_PID})가 시작 직후 종료되었습니다."
+  tail -20 "${PF_LOG}" || true
+  exit 1
+fi
+if grep -qiE "address already in use|unable to listen" "${PF_LOG}" 2>/dev/null; then
+  echo "[FAIL] port-forward 시작 실패 — 포트 충돌 감지"
+  tail -20 "${PF_LOG}" || true
+  kill "${PF_PID}" 2>/dev/null || true
+  exit 1
+fi
 
 for i in $(seq 1 30); do
   sleep 1
@@ -191,9 +232,21 @@ while true; do
     break
   fi
 
-  if [[ ${elapsed} -ge ${TIMEOUT} ]]; then
-    echo "[FAIL] ${TIMEOUT}초 안에 status=CREATED, shipmentStatus=READY 에 도달하지 못했습니다."
+  if [[ ${elapsed} -ge ${MAX_WAIT_SECONDS} ]]; then
+    echo "[FAIL] ${MAX_WAIT_SECONDS}초 안에 status=CREATED, shipmentStatus=READY 에 도달하지 못했습니다."
     echo "       최종 응답: ${STATUS_RESP}"
+    echo ""
+    echo "=== [진단] 클러스터 pod 상태 ==="
+    kubectl get pods -n "${NAMESPACE}" --no-headers 2>/dev/null || true
+    echo ""
+    echo "=== [진단] order-api 최근 로그 (20줄) ==="
+    kubectl logs -n "${NAMESPACE}" -l app=order-api --tail=20 --since=2m 2>/dev/null || true
+    echo ""
+    echo "=== [진단] logistics-api 최근 로그 (20줄) ==="
+    kubectl logs -n "${NAMESPACE}" -l app=logistics-api --tail=20 --since=2m 2>/dev/null || true
+    echo ""
+    echo "=== [진단] product-api 최근 로그 (20줄) ==="
+    kubectl logs -n "${NAMESPACE}" -l app=product-api --tail=20 --since=2m 2>/dev/null || true
     exit 1
   fi
 
