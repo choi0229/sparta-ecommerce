@@ -15,11 +15,11 @@ if [ -z "$SERVICE" ]; then
 fi
 
 case "$SERVICE" in
-  product-api|order-api|inventory-api|logistics-api)
+  product-api|order-api|inventory-api|logistics-api|address-api)
     ;;
   *)
     echo "지원하지 않는 서비스입니다: $SERVICE"
-    echo "지원 서비스: product-api, order-api, inventory-api, logistics-api"
+    echo "지원 서비스: product-api, order-api, inventory-api, logistics-api, address-api"
     exit 1
     ;;
 esac
