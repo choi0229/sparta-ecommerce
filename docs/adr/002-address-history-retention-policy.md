@@ -132,6 +132,7 @@ user_address_history
 
 - `GET /admin/addresses/histories?from=&to=` — 날짜 범위 기반 조회로 오래된 이력 수동 파악 가능
 - `X-Admin-Api-Key` 접근 통제 — 관리자 이력 조회 API 무단 접근 차단
+- `GET /admin/addresses/histories/retention-dry-run?retentionMonths=N` — 정책 후보 기준(N개월)을 적용하면 영향받는 이력이 몇 건인지 read-only로 조회. 실제 삭제/이동 없음
 - 이 ADR 문서화 — 정책 결정 시점과 근거를 남겨 향후 전환 시 참조 가능
 
 ---
@@ -141,9 +142,10 @@ user_address_history
 ### 지금 (이 ADR 작성 시점)
 - [x] 보존 기간 정책 ADR 작성 (이 파일)
 - [x] README 향후 개선 과제 항목 갱신
+- [x] 드라이런 조회 API 구현 (`GET /admin/addresses/histories/retention-dry-run`) — read-only, 실제 삭제 없음
 
 ### 나중에 (후속 구현 기준 도달 시)
 - [ ] 보존 기간 N 결정 (비즈니스/법적 기준 확정 후)
-- [ ] B안 선택 시: `created_at` 인덱스 추가 + 삭제 배치 구현 + 실행 전 dry-run 검토 프로세스
+- [ ] B안 선택 시: `created_at` 인덱스 추가 + 삭제 배치 구현 + dry-run API로 사전 영향도 확인 후 실행
 - [ ] C안 선택 시: `user_address_history_archive` 테이블 Flyway migration + 이동 배치 구현 + 아카이브 조회 API 확장
 - [ ] 데이터 주체 삭제 요청 대응 API 검토

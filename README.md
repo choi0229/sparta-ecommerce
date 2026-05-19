@@ -346,6 +346,16 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 - **정렬**: createdAt DESC (고정)
 - **응답**: `AddressHistoryPageResponse` — content(List), page, size, totalElements, totalPages, hasNext
 
+### 이력 보존 정책 드라이런 조회 API
+
+`GET /admin/addresses/histories/retention-dry-run?retentionMonths=12`
+
+- **접근 통제**: `X-Admin-Api-Key` 헤더 필수. 헤더 누락/불일치 시 403
+- **retentionMonths 필수**: 1 이상 120 이하 정수. 범위 위반 시 400
+- **동작**: `cutoffAt = now - retentionMonths개월` 기준으로 이전 이력 건수를 조회한다. **실제 삭제/아카이빙은 수행하지 않는다.**
+- **ADR-002 D안 준수**: 현재 무기한 보존 정책 유지 중 — 이 API는 정책 영향도를 사전 파악하기 위한 read-only 기능이다.
+- **응답**: `AddressHistoryRetentionDryRunResponse` — retentionMonths, cutoffAt, candidateCount, action(`DRY_RUN_ONLY`), message
+
 #### mock address-api (smoke 전용)
 
 `address-http` smoke는 항상 `:mock` 태그 + `deployment/mock-address-api/`만 사용합니다. WireMock은 503 시나리오까지 재현 가능한 smoke 자산이며, 실서비스 대체가 아닙니다.
@@ -1559,3 +1569,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~관리자용 전체 이력 조회/검색 API 추가 (`GET /admin/addresses/histories`) — userId/addressId/actionType/날짜 범위 optional 필터, createdAt DESC, size 최대 100~~
 - ~~관리자 이력 API X-Admin-Api-Key 접근 통제 추가 — 헤더 누락/불일치/설정값 미지정 시 403~~
 - ~~user_address_history 이력 보존 기간 정책 ADR 작성 ([ADR-002](docs/adr/002-address-history-retention-policy.md)) — 현재 D안(무기한 보존 + 정책 보류) 채택, 후속 구현 기준 정의~~
+- ~~이력 보존 정책 드라이런 조회 API 추가 (`GET /admin/addresses/histories/retention-dry-run?retentionMonths=N`) — read-only, 실제 삭제 없음, 1≤N≤120~~
