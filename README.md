@@ -1502,7 +1502,8 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
   - 기본 배송지 동시 변경 시 race condition 테스트 보강 → Testcontainers(PostgreSQL) 기반 통합 테스트로 완료됨 (아래 완료 항목 참조)
   - addressId와 shippingAddress 동시 입력 정책을 장기적으로 단일 방식으로 단순화할지 검토
 - 배송지 변경 이력 관리 고도화
-  - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토
+  - ~~상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토~~ → 완료 ([ADR-004](docs/adr/004-shipment-history-timeline-query.md): 저장 분리 유지, 통합 timeline API는 CS/운영 요구 구체화 후 후속 구현)
+  - 배송 이력 통합 timeline API 구현 (관리자 권한/응답 스키마 확정 후): `GET /admin/shipments/{shipmentId}/timeline` — read-only projection으로 두 이력 병합
   - ~~주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토~~ → 완료 ([ADR-003](docs/adr/003-address-history-actor-reason.md): 인증 시스템 도입 전 구현 보류 — actorType은 인증 없이 판별 불가, reason은 API 계약 변경 필요)
   - actorType·reason 실제 구현 (인증 시스템 도입 + API 계약 변경 후): Flyway migration + 기존 이력 UNKNOWN 채우기
 - address-api 이력 고도화
@@ -1572,3 +1573,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~user_address_history 이력 보존 기간 정책 ADR 작성 ([ADR-002](docs/adr/002-address-history-retention-policy.md)) — 현재 D안(무기한 보존 + 정책 보류) 채택, 후속 구현 기준 정의~~
 - ~~이력 보존 정책 드라이런 조회 API 추가 (`GET /admin/addresses/histories/retention-dry-run?retentionMonths=N`) — read-only, 실제 삭제 없음, 1≤N≤120~~
 - ~~주소 변경 주체(actorType)·변경 사유(reason) 저장 여부 정책 검토 ([ADR-003](docs/adr/003-address-history-actor-reason.md)) — 인증 시스템 도입 전 보류 결정~~
+- ~~배송 상태 이력과 배송지 변경 이력 분리/통합 조회 정책 검토 ([ADR-004](docs/adr/004-shipment-history-timeline-query.md)) — 저장 분리 유지, 통합 timeline API 후속 구현 보류 결정~~
