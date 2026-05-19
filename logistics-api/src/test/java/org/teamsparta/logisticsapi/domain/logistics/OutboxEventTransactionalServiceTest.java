@@ -98,6 +98,33 @@ class OutboxEventTransactionalServiceTest {
     }
 
     @Test
+    @DisplayName("markPermanentFailed() — retryCount 증가 없이 즉시 FAILED로 저장한다")
+    void markPermanentFailed_directlyFailed_noRetryCountIncrease() {
+        OutboxEvent event = pendingEvent();
+        given(outboxEventRepository.findById(1L)).willReturn(Optional.of(event));
+
+        service.markPermanentFailed(1L);
+
+        assertThat(event.getStatus()).isEqualTo(OutboxStatus.FAILED);
+        assertThat(event.getRetryCount()).isEqualTo(0);
+        assertThat(event.getNextRetryAt()).isNull();
+        then(outboxEventRepository).should(times(1)).save(event);
+    }
+
+    @Test
+    @DisplayName("markPermanentFailed() — 존재하지 않는 id면 DomainException(EVENT_NOT_FOUND)이 발생한다")
+    void markPermanentFailed_notFound_throwsDomainException() {
+        given(outboxEventRepository.findById(999L)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.markPermanentFailed(999L))
+                .isInstanceOf(DomainException.class)
+                .satisfies(ex -> assertThat(((DomainException) ex).getCode())
+                        .isEqualTo(DomainExceptionCode.EVENT_NOT_FOUND.name()));
+
+        then(outboxEventRepository).should(never()).save(any());
+    }
+
+    @Test
     @DisplayName("retryFailed() — FAILED 이벤트를 PENDING으로 전환하고 저장한다")
     void retryFailed_failedEvent_resetsToPending() {
         OutboxEvent event = failedEvent();

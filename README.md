@@ -1512,7 +1512,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
   - 정식 인증 연계 시 `X-Admin-Api-Key` 임시 가드를 Spring Security 기반 관리자 권한 검증으로 전환
   - 이력 보존 기간 정책 실제 구현 (보존 기간 N 확정 후): 자동 삭제 배치 또는 아카이브 테이블 이동
 - Outbox retry 정책 추가 고도화
-  - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
+  - ~~영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토~~ → 완료 (`NonRetryableOutboxException` 도입 — 미등록 eventType 등 영구 실패는 `markPermanentFailed()`로 retryCount 증가 없이 즉시 FAILED 처리, Kafka 일시 장애 등 재시도 가능 실패는 기존 지수 백오프 유지)
   - DLQ 재검토 기준 도달 시 DB 기반 DLQ 도입
 - `logistics_outbox_events` Gauge 부하 고려
   - scrape 간격이 더 짧아지는 환경에서는 전용 스케줄러 기반 캐시 갱신 구조 검토
@@ -1574,3 +1574,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~이력 보존 정책 드라이런 조회 API 추가 (`GET /admin/addresses/histories/retention-dry-run?retentionMonths=N`) — read-only, 실제 삭제 없음, 1≤N≤120~~
 - ~~주소 변경 주체(actorType)·변경 사유(reason) 저장 여부 정책 검토 ([ADR-003](docs/adr/003-address-history-actor-reason.md)) — 인증 시스템 도입 전 보류 결정~~
 - ~~배송 상태 이력과 배송지 변경 이력 분리/통합 조회 정책 검토 ([ADR-004](docs/adr/004-shipment-history-timeline-query.md)) — 저장 분리 유지, 통합 timeline API 후속 구현 보류 결정~~
+- ~~Outbox 영구 실패/재시도 가능 실패 코드 레벨 구분 구현 — `NonRetryableOutboxException` 도입, `markPermanentFailed()` 추가, `OutboxPublisherJob` catch 블록 분리~~

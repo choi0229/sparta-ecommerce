@@ -7,8 +7,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 import org.teamsparta.logisticsapi.domain.logistics.entity.OutboxEvent;
 import org.teamsparta.logisticsapi.domain.logistics.service.OutboxEventTransactionalService;
-import org.teamsparta.logisticsapi.global.exception.DomainException;
-import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
+import org.teamsparta.logisticsapi.global.exception.NonRetryableOutboxException;
 
 import java.time.ZonedDateTime;
 import java.util.List;
@@ -43,8 +42,12 @@ public class OutboxPublisherJob {
                         .get(2, TimeUnit.SECONDS);
                 outboxEventTransactionalService.markSent(event.getId());
                 publishSentCounter.increment();
+            } catch (NonRetryableOutboxException e) {
+                log.error("Outbox permanent failure (non-retryable). id={} eventType={}", event.getId(), event.getEventType(), e);
+                outboxEventTransactionalService.markPermanentFailed(event.getId());
+                publishFailedCounter.increment();
             } catch (Exception e) {
-                log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
+                log.error("Outbox publish failed (retryable). id={} eventType={}", event.getId(), event.getEventType(), e);
                 outboxEventTransactionalService.markFailed(event.getId());
                 publishFailedCounter.increment();
             }
@@ -54,7 +57,7 @@ public class OutboxPublisherJob {
     private String resolveTopicName(String eventType) {
         return switch (eventType) {
             case "shipment-created-event", "shipment-status-changed-event" -> "shipment-event";
-            default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
+            default -> throw new NonRetryableOutboxException("Unknown eventType: " + eventType);
         };
     }
 }

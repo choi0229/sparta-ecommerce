@@ -82,8 +82,8 @@ class OutboxPublisherJobTest {
     }
 
     @Test
-    @DisplayName("미등록 eventType이면 kafkaTemplate.send는 호출되지 않고 markFailed(eventId)가 호출된다")
-    void unknownEventType_callsMarkFailedWithoutKafkaSend() {
+    @DisplayName("미등록 eventType이면 kafkaTemplate.send는 호출되지 않고 markPermanentFailed(id)가 호출된다")
+    void unknownEventType_callsMarkPermanentFailedWithoutKafkaSend() {
         OutboxEvent event = OutboxEvent.pending("shipment", "1", "unknown-event", "{}");
         ReflectionTestUtils.setField(event, "id", 1L);
         given(outboxEventTransactionalService.claimBatch(any(), anyInt())).willReturn(List.of(event));
@@ -91,7 +91,24 @@ class OutboxPublisherJobTest {
         job.publish();
 
         then(kafkaTemplate).shouldHaveNoInteractions();
+        then(outboxEventTransactionalService).should(times(1)).markPermanentFailed(1L);
+        then(outboxEventTransactionalService).should(never()).markFailed(anyLong());
+        then(outboxEventTransactionalService).should(never()).markSent(anyLong());
+    }
+
+    @Test
+    @DisplayName("Kafka send 실패(재시도 가능)는 markFailed(id)가 호출되고 markPermanentFailed는 호출되지 않는다")
+    void kafkaSendFails_retryable_callsMarkFailed_notPermanent() {
+        OutboxEvent event = pendingShipmentEvent();
+        given(outboxEventTransactionalService.claimBatch(any(), anyInt())).willReturn(List.of(event));
+        CompletableFuture<SendResult<String, String>> failedFuture = new CompletableFuture<>();
+        failedFuture.completeExceptionally(new RuntimeException("kafka send timeout"));
+        given(kafkaTemplate.send(anyString(), anyString(), anyString())).willReturn(failedFuture);
+
+        job.publish();
+
         then(outboxEventTransactionalService).should(times(1)).markFailed(1L);
+        then(outboxEventTransactionalService).should(never()).markPermanentFailed(anyLong());
         then(outboxEventTransactionalService).should(never()).markSent(anyLong());
     }
 }
