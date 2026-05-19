@@ -11,6 +11,9 @@ import java.time.LocalDateTime;
 
 public interface UserAddressHistoryRepository extends JpaRepository<UserAddressHistory, Long> {
 
+    // ADR-002 D안: 드라이런 건수 조회 전용 — 실제 삭제 쿼리 없음
+    long countByCreatedAtBefore(LocalDateTime cutoffAt);
+
     Page<UserAddressHistory> findByAddressId(Long addressId, Pageable pageable);
 
     Page<UserAddressHistory> findByAddressIdAndActionType(
