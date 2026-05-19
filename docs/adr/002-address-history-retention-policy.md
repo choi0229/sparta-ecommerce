@@ -10,7 +10,7 @@
 
 address-api는 주소 생성/변경/삭제가 발생할 때마다 `user_address_history` 테이블에 변경 전·후 값을 append-only로 저장한다.
 
-```
+```sql
 user_address_history
   id, address_id, user_id
   action_type (CREATE / UPDATE / DELETE)
