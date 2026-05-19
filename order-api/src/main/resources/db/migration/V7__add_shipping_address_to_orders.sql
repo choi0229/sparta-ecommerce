@@ -1,0 +1,2 @@
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS recipient_name VARCHAR(100);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS recipient_address TEXT;

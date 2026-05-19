@@ -22,8 +22,9 @@ public class ProductSnapShotReplyEvent {
     private List<ProductSnapshotRequestResult.Item> requestItem;
     private String idemKey;
     private Long userId;
+    private ProductSnapshotRequestResult.ShippingAddress shippingAddress;
 
-    public static ProductSnapShotReplyEvent ok(UUID requestId, List<ProductSnapshotItem> items, List<ProductSnapshotRequestResult.Item> requestItem, String idemKey, Long userId){
+    public static ProductSnapShotReplyEvent ok(UUID requestId, List<ProductSnapshotItem> items, List<ProductSnapshotRequestResult.Item> requestItem, String idemKey, Long userId, ProductSnapshotRequestResult.ShippingAddress shippingAddress){
         ProductSnapShotReplyEvent event = new ProductSnapShotReplyEvent();
         event.setRequestId(requestId);
         event.setSuccess(true);
@@ -32,6 +33,7 @@ public class ProductSnapShotReplyEvent {
         event.setRequestItem(requestItem);
         event.setIdemKey(idemKey);
         event.setUserId(userId);
+        event.setShippingAddress(shippingAddress);
         return event;
     }
 

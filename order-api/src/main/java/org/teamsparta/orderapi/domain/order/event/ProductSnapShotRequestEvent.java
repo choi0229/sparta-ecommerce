@@ -12,14 +12,16 @@ public class ProductSnapShotRequestEvent {
     private List<CreateOrderRequest.Item> items;
     private String idemKey;
     private Long userId;
+    private CreateOrderRequest.ShippingAddress shippingAddress;
 
-    public static ProductSnapShotRequestEvent from(UUID requestId, List<CreateOrderRequest.Item> items, String idemKey, Long userId) {
+    public static ProductSnapShotRequestEvent from(UUID requestId, List<CreateOrderRequest.Item> items, String idemKey, Long userId, CreateOrderRequest.ShippingAddress shippingAddress) {
         ProductSnapShotRequestEvent event = new ProductSnapShotRequestEvent();
         event.setRequestId(requestId);
         event.setEventType("productSnapshot.requested");
         event.setItems(items);
         event.setIdemKey(idemKey);
         event.setUserId(userId);
+        event.setShippingAddress(shippingAddress);
         return event;
     }
 }

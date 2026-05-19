@@ -38,7 +38,11 @@ public enum DomainExceptionCode {
     EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "EVENT를 찾을 수 없습니다."),
     INVALID_RESERVATION_ID(HttpStatus.UNAUTHORIZED, "잘못된 RESERVATION ID 입니다."),
     SNAPSHOT_TIMEOUT(HttpStatus.INTERNAL_SERVER_ERROR, "스냅샷 요청한 시간이 초과됐습니다."),
-    EVENT_CONSUME_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "이벤트 처리 중 오류가 발생했습니다.")
+    EVENT_CONSUME_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "이벤트 처리 중 오류가 발생했습니다."),
+
+    SHIPPING_ADDRESS_REQUIRED(HttpStatus.BAD_REQUEST, "배송지 정보가 필요합니다. addressId 또는 shippingAddress를 입력해 주세요."),
+    ADDRESS_NOT_FOUND(HttpStatus.NOT_FOUND, "주소를 찾을 수 없습니다."),
+    ADDRESS_LOOKUP_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "주소 서비스 조회 중 오류가 발생했습니다.")
     ;
 
     final HttpStatus status;

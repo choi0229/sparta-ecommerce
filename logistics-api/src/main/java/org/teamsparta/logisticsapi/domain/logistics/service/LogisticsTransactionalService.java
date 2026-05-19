@@ -10,9 +10,11 @@ import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRe
 import org.teamsparta.logisticsapi.domain.logistics.entity.IdempotencyRecord;
 import org.teamsparta.logisticsapi.domain.logistics.entity.OutboxEvent;
 import org.teamsparta.logisticsapi.domain.logistics.entity.Shipment;
+import org.teamsparta.logisticsapi.domain.logistics.entity.ShipmentAddressHistory;
 import org.teamsparta.logisticsapi.domain.logistics.entity.ShipmentStatusHistory;
 import org.teamsparta.logisticsapi.domain.logistics.repository.IdempotencyRecordRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.OutboxEventRepository;
+import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentAddressHistoryRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentStatusHistoryRepository;
 import org.teamsparta.logisticsapi.global.enums.ShipmentStatus;
@@ -20,6 +22,7 @@ import org.teamsparta.logisticsapi.global.exception.DomainException;
 import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -29,6 +32,7 @@ public class LogisticsTransactionalService {
 
     private final ShipmentRepository shipmentRepository;
     private final ShipmentStatusHistoryRepository historyRepository;
+    private final ShipmentAddressHistoryRepository addressHistoryRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final IdempotencyRecordRepository idempotencyRecordRepository;
     private final ObjectMapper objectMapper;
@@ -124,6 +128,26 @@ public class LogisticsTransactionalService {
                 "shipment-status-changed-event",
                 toPayload(shipment, description, UUID.randomUUID().toString())
         ));
+
+        return shipment;
+    }
+
+    @Transactional
+    public Shipment updateAddress(Long shipmentId, String recipientName, String recipientAddress) {
+        Shipment shipment = shipmentRepository.findById(shipmentId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.SHIPMENT_NOT_FOUND));
+
+        String prevName = shipment.getRecipientName();
+        String prevAddress = shipment.getRecipientAddress();
+
+        shipment.updateAddress(recipientName, recipientAddress);
+        shipmentRepository.save(shipment);
+
+        if (!Objects.equals(prevName, recipientName) || !Objects.equals(prevAddress, recipientAddress)) {
+            addressHistoryRepository.save(
+                    ShipmentAddressHistory.record(shipmentId, prevName, prevAddress, recipientName, recipientAddress)
+            );
+        }
 
         return shipment;
     }

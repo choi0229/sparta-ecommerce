@@ -8,23 +8,28 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: '실행할 smoke test 대상 (happy / negative / all)'
+        description: '실행할 smoke test 대상 (happy / negative / address-http / all)'
         required: true
         default: 'all'
         type: choice
         options:
           - happy
           - negative
+          - address-http
           - all
 
 jobs:
   smoke-test:
     name: Smoke Tests (${{ inputs.target }})
+    if: ${{ inputs.target == 'happy' || inputs.target == 'negative' || inputs.target == 'all' }}
     runs-on: self-hosted
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: 로그 디렉터리 생성
+        run: mkdir -p logs
 
       - name: '[Preflight] 도구 및 클러스터 접근 확인'
         run: |
@@ -78,28 +83,67 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "── 포트 선점 확인 ────────────────────────────────────────────"
+          echo "── 포트 선점 확인 및 기존 kubectl port-forward 정리 ─────────"
           for port in 8083 8084; do
             if (echo >/dev/tcp/localhost/${port}) 2>/dev/null; then
-              echo "[FAIL] Port ${port} 가 이미 사용 중입니다"
-              echo "       이전 실행의 port-forward 또는 로컬 프로세스를 종료하세요"
-              echo "       확인: lsof -i :${port} 또는 ss -tlnp | grep ${port}"
-              exit 1
+              existing_pid=$(lsof -ti :"${port}" 2>/dev/null | head -1 || true)
+              if [[ -n "$existing_pid" ]]; then
+                proc_cmd=$(ps -p "$existing_pid" -o args= 2>/dev/null || true)
+                if [[ "$proc_cmd" == *"kubectl port-forward"* ]]; then
+                  echo "[WARN] Port ${port} 에 기존 kubectl port-forward (PID=${existing_pid}) 발견 — 종료 중..."
+                  kill "$existing_pid" 2>/dev/null || true
+                  sleep 1
+                  echo "[OK] 기존 kubectl port-forward 종료 완료"
+                else
+                  echo "[FAIL] Port ${port} 를 사용 중인 프로세스(PID=${existing_pid})가 kubectl port-forward가 아닙니다."
+                  echo "       cmd: ${proc_cmd:-unknown}"
+                  echo "       수동으로 종료 후 재실행하세요."
+                  echo "       확인: lsof -i :${port} 또는 ss -tlnp | grep ${port}"
+                  exit 1
+                fi
+              else
+                echo "[FAIL] Port ${port} 가 이미 사용 중이지만 PID를 특정할 수 없습니다."
+                echo "       확인: lsof -i :${port} 또는 ss -tlnp | grep ${port}"
+                exit 1
+              fi
             fi
           done
           echo "[OK] 포트 8083, 8084 사용 가능"
 
           echo ""
-          kubectl port-forward svc/order-api-svc 8083:8083 -n ecommerce &
+          PF_ORDER_LOG="${GITHUB_WORKSPACE}/logs/pf-order.log"
+          PF_LOGISTICS_LOG="${GITHUB_WORKSPACE}/logs/pf-logistics.log"
+
+          kubectl port-forward svc/order-api-svc 8083:8083 -n ecommerce >"${PF_ORDER_LOG}" 2>&1 &
           PF_ORDER_PID=$!
           echo "PF_ORDER_PID=${PF_ORDER_PID}" >> "$GITHUB_ENV"
 
-          kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce &
+          kubectl port-forward svc/logistics-api-svc 8084:8084 -n ecommerce >"${PF_LOGISTICS_LOG}" 2>&1 &
           PF_LOGISTICS_PID=$!
           echo "PF_LOGISTICS_PID=${PF_LOGISTICS_PID}" >> "$GITHUB_ENV"
 
           echo "order-api port-forward PID=${PF_ORDER_PID}"
           echo "logistics-api port-forward PID=${PF_LOGISTICS_PID}"
+
+          # PF 시작 직후 프로세스 생존 확인 및 포트 충돌 감지
+          sleep 2
+          for pid_label in "PF_ORDER_PID:${PF_ORDER_PID}:${PF_ORDER_LOG}" "PF_LOGISTICS_PID:${PF_LOGISTICS_PID}:${PF_LOGISTICS_LOG}"; do
+            label="${pid_label%%:*}"
+            rest="${pid_label#*:}"
+            pid="${rest%%:*}"
+            log="${rest#*:}"
+            if ! kill -0 "${pid}" 2>/dev/null; then
+              echo "[FAIL] port-forward 프로세스(${label}=${pid})가 시작 직후 종료되었습니다."
+              tail -20 "${log}" 2>/dev/null || true
+              exit 1
+            fi
+            if grep -qiE "address already in use|unable to listen" "${log}" 2>/dev/null; then
+              echo "[FAIL] port-forward 시작 실패 — 포트 충돌 감지 (${label}=${pid})"
+              tail -20 "${log}" 2>/dev/null || true
+              kill "${pid}" 2>/dev/null || true
+              exit 1
+            fi
+          done
 
           echo ""
           echo "── 포트 응답 대기 ────────────────────────────────────────────"
@@ -113,6 +157,12 @@ jobs:
                 echo "[FAIL] localhost:${port} 이 20초 내에 응답하지 않습니다"
                 echo "── pod 상태 ──────────────────────────────────────────"
                 kubectl get pods -n ecommerce --no-headers 2>/dev/null || true
+                echo "── port-forward 로그 ─────────────────────────────────"
+                if [[ "${port}" == "8083" ]]; then
+                  tail -20 "${PF_ORDER_LOG}" 2>/dev/null || true
+                else
+                  tail -20 "${PF_LOGISTICS_LOG}" 2>/dev/null || true
+                fi
                 exit 1
               fi
             done
@@ -124,11 +174,15 @@ jobs:
 
       - name: '[happy] order 생성 → shipmentStatus=READY/SHIPPED 검증'
         if: ${{ inputs.target == 'happy' || inputs.target == 'all' }}
-        run: bash scripts/smoke/e2e-order-shipment-smoke.sh
+        run: |
+          set -o pipefail
+          bash scripts/smoke/e2e-order-shipment-smoke.sh 2>&1 | tee logs/smoke-happy.log
 
       - name: '[negative] invalid SKU → status=FAILED, MISSING_SKU 검증'
         if: ${{ inputs.target == 'negative' || inputs.target == 'all' }}
-        run: bash scripts/smoke/e2e-order-invalid-sku-smoke.sh
+        run: |
+          set -o pipefail
+          bash scripts/smoke/e2e-order-invalid-sku-smoke.sh 2>&1 | tee logs/smoke-negative.log
 
       - name: '[Teardown] port-forward 프로세스 종료'
         if: always()
@@ -139,3 +193,83 @@ jobs:
           kill "${PF_LOGISTICS_PID:-}" 2>/dev/null \
             && echo "[OK] logistics-api port-forward 종료" \
             || echo "[SKIP] PF_LOGISTICS_PID 없음"
+
+      - name: 'smoke 결과 artifact 업로드'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-${{ inputs.target }}-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore
+
+  address-http-smoke:
+    name: Address HTTP Smoke (${{ inputs.target }})
+    # smoke-test 이 skipped 인 경우(target=address-http)에도 실행되도록 always() 사용.
+    # smoke-test 가 failure 인 경우(cluster 장애 등)에는 실행하지 않음.
+    if: ${{ always() && (inputs.target == 'address-http' || inputs.target == 'all') && (needs.smoke-test.result != 'failure') }}
+    needs: smoke-test
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 로그 디렉터리 생성
+        run: mkdir -p logs
+
+      - name: '[Preflight] 도구 및 클러스터 접근 확인'
+        run: |
+          set -euo pipefail
+
+          echo "── 도구 확인 ──────────────────────────────────────────────────"
+          for cmd in docker minikube kubectl curl; do
+            if command -v "$cmd" &>/dev/null; then
+              echo "[OK] $cmd"
+            else
+              echo "[FAIL] $cmd 미설치 — runner에 $cmd 이(가) 설치되어 있어야 합니다"
+              exit 1
+            fi
+          done
+
+          if command -v jq &>/dev/null; then
+            echo "[OK] jq"
+          else
+            echo "[WARN] jq 미설치 — smoke script가 grep/sed fallback으로 동작합니다"
+          fi
+
+          echo ""
+          echo "── 클러스터 접근 확인 ──────────────────────────────────────────"
+          if ! kubectl cluster-info --request-timeout=5s &>/dev/null; then
+            echo "[FAIL] 클러스터 접근 불가"
+            echo "       KUBECONFIG 경로 또는 클러스터 상태를 확인하세요"
+            echo "       수동 점검: kubectl cluster-info"
+            exit 1
+          fi
+          kubectl cluster-info --request-timeout=5s 2>/dev/null | head -1
+          echo "[OK] 클러스터 접근 확인"
+
+          echo ""
+          echo "── 서비스 존재 확인 (namespace: ecommerce) ────────────────────"
+          if kubectl get svc order-api-svc -n ecommerce &>/dev/null; then
+            echo "[OK] svc/order-api-svc"
+          else
+            echo "[FAIL] svc/order-api-svc 를 ecommerce 네임스페이스에서 찾을 수 없습니다"
+            echo "       수동 점검: kubectl get svc -n ecommerce"
+            exit 1
+          fi
+
+      - name: Grant execute permission for address-http smoke script
+        run: chmod +x scripts/smoke/e2e-order-address-http-smoke.sh
+
+      - name: '[address-http] mock address-api 빌드 → http mode 검증 → stub 복원'
+        run: |
+          set -o pipefail
+          bash scripts/smoke/e2e-order-address-http-smoke.sh 2>&1 | tee logs/smoke-address-http.log
+
+      - name: 'smoke 결과 artifact 업로드'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-address-http-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore

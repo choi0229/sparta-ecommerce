@@ -1,5 +1,3 @@
-# Integration tests require Docker (Testcontainers).
-# workflow_dispatch에서 service를 선택해 단일 서비스 또는 전체 서비스를 실행한다.
 name: Integration Tests
 
 on:
@@ -49,12 +47,22 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Run integration tests — ${{ matrix.service }} (Docker/Testcontainers)
-        run: ./gradlew integrationTest
+      - name: Run service tests — ${{ matrix.service }}
+        run: |
+          if [[ "${{ matrix.service }}" == "order-api" || "${{ matrix.service }}" == "logistics-api" ]]; then
+            echo "[INFO] integrationTest 실행"
+            ./gradlew integrationTest
+          else
+            echo "[INFO] integrationTest task 없음 → test 실행"
+            ./gradlew test
+          fi
 
-      - name: Upload integration test results
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.service }}-integration-test-results
-          path: ${{ matrix.service }}/build/reports/tests/integrationTest/
+          name: ${{ matrix.service }}-test-results
+          path: |
+            ${{ matrix.service }}/build/reports/tests/test/
+            ${{ matrix.service }}/build/reports/tests/integrationTest/
+          if-no-files-found: ignore

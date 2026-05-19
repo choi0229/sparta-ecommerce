@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -12,15 +13,21 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.entity.IdempotencyRecord;
 import org.teamsparta.logisticsapi.domain.logistics.entity.Shipment;
+import org.teamsparta.logisticsapi.domain.logistics.entity.ShipmentAddressHistory;
 import org.teamsparta.logisticsapi.domain.logistics.repository.IdempotencyRecordRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.OutboxEventRepository;
+import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentAddressHistoryRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentStatusHistoryRepository;
 import org.teamsparta.logisticsapi.domain.logistics.service.LogisticsTransactionalService;
+import org.teamsparta.logisticsapi.global.enums.ShipmentStatus;
+import org.teamsparta.logisticsapi.global.exception.DomainException;
+import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
 
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.*;
 
@@ -29,6 +36,7 @@ class LogisticsTransactionalServiceTest {
 
     @Mock ShipmentRepository shipmentRepository;
     @Mock ShipmentStatusHistoryRepository historyRepository;
+    @Mock ShipmentAddressHistoryRepository addressHistoryRepository;
     @Mock OutboxEventRepository outboxEventRepository;
     @Mock IdempotencyRecordRepository idempotencyRecordRepository;
     @Mock ObjectMapper objectMapper;
@@ -132,6 +140,53 @@ class LogisticsTransactionalServiceTest {
         then(shipmentRepository).should(times(1)).save(any(Shipment.class));
         then(historyRepository).should(times(1)).save(any());
         then(outboxEventRepository).should(times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("READY 상태에서 주소를 변경하면 필드가 갱신되고 address_history 1건이 저장된다")
+    void updateAddress_readyStatus_updatesFieldsAndSavesHistory() {
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+        given(shipmentRepository.save(any(Shipment.class))).willAnswer(invocation -> invocation.getArgument(0));
+
+        ArgumentCaptor<ShipmentAddressHistory> historyCaptor =
+                ArgumentCaptor.forClass(ShipmentAddressHistory.class);
+
+        Shipment result = service.updateAddress(1L, "김철수", "부산시 해운대구 달맞이길 1");
+
+        assertThat(result.getRecipientName()).isEqualTo("김철수");
+        assertThat(result.getRecipientAddress()).isEqualTo("부산시 해운대구 달맞이길 1");
+
+        then(addressHistoryRepository).should(times(1)).save(historyCaptor.capture());
+        ShipmentAddressHistory saved = historyCaptor.getValue();
+        assertThat(saved.getPreviousRecipientName()).isEqualTo("홍길동");
+        assertThat(saved.getPreviousRecipientAddress()).isEqualTo("서울시 강남구");
+        assertThat(saved.getNewRecipientName()).isEqualTo("김철수");
+        assertThat(saved.getNewRecipientAddress()).isEqualTo("부산시 해운대구 달맞이길 1");
+    }
+
+    @Test
+    @DisplayName("동일한 값으로 수정 요청 시 address_history를 저장하지 않는다")
+    void updateAddress_sameValues_doesNotSaveHistory() {
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+        given(shipmentRepository.save(any(Shipment.class))).willAnswer(invocation -> invocation.getArgument(0));
+
+        service.updateAddress(1L, "홍길동", "서울시 강남구");
+
+        then(addressHistoryRepository).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("READY가 아닌 상태의 배송 주소 수정 시 ADDRESS_UPDATE_NOT_ALLOWED 예외가 발생한다")
+    void updateAddress_nonReadyStatus_throwsException() {
+        existingShipment.changeStatus(ShipmentStatus.SHIPPED);
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+
+        assertThatThrownBy(() -> service.updateAddress(1L, "김철수", "부산시"))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining(DomainExceptionCode.ADDRESS_UPDATE_NOT_ALLOWED.getMessage());
     }
 
     @Test

@@ -68,6 +68,13 @@ management:
     tags:
       application: ${spring.application.name}
 
+address:
+  client:
+    mode: stub                      # stub | http
+    base-url: http://address-api:8090
+    connect-timeout-ms: 1000
+    read-timeout-ms: 2000
+
 logging:
   level:
     root: INFO

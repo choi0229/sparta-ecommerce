@@ -16,6 +16,8 @@ public class OrderCreatedEvent {
     private UUID sagaId;
     private Long userId;
     private List<Item> items;
+    private String recipientName;
+    private String recipientAddress;
 
     @Data
     public static class Item{
@@ -38,6 +40,8 @@ public class OrderCreatedEvent {
         event.setItems(orderItems.stream()
                 .map(item -> new Item(item.getSku(), item.getQuantity()))
                 .toList());
+        event.setRecipientName(order.getRecipientName());
+        event.setRecipientAddress(order.getRecipientAddress());
         return event;
     }
 }

@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-address-api
+  namespace: ecommerce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-address-api
+  template:
+    metadata:
+      labels:
+        app: mock-address-api
+    spec:
+      containers:
+        - name: mock-address-api
+          image: sparta-msa-final-project-address-api:mock
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /__admin/mappings
+              port: 8080
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 10

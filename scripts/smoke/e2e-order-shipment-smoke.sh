@@ -26,7 +26,9 @@ set -euo pipefail
 ORDER_API="http://localhost:8083"
 LOGISTICS_API="http://localhost:8084"
 POLL_INTERVAL=3   # 초
-TIMEOUT=30        # 초
+# Kafka/Outbox 기반 비동기 처리라 self-hosted runner/minikube 환경에서 30초를 초과할 수 있음
+MAX_WAIT_SECONDS=60
+NAMESPACE="ecommerce"
 
 # ── jq 유무 감지 ───────────────────────────────────────────────────────────────
 if command -v jq &>/dev/null; then
@@ -53,7 +55,7 @@ poll_until() {
   local elapsed=0
 
   echo ""
-  echo "=== ${label} — 폴링 시작 (최대 ${TIMEOUT}초) ==="
+  echo "=== ${label} — 폴링 시작 (최대 ${MAX_WAIT_SECONDS}초) ==="
 
   while true; do
     STATUS_RESP=$(curl -s "${ORDER_API}/api/orders/status/${IDEM_KEY}")
@@ -66,10 +68,22 @@ poll_until() {
       return 0
     fi
 
-    if [[ $elapsed -ge $TIMEOUT ]]; then
+    if [[ $elapsed -ge $MAX_WAIT_SECONDS ]]; then
       echo ""
-      echo "[FAIL] ${TIMEOUT}초 안에 목표 상태(status=${target_status}, shipmentStatus=${target_shipment})에 도달하지 못했습니다."
+      echo "[FAIL] ${MAX_WAIT_SECONDS}초 안에 목표 상태(status=${target_status}, shipmentStatus=${target_shipment})에 도달하지 못했습니다."
       echo "       최종 응답: ${STATUS_RESP}"
+      echo ""
+      echo "=== [진단] 클러스터 pod 상태 ==="
+      kubectl get pods -n "${NAMESPACE}" --no-headers 2>/dev/null || true
+      echo ""
+      echo "=== [진단] order-api 최근 로그 (20줄) ==="
+      kubectl logs -n "${NAMESPACE}" -l app=order-api --tail=20 --since=2m 2>/dev/null || true
+      echo ""
+      echo "=== [진단] logistics-api 최근 로그 (20줄) ==="
+      kubectl logs -n "${NAMESPACE}" -l app=logistics-api --tail=20 --since=2m 2>/dev/null || true
+      echo ""
+      echo "=== [진단] product-api 최근 로그 (20줄) ==="
+      kubectl logs -n "${NAMESPACE}" -l app=product-api --tail=20 --since=2m 2>/dev/null || true
       exit 1
     fi
 
@@ -81,7 +95,7 @@ poll_until() {
 # ── 1단계: 주문 생성 ───────────────────────────────────────────────────────────
 echo ""
 echo "=== [1/5] POST /api/orders — 주문 생성 ==="
-CREATE_BODY='{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}]}'
+CREATE_BODY='{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}],"shippingAddress":{"recipientName":"홍길동","recipientAddress":"서울시 강남구 테헤란로 1"}}'
 
 CREATE_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \

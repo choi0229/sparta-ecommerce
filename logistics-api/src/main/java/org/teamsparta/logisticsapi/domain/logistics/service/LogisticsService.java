@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentAddressUpdateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentStatusUpdateRequest;
 import java.util.UUID;
@@ -49,6 +50,14 @@ public class LogisticsService {
                 shipmentId, request.status(), request.description(), UUID.randomUUID().toString()
         );
         log.info("Shipment status updated. shipmentId={}, status={}", shipment.getId(), shipment.getStatus());
+        return ShipmentResponse.from(shipment);
+    }
+
+    public ShipmentResponse updateAddress(Long shipmentId, ShipmentAddressUpdateRequest request) {
+        Shipment shipment = transactionalService.updateAddress(
+                shipmentId, request.recipientName(), request.recipientAddress()
+        );
+        log.info("Shipment address updated. shipmentId={}", shipmentId);
         return ShipmentResponse.from(shipment);
     }
 }

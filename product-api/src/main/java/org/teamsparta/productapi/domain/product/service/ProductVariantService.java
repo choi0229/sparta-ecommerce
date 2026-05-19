@@ -85,7 +85,7 @@ public class ProductVariantService {
 
         }).toList();
 
-        saveReplyOutbox(ProductSnapShotReplyEvent.ok(event.requestId(), items, event.items(), event.idemKey(), event.userId()));
+        saveReplyOutbox(ProductSnapShotReplyEvent.ok(event.requestId(), items, event.items(), event.idemKey(), event.userId(), event.shippingAddress()));
     }
 
     private void saveReplyOutbox(ProductSnapShotReplyEvent event){

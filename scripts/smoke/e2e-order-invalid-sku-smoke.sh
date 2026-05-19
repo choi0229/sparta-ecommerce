@@ -26,7 +26,9 @@ set -euo pipefail
 
 ORDER_API="http://localhost:8083"
 POLL_INTERVAL=3   # 초
-TIMEOUT=30        # 초
+# 실패 경로(FAILED)는 Kafka 처리가 빠르므로 30초로 충분하다
+MAX_WAIT_SECONDS=30
+NAMESPACE="ecommerce"
 
 # ── jq 유무 감지 ────────────────────────────────────────────────────────────────
 if command -v jq &>/dev/null; then
@@ -55,7 +57,7 @@ is_null() {
 # ── 1단계: invalid SKU로 주문 생성 ──────────────────────────────────────────────
 echo ""
 echo "=== [1/2] POST /api/orders — invalid SKU로 주문 생성 ==="
-CREATE_BODY='{"userId":1,"items":[{"sku":"SKU-INVALID","quantity":1}]}'
+CREATE_BODY='{"userId":1,"items":[{"sku":"SKU-INVALID","quantity":1}],"shippingAddress":{"recipientName":"홍길동","recipientAddress":"서울시 강남구 테헤란로 1"}}'
 
 CREATE_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
@@ -74,7 +76,7 @@ echo "[OK] idemKey = ${IDEM_KEY}"
 
 # ── 2단계: polling (status=FAILED 도달 대기) ─────────────────────────────────────
 echo ""
-echo "=== [2/2] GET /api/orders/status/${IDEM_KEY} — 목표: status=FAILED — 폴링 시작 (최대 ${TIMEOUT}초) ==="
+echo "=== [2/2] GET /api/orders/status/${IDEM_KEY} — 목표: status=FAILED — 폴링 시작 (최대 ${MAX_WAIT_SECONDS}초) ==="
 
 elapsed=0
 FAILURE_REASON=""
@@ -104,10 +106,19 @@ while true; do
     break
   fi
 
-  if [[ $elapsed -ge $TIMEOUT ]]; then
+  if [[ $elapsed -ge $MAX_WAIT_SECONDS ]]; then
     echo ""
-    echo "[FAIL] ${TIMEOUT}초 안에 status=FAILED 에 도달하지 못했습니다."
+    echo "[FAIL] ${MAX_WAIT_SECONDS}초 안에 status=FAILED 에 도달하지 못했습니다."
     echo "       최종 응답: ${STATUS_RESP}"
+    echo ""
+    echo "=== [진단] 클러스터 pod 상태 ==="
+    kubectl get pods -n "${NAMESPACE}" --no-headers 2>/dev/null || true
+    echo ""
+    echo "=== [진단] order-api 최근 로그 (20줄) ==="
+    kubectl logs -n "${NAMESPACE}" -l app=order-api --tail=20 --since=2m 2>/dev/null || true
+    echo ""
+    echo "=== [진단] product-api 최근 로그 (20줄) ==="
+    kubectl logs -n "${NAMESPACE}" -l app=product-api --tail=20 --since=2m 2>/dev/null || true
     exit 1
   fi
 

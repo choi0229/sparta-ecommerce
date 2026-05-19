@@ -40,6 +40,19 @@ class OrderEventConsumerTest {
             }
             """;
 
+    private static final String JSON_WITH_SHIPPING = """
+            {
+              "eventId": "evt-002",
+              "eventType": "ORDER_CREATED",
+              "orderId": 2,
+              "sagaId": "00000000-0000-0000-0000-000000000002",
+              "userId": 42,
+              "items": [{"sku": "SKU-A", "quantity": 1}],
+              "recipientName": "홍길동",
+              "recipientAddress": "서울시 강남구 테헤란로 1"
+            }
+            """;
+
     private ObjectMapper realObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
@@ -84,6 +97,20 @@ class OrderEventConsumerTest {
         consumer.onOrderEvent("{invalid}");
 
         then(transactionalService).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("recipientName·recipientAddress가 있는 JSON 수신 시 ShipmentCreateRequest에 실제 값이 전달된다")
+    void jsonWithShippingAddress_passesRealValuesToShipmentCreateRequest() {
+        OrderEventConsumer consumer = new OrderEventConsumer(transactionalService, realObjectMapper(), meterRegistry);
+        given(transactionalService.createShipmentForOrderEvent(any(), any())).willReturn(null);
+
+        consumer.onOrderEvent(JSON_WITH_SHIPPING);
+
+        then(transactionalService).should(times(1)).createShipmentForOrderEvent(
+                eq("order-create-event:evt-002"),
+                eq(new ShipmentCreateRequest(2L, "홍길동", "서울시 강남구 테헤란로 1"))
+        );
     }
 
     @Test

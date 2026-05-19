@@ -1,0 +1,109 @@
+# Slack 알림 활성화 방법:
+#
+# [방법 A — ConfigMap 직접 수정] (내부 환경용)
+#   kubectl edit configmap alertmanager-config -n monitoring
+#   slack_api_url 값을 실제 Webhook URL로 교체 후:
+#   kubectl rollout restart deployment/alertmanager -n monitoring
+#
+# [방법 B — Secret 기반 마운트] (운영 환경 권장)
+#   1. alertmanager.yml 파일 준비 (slack_api_url에 실제 URL 입력)
+#   2. kubectl create secret generic alertmanager-config \
+#        --from-file=alertmanager.yml=./alertmanager.yml -n monitoring
+#   3. Deployment의 volume.configMap → volume.secret 으로 변경 후 kubectl apply
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+      # 실제 Slack Webhook URL로 교체하세요.
+      # 운영 환경에서는 방법 B(Secret 마운트) 사용을 권장합니다.
+      slack_api_url: 'https://hooks.slack.com/services/REPLACE/WITH/REAL_WEBHOOK'
+
+    route:
+      group_by: ['alertname', 'service']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 1h
+      receiver: slack-warning
+      routes:
+        - matchers:
+            - severity = critical
+          receiver: slack-critical
+
+    receivers:
+      - name: slack-warning
+        slack_configs:
+          - channel: '#alerts-warning'
+            title: '[WARNING] {{ .GroupLabels.alertname }}'
+            text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+            send_resolved: true
+
+      - name: slack-critical
+        slack_configs:
+          - channel: '#alerts-critical'
+            title: '[CRITICAL] {{ .GroupLabels.alertname }}'
+            text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+            send_resolved: true
+
+    inhibit_rules:
+      - source_matchers:
+          - severity = critical
+        target_matchers:
+          - severity = warning
+        equal: ['alertname', 'service']
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:latest
+          args:
+            - "--config.file=/etc/alertmanager/alertmanager.yml"
+            - "--storage.path=/alertmanager"
+          ports:
+            - containerPort: 9093
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager/
+            - name: data
+              mountPath: /alertmanager
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: data
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: alertmanager
+  ports:
+    - name: http
+      port: 9093
+      targetPort: 9093

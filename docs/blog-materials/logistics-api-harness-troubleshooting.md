@@ -362,3 +362,255 @@ claim 단계에서 `next_retry_at = now + 2분`으로 만료 시각을 기록하
 - claim 만료 시각만 기록하고 recovery 로직이 없으면 Pod 장애 시 이벤트가 영구 stuck됩니다.
 - recovery job 주기는 claim 만료 시간(2분)보다 짧게 설정하면 복구 지연을 줄일 수 있습니다.
 - `logistics.outbox.stale.recovered` Counter 메트릭으로 회복 빈도를 모니터링하면 인프라 불안정 징후를 조기 포착할 수 있습니다.
+
+---
+
+## 14. CLAUDE.md가 .gitignore에 포함되어 있었던 문제
+
+**현상**
+새 환경에서 클론 후 Claude Code 세션을 시작했을 때, CLAUDE.md 내용이 반영되지 않거나
+커밋 이력에서 CLAUDE.md 변경 사항이 보이지 않는 상황.
+
+**원인**
+`.gitignore`에 `CLAUDE.md`가 포함되어 있어 버전 관리 대상에서 제외된 상태였습니다.
+하네스 파일 중 가장 중요한 진입점 파일이 git 추적 밖에 있었습니다.
+
+**해결**
+```bash
+# .gitignore에서 CLAUDE.md 항목 제거 후
+git add CLAUDE.md
+git commit -m "chore: CLAUDE.md git 추적 대상으로 전환"
+```
+
+**교훈**
+- 하네스 파일(`CLAUDE.md`, `.claude/` 전체)을 구성한 뒤 `.gitignore`에 포함되어 있지 않은지 반드시 확인합니다.
+- 하네스를 구성했어도 파일이 공유되지 않으면 효과가 없습니다.
+- 새 프로젝트 하네스 구성 체크리스트에 "CLAUDE.md git 추적 확인" 항목을 포함합니다.
+
+---
+
+## 15. minikube image load 후 최신 이미지가 반영되지 않는 문제
+
+**현상**
+`docker build`와 `minikube image load`를 완료했는데 새 이미지가 Pod에 반영되지 않았습니다.
+예: addressId=503 요청 시 HTTP 503이 아닌 HTTP 404가 반환됨.
+
+**원인**
+`minikube image load`는 이미지를 클러스터에 로드하지만,
+이미 실행 중인 Pod는 자동으로 재시작되지 않습니다.
+기존 Pod가 이전 이미지(`imagePullPolicy: Never`)를 그대로 사용하고 있었습니다.
+
+**확인**
+```bash
+kubectl get pod -n ecommerce -l app=address-api -o jsonpath='{.items[*].status.containerStatuses[*].imageID}'
+```
+출력된 imageID가 새 이미지와 다르면 미반영 상태입니다.
+
+**해결**
+```bash
+kubectl rollout restart deployment/address-api -n ecommerce
+kubectl rollout status deployment/address-api -n ecommerce
+```
+
+**교훈**
+- `imagePullPolicy: Never`(Minikube 로컬 이미지) 환경에서는 `minikube image load` 후 반드시 rollout restart가 필요합니다.
+- smoke script의 `[2/7]` 단계에서 `kubectl apply` 후 `kubectl rollout status`를 포함하면 이 문제를 자동으로 방지합니다.
+- "예상과 다른 응답"이 나올 때 Pod 이미지 버전을 첫 번째 확인 항목으로 점검합니다.
+
+---
+
+## 16. addressId=503이 404처럼 보였던 오판 사례
+
+**현상**
+mock address-api에 addressId=503 → HTTP 503 응답 stub을 구성했는데,
+실제 테스트에서 HTTP 404가 반환되었습니다.
+order-api에서 ADDRESS_NOT_FOUND가 아닌 ADDRESS_LOOKUP_FAILED가 발생해야 하는 시나리오였습니다.
+
+**원인**
+WireMock은 일치하는 stub 매핑이 없을 때 기본값으로 HTTP 404를 반환합니다.
+이미지 미반영(#15 참조)으로 인해 503 stub 매핑이 없는 이전 버전 WireMock이 실행 중이었고,
+addressId=503 요청에 매핑이 없어 WireMock 기본 404가 반환되었습니다.
+
+**해결**
+`kubectl rollout restart deployment/address-api -n ecommerce`로 최신 이미지를 적용한 뒤 재검증.
+addressId=503 → HTTP 503 → order-api ADDRESS_LOOKUP_FAILED 정상 확인.
+
+**교훈**
+- WireMock의 기본 동작(매핑 없음 → 404)을 숙지해야 합니다.
+- "404가 나왔는데 404 stub을 설정한 것 같지 않다"면 이미지 미반영을 먼저 의심합니다.
+- 검증 실패 시 "stub 설정이 잘못됐는가" vs "이미지가 반영되지 않았는가" 두 경우를 구분하여 진단합니다.
+
+---
+
+## 17. address-api Service NodePort → ClusterIP 전환 이슈
+
+**현상**
+`deployment/address-api/service.yaml` 초기 작성 시 NodePort로 구성했으나,
+smoke script와 워크플로에서 주소 서비스에 클러스터 외부에서 직접 접근할 필요가 없었습니다.
+NodePort 포트 번호가 기존 서비스와 충돌하거나 불필요한 외부 노출이 생겼습니다.
+
+**원인**
+address-api는 클러스터 내부에서만 order-api가 접근하는 서비스입니다.
+외부 노출이 필요 없는 서비스에 NodePort를 설정하는 것은 과도한 설정입니다.
+
+**해결**
+`service.yaml`을 ClusterIP 타입으로 수정 (`type`, `nodePort` 필드 제거):
+```yaml
+spec:
+  selector:
+    app: address-api
+  ports:
+    - protocol: TCP
+      port: 8090
+      targetPort: 8080
+```
+
+order-api는 `ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090`으로 클러스터 내부 DNS를 통해 접근합니다.
+
+**교훈**
+- 서비스 타입은 "외부에서 접근이 필요한가"를 먼저 결정합니다.
+  - 클러스터 내부만: ClusterIP
+  - 개발/테스트 직접 접근: NodePort + port-forward 조합
+  - 프로덕션 외부 노출: LoadBalancer / Ingress
+- mock address-api처럼 클러스터 내부 용도로만 쓰이는 서비스는 ClusterIP가 적합합니다.
+
+---
+
+## 18. 배포 변경이 Kafka 문제처럼 보였던 사례
+
+**현상**
+`kubectl set env`로 order-api를 http 모드로 전환한 후 주문 생성 요청을 보냈는데,
+상태 조회(`GET /api/orders/status/{idemKey}`)에서 상태가 변하지 않았습니다.
+처음에는 Kafka consumer가 동작하지 않는 것으로 오판했습니다.
+
+**원인**
+`kubectl set env` 직후 rollout이 완료되기 전에 주문 요청을 보냈습니다.
+이전 Pod(stub 모드)가 여전히 요청 일부를 처리하고 있었고,
+해당 Pod의 설정 상태가 기대와 달라 정상 처리가 이루어지지 않았습니다.
+Kafka consumer 자체는 정상이었습니다.
+
+**확인**
+```bash
+kubectl rollout status deployment/order-api -n ecommerce
+```
+rollout이 완료되지 않은 상태(`Waiting for rollout to finish`)라면 전환 중인 상태입니다.
+
+**해결**
+`kubectl rollout status ... --timeout=120s`가 완료된 이후 주문 요청 재실행.
+이후 addressId=1 → status=CREATED, shipmentStatus=READY 정상 확인.
+
+**교훈**
+- 비동기 처리 이슈(Kafka, Outbox)처럼 보일 때 "배포가 실제로 반영되었는가"를 먼저 확인합니다.
+- `kubectl set env` 또는 deployment 변경 후에는 반드시 `kubectl rollout status`로 완료를 확인한 뒤 검증합니다.
+- smoke script 구조에서 env 변경 직후 rollout status 확인 단계를 필수로 포함하면 이 오판을 방지합니다.
+
+---
+
+## 19. 배송지 필수 정책 변경으로 기존 happy/negative smoke 실패
+
+**현상**
+GitHub Actions Smoke Tests(all) 실행 시 기존 happy smoke와 negative smoke 모두 `SHIPPING_ADDRESS_REQUIRED`로 주문 생성 실패.
+
+**원인**
+order-api에 `addressId` 또는 `shippingAddress` 중 하나를 반드시 포함해야 하는 정책이 추가된 이후,
+기존 smoke script CREATE_BODY에는 배송지 정보가 없었습니다.
+smoke script 자체는 문법상 정상이지만, API 정책 변경에 의해 요청이 거부됩니다.
+
+**해결**
+두 smoke script CREATE_BODY에 `"shippingAddress":{"recipientName":"홍길동","recipientAddress":"서울시 강남구 테헤란로 1"}` 추가.
+negative smoke는 배송지는 정상값으로 두고 SKU를 `SKU-INVALID`로 유지.
+
+**교훈**
+- smoke script가 "최근 바꾼 것 없음" 상태에서 실패하면 API 정책 변경을 먼저 의심합니다.
+- 신규 정책 추가 시 기존 smoke script를 함께 검토하는 습관이 필요합니다.
+
+---
+
+## 20. port-forward가 종료 중인 이전 Pod에 연결되는 문제
+
+**현상**
+address-http smoke [4/7] port-forward 시작 후 [5/7] curl에서 exit code 7(connection refused) 발생.
+`PF_READY=true`가 되었음에도 이후 요청이 거부됨.
+
+**원인**
+rollout 이후 잠깐 동안 이전 Pod(종료 중)와 새 Pod가 동시에 존재합니다.
+`kubectl port-forward svc/<name>` 방식은 서비스 레이블 기반으로 Pod를 선택하므로, 종료 중인 이전 Pod에 연결될 수 있습니다.
+health check(`/actuator/health`) 타이밍에 따라 이전 Pod에서 응답이 돌아올 수도 있어 PF_READY가 true가 되더라도 이후 요청이 실패합니다.
+
+**해결**
+```bash
+ORDER_API_POD=$(kubectl get pods -n "${NAMESPACE}" -l app=order-api \
+  --sort-by=.metadata.creationTimestamp \
+  -o custom-columns=NAME:.metadata.name --no-headers | tail -n 1)
+kubectl wait --for=condition=ready pod/"${ORDER_API_POD}" -n "${NAMESPACE}" --timeout=120s
+kubectl port-forward pod/"${ORDER_API_POD}" 8083:8083 -n "${NAMESPACE}" &
+```
+
+**교훈**
+- rollout 이후 port-forward 대상은 Service 경유보다 최신 Pod에 직접 지정하는 방식이 안정적입니다.
+- `--sort-by=.metadata.creationTimestamp | tail -n 1` 패턴으로 최신 Pod 이름을 추출합니다.
+
+---
+
+## 21. rollout 완료 후에도 port-forward health check 타임아웃 발생
+
+**현상**
+`kubectl wait --for=condition=ready pod/<name>` 이 완료됐음에도 health check(`/actuator/health`) 루프가 응답을 받지 못해 timeout.
+
+**원인**
+`kubectl wait --for=condition=ready`는 kubelet 관점의 probe 통과 기준입니다.
+JVM 애플리케이션의 경우 probe 통과 이후에도 HTTP 서버가 완전히 초기화되는 데 추가 시간이 걸릴 수 있습니다.
+기존 구현은 port-forward 직후 15초(seq 1 15)만 대기하고 health check를 시도했습니다.
+
+**해결**
+health check 루프를 `seq 1 30`으로 연장하고, curl 옵션을 `curl -sS --max-time 2 >/dev/null 2>&1`로 강화.
+
+**교훈**
+- `kubectl wait --for=condition=ready`는 HTTP 레이어 준비를 보장하지 않습니다.
+- JVM 기반 서비스는 probe 통과 이후에도 몇 초 더 대기가 필요할 수 있습니다.
+
+---
+
+## 22. integrationTest task가 없는 서비스에서 GitHub Actions 실패
+
+**현상**
+integration-tests.yml 전체 실행(all) 시 `product-api`에서 `Task 'integrationTest' not found in root project` 오류.
+
+**원인**
+`order-api`와 `logistics-api`는 별도의 `integrationTest` Gradle task가 정의되어 있지만,
+`product-api`와 `inventory-api`는 표준 `test` task만 존재합니다.
+모든 서비스에 `./gradlew integrationTest`를 적용하면 task가 없는 서비스에서 빌드 실패합니다.
+
+**해결**
+workflow에 서비스별 분기 추가:
+```yaml
+if [[ "${{ matrix.service }}" == "order-api" || "${{ matrix.service }}" == "logistics-api" ]]; then
+  ./gradlew integrationTest
+else
+  ./gradlew test
+fi
+```
+
+**교훈**
+- 멀티 서비스 workflow에서 모든 서비스가 동일한 Gradle task를 갖는다고 가정하면 안 됩니다.
+- 새 서비스 추가 시 integrationTest task 유무를 workflow 분기 조건에 함께 반영합니다.
+
+---
+
+## 23. self-hosted runner 없이 smoke workflow 실행 시 무한 대기
+
+**현상**
+smoke-tests.yml을 push했지만 workflow가 "Waiting for a runner to pick up this job" 상태에서 진행되지 않음.
+
+**원인**
+smoke-tests.yml이 `runs-on: self-hosted`로 설정되어 있습니다.
+GitHub-hosted runner에서는 `localhost` 클러스터에 접근할 수 없으므로 의도적으로 self-hosted 전용으로 제한한 것입니다.
+self-hosted runner가 등록되어 있지 않으면 workflow는 runner를 기다리며 멈춥니다.
+
+**해결**
+로컬 머신에서 runner를 GitHub Actions Settings → Runners 화면을 통해 등록.
+runner가 online 상태가 된 이후 smoke workflow가 정상 실행되어 모든 시나리오 통과 확인.
+
+**교훈**
+- `runs-on: self-hosted` workflow는 runner를 별도로 등록하지 않으면 실행되지 않습니다.
+- workflow_dispatch 전용 트리거로 제한하면 외부 fork PR 실행 위험을 줄일 수 있습니다.

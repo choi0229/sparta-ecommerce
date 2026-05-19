@@ -11,6 +11,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.teamsparta.orderapi.domain.order.client.AddressServiceClient;
 import org.teamsparta.orderapi.domain.order.dto.request.CreateOrderRequest;
 import org.teamsparta.orderapi.domain.order.dto.response.CreateOrderResponse;
 import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
@@ -71,6 +72,7 @@ public class OrderServiceTest {
     @Mock KafkaTemplate<String, String> kafkaTemplate;
     @Mock OrderTransactionalService orderTransactionalService;
     @Mock IdempotencyRepository idempotencyRepository;
+    @Mock AddressServiceClient addressServiceClient;
 
     private static final String IDEM_KEY = "idem-key-001";
 
@@ -450,6 +452,98 @@ public class OrderServiceTest {
 //        then(objectMapper).shouldHaveNoInteractions();
 //    }
 //
+    // ── 배송지 해소(resolve) 테스트 ─────────────────────────────────
+
+    private static final List<CreateOrderRequest.Item> ITEMS =
+            List.of(new CreateOrderRequest.Item("SKU-001", 1));
+
+    @Test
+    @DisplayName("shippingAddress 직접 입력 경로 — OutboxEvent 저장 호출 확인")
+    void createOrder_withShippingAddress_savesOutboxEvent() throws Exception {
+        CreateOrderRequest request = new CreateOrderRequest(
+                1L, ITEMS, null,
+                new CreateOrderRequest.ShippingAddress("홍길동", "서울시 강남구 테헤란로 1")
+        );
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        orderService.createOrder(request, IDEM_KEY);
+
+        then(addressServiceClient).shouldHaveNoInteractions();
+        then(outboxEventRepository).should(times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("addressId 경로 — client 조회 결과가 ShippingAddress로 주입되고 OutboxEvent 저장")
+    void createOrder_withAddressId_usesClientResult() throws Exception {
+        CreateOrderRequest request = new CreateOrderRequest(1L, ITEMS, 1L, null);
+        given(addressServiceClient.findById(1L, 1L))
+                .willReturn(new AddressServiceClient.AddressInfo("홍길동", "서울시 강남구 테헤란로 1"));
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        orderService.createOrder(request, IDEM_KEY);
+
+        then(addressServiceClient).should(times(1)).findById(1L, 1L);
+        then(outboxEventRepository).should(times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("addressId와 shippingAddress 동시 입력 시 addressId 우선 사용")
+    void createOrder_bothProvided_addressIdTakesPriority() throws Exception {
+        CreateOrderRequest request = new CreateOrderRequest(
+                1L, ITEMS, 2L,
+                new CreateOrderRequest.ShippingAddress("김철수(직접)", "부산시(직접)")
+        );
+        given(addressServiceClient.findById(2L, 1L))
+                .willReturn(new AddressServiceClient.AddressInfo("김철수", "부산시 해운대구 달맞이길 2"));
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        orderService.createOrder(request, IDEM_KEY);
+
+        then(addressServiceClient).should(times(1)).findById(2L, 1L);
+        then(outboxEventRepository).should(times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("addressId도 shippingAddress도 null이면 SHIPPING_ADDRESS_REQUIRED 예외")
+    void createOrder_neitherProvided_throwsShippingAddressRequired() {
+        CreateOrderRequest request = new CreateOrderRequest(1L, ITEMS, null, null);
+
+        assertThatThrownBy(() -> orderService.createOrder(request, IDEM_KEY))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining(DomainExceptionCode.SHIPPING_ADDRESS_REQUIRED.getMessage());
+
+        then(addressServiceClient).shouldHaveNoInteractions();
+        then(outboxEventRepository).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("address service 조회 실패(ADDRESS_NOT_FOUND) 시 주문 차단")
+    void createOrder_addressNotFound_throwsException() {
+        CreateOrderRequest request = new CreateOrderRequest(1L, ITEMS, 999L, null);
+        given(addressServiceClient.findById(999L, 1L))
+                .willThrow(new DomainException(DomainExceptionCode.ADDRESS_NOT_FOUND));
+
+        assertThatThrownBy(() -> orderService.createOrder(request, IDEM_KEY))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining(DomainExceptionCode.ADDRESS_NOT_FOUND.getMessage());
+
+        then(outboxEventRepository).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("addressId 소유자 불일치(ADDRESS_NOT_FOUND) 시 주문 차단")
+    void createOrder_addressOwnerMismatch_throwsAddressNotFound() {
+        CreateOrderRequest request = new CreateOrderRequest(9002L, ITEMS, 1L, null);
+        given(addressServiceClient.findById(1L, 9002L))
+                .willThrow(new DomainException(DomainExceptionCode.ADDRESS_NOT_FOUND));
+
+        assertThatThrownBy(() -> orderService.createOrder(request, IDEM_KEY))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining(DomainExceptionCode.ADDRESS_NOT_FOUND.getMessage());
+
+        then(outboxEventRepository).shouldHaveNoInteractions();
+    }
+
 //    @Test
 //    @DisplayName("실패 - 상품 상태가 ACTIVE가 아니면 주문 생성 불가")
 //    void createOrder_inactive_fail() {
