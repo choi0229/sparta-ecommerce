@@ -333,6 +333,18 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 - **정렬**: changedAt DESC (엔티티 필드명 `createdAt` 기준. changedAt은 history row가 생성된 시각)
 - **응답**: `AddressHistoryPageResponse` — content(List), page, size, totalElements, totalPages, hasNext
 
+### 관리자용 전체 이력 조회/검색 API
+
+`GET /admin/addresses/histories?userId=&addressId=&actionType=&from=&to=&page=0&size=20`
+
+- **인증 없음**: 현재 인증 시스템 미구현 — 내부망/게이트웨이 레이어에서 접근 통제 가정
+- **모든 파라미터 optional**: 생략 시 전체 이력 조회. userId/addressId/actionType/날짜 범위 조합 가능
+- **날짜 범위**: `from`/`to`는 ISO-8601 형식 (`2024-01-01T00:00:00`). from > to이면 400
+- **actionType 필터**: `CREATE` / `UPDATE` / `DELETE`. 잘못된 값 → 400
+- **페이징**: `page` (기본값 0), `size` (기본값 20, 최대 100). 범위 위반 → 400
+- **정렬**: createdAt DESC (고정)
+- **응답**: `AddressHistoryPageResponse` — content(List), page, size, totalElements, totalPages, hasNext
+
 #### mock address-api (smoke 전용)
 
 `address-http` smoke는 항상 `:mock` 태그 + `deployment/mock-address-api/`만 사용합니다. WireMock은 503 시나리오까지 재현 가능한 smoke 자산이며, 실서비스 대체가 아닙니다.
@@ -1482,7 +1494,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
   - 상태 변경 이력과 주소 변경 이력의 분리 또는 통합 조회 방식 검토
   - 주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토
 - address-api 이력 고도화
-  - 관리자용 전체 이력 조회/검색 API (userId 무관, 날짜 범위 필터 등)
+  - ~~관리자용 전체 이력 조회/검색 API (userId 무관, 날짜 범위 필터 등)~~ → 완료
   - 이력 보존 기간 정책 (예: N개월 초과 이력 자동 삭제 또는 아카이빙)
 - Outbox retry 정책 추가 고도화
   - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
@@ -1541,3 +1553,4 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~주소 변경 이력 조회 API 페이징/actionType 필터 추가 (page/size/actionType, 최대 size=100, 잘못된 값 400)~~
 - ~~사용자 기본 배송지 조회 API 추가 (`GET /addresses/default?userId=`) — userId 필수(400), 기본 배송지 없으면 404, deleted 제외~~
 - ~~사용자 주소 목록 페이징 조회 API 추가 (`GET /addresses/page?userId=&page=&size=`) — deleted=false, isDefault DESC/id DESC 정렬, size 최대 100, 잘못된 값 400~~
+- ~~관리자용 전체 이력 조회/검색 API 추가 (`GET /admin/addresses/histories`) — userId/addressId/actionType/날짜 범위 optional 필터, createdAt DESC, size 최대 100~~
