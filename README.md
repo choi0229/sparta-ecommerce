@@ -1496,8 +1496,9 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
   - 주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토
 - address-api 이력 고도화
   - ~~관리자용 전체 이력 조회/검색 API (userId 무관, 날짜 범위 필터 등)~~ → 완료
+  - ~~이력 보존 기간 정책 정리~~ → 완료 ([ADR-002](docs/adr/002-address-history-retention-policy.md): 현재 무기한 보존 유지, 정책 기준 확정 시 자동 삭제 또는 아카이빙 전환 예정)
   - 정식 인증 연계 시 `X-Admin-Api-Key` 임시 가드를 Spring Security 기반 관리자 권한 검증으로 전환
-  - 이력 보존 기간 정책 (예: N개월 초과 이력 자동 삭제 또는 아카이빙)
+  - 이력 보존 기간 정책 실제 구현 (보존 기간 N 확정 후): 자동 삭제 배치 또는 아카이브 테이블 이동
 - Outbox retry 정책 추가 고도화
   - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
   - DLQ 재검토 기준 도달 시 DB 기반 DLQ 도입
@@ -1556,3 +1557,5 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~사용자 기본 배송지 조회 API 추가 (`GET /addresses/default?userId=`) — userId 필수(400), 기본 배송지 없으면 404, deleted 제외~~
 - ~~사용자 주소 목록 페이징 조회 API 추가 (`GET /addresses/page?userId=&page=&size=`) — deleted=false, isDefault DESC/id DESC 정렬, size 최대 100, 잘못된 값 400~~
 - ~~관리자용 전체 이력 조회/검색 API 추가 (`GET /admin/addresses/histories`) — userId/addressId/actionType/날짜 범위 optional 필터, createdAt DESC, size 최대 100~~
+- ~~관리자 이력 API X-Admin-Api-Key 접근 통제 추가 — 헤더 누락/불일치/설정값 미지정 시 403~~
+- ~~user_address_history 이력 보존 기간 정책 ADR 작성 ([ADR-002](docs/adr/002-address-history-retention-policy.md)) — 현재 D안(무기한 보존 + 정책 보류) 채택, 후속 구현 기준 정의~~
