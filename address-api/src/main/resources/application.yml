@@ -22,3 +22,7 @@ management:
     web:
       exposure:
         include: health
+
+address:
+  admin:
+    api-key: ${ADDRESS_ADMIN_API_KEY:}

@@ -230,7 +230,7 @@ happy path가 안정화된 이후, 존재하지 않는 SKU 요청이 **영원히
 
 실제 주소 서비스 연동으로 자연스럽게 확장할 수 있도록 `AddressServiceClient`를 설정 기반으로 분리했습니다.
 
-- `address.client.mode=stub|http` 설정 추가
+- `address.client.mode=stub\|http` 설정 추가
 - 기본값은 `stub`로 두어 기존 addressId 기반 E2E 검증이 깨지지 않도록 유지
 - `HttpAddressServiceClient`를 추가해 향후 실제 주소 서비스의 `GET /addresses/{id}` 호출 구조를 준비
 - `AddressClientConfig`에서 mode에 따라 `StubAddressServiceClient` 또는 `HttpAddressServiceClient`를 bean으로 선택
@@ -337,7 +337,8 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
 
 `GET /admin/addresses/histories?userId=&addressId=&actionType=&from=&to=&page=0&size=20`
 
-- **인증 없음**: 현재 인증 시스템 미구현 — 내부망/게이트웨이 레이어에서 접근 통제 가정
+- **접근 통제**: `X-Admin-Api-Key` 헤더 필수. 환경변수 `ADDRESS_ADMIN_API_KEY`로 설정. 헤더 누락/불일치/설정값 미지정 시 403
+- **운영 전환 가이드**: 현재 정식 인증/권한 시스템은 없으므로 `X-Admin-Api-Key` 기반 임시 접근 통제를 사용한다. 운영 환경에서는 게이트웨이/내부망 접근 통제 또는 Spring Security 기반 관리자 권한 검증으로 대체해야 한다.
 - **모든 파라미터 optional**: 생략 시 전체 이력 조회. userId/addressId/actionType/날짜 범위 조합 가능
 - **날짜 범위**: `from`/`to`는 ISO-8601 형식 (`2024-01-01T00:00:00`). from > to이면 400
 - **actionType 필터**: `CREATE` / `UPDATE` / `DELETE`. 잘못된 값 → 400
@@ -564,7 +565,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "outbox_stale"
 | | 배송지 수정 API | `PATCH /shipments/{shipmentId}/address`로 `READY` 상태 배송의 현재 주소만 수정 |
 | | 배송지 변경 이력 저장 | `shipment_address_history`에 변경 전/후 주소와 변경 시각을 append-only로 저장 |
 | | addressId 기반 주문 배송지 해소 | `addressId`가 있으면 저장된 주소를 조회해 snapshot에 반영하고, 없으면 `shippingAddress` 직접 입력을 사용 |
-| | AddressServiceClient 설정 분리 | `address.client.mode=stub|http` 설정으로 stub/http 구현체를 전환 가능하게 준비 |
+| | AddressServiceClient 설정 분리 | `address.client.mode=stub\|http` 설정으로 stub/http 구현체를 전환 가능하게 준비 |
 | **Could-Have** | 데이터 유실 방지 | DB 저장/이벤트 발행 불일치 방지를 위해 **Transactional Outbox** |
 | | 운영 관측성 | Micrometer 기반 메트릭(Gauge/Counter) → `/actuator/prometheus` 노출 |
 | | smoke script 기반 운영 검증 | happy path / negative path를 bash script로 재현 가능 |
@@ -1325,7 +1326,7 @@ bash scripts/install-git-hooks.sh
 
 설치 후에는 `git commit` 시 아래처럼 자동으로 실행됩니다.
 
-```
+```text
 ── Claude guardrails (pre-commit) ──────────────────────────
 Claude guardrails passed.
 ────────────────────────────────────────────────────────────
@@ -1333,7 +1334,7 @@ Claude guardrails passed.
 
 guardrails가 실패하면 커밋이 중단됩니다. 실패 원인을 해결한 뒤 다시 커밋하세요.
 
-```
+```text
 [FAIL] .env 또는 secret 파일이 커밋 대상에 포함되어 있습니다.
 ```
 
@@ -1495,6 +1496,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
   - 주소 변경 주체(user/system) 및 변경 사유(reason) 저장 여부 검토
 - address-api 이력 고도화
   - ~~관리자용 전체 이력 조회/검색 API (userId 무관, 날짜 범위 필터 등)~~ → 완료
+  - 정식 인증 연계 시 `X-Admin-Api-Key` 임시 가드를 Spring Security 기반 관리자 권한 검증으로 전환
   - 이력 보존 기간 정책 (예: N개월 초과 이력 자동 삭제 또는 아카이빙)
 - Outbox retry 정책 추가 고도화
   - 영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토
@@ -1535,7 +1537,7 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - ~~`READY` 상태에서만 배송지 수정 허용 및 order snapshot 불변성 검증~~
 - ~~addressId 기반 주문 배송지 해소 추가 (`CreateOrderRequest.addressId`, `AddressServiceClient`, `StubAddressServiceClient`)~~
 - ~~addressId 우선 / shippingAddress fallback / 배송지 누락 400 / 잘못된 addressId 404 검증~~
-- ~~AddressServiceClient를 설정 기반(stub|http)으로 분리하고 HTTP 구현체/예외 매핑 준비~~
+- ~~AddressServiceClient를 설정 기반(stub\|http)으로 분리하고 HTTP 구현체/예외 매핑 준비~~
 - ~~WireMock 기반 mock `address-api` 추가 및 `mode=http` 검증 환경 구성~~
 - ~~`addressId=1` 성공 경로와 `999 -> ADDRESS_NOT_FOUND`, `503 -> ADDRESS_LOOKUP_FAILED` 검증~~
 - ~~address-http smoke script 자동화 및 smoke-tests.yml 연결 (7단계 전체 검증)~~
