@@ -65,6 +65,18 @@ class OutboxEventTest {
     }
 
     @Test
+    @DisplayName("markPermanentFailure() 호출 후 retryCount 증가 없이 즉시 FAILED, nextRetryAt null")
+    void markPermanentFailure_immediatelyFailed_noRetryCountIncrease() {
+        OutboxEvent event = pendingEvent();
+
+        event.markPermanentFailure();
+
+        assertThat(event.getStatus()).isEqualTo(OutboxStatus.FAILED);
+        assertThat(event.getNextRetryAt()).isNull();
+        assertThat(event.getRetryCount()).isEqualTo(0);
+    }
+
+    @Test
     @DisplayName("지수 백오프: 2회차 nextRetryAt은 1회차보다 더 뒤다")
     void markFailed_backoffIncreasesByRetry() {
         OutboxEvent event = pendingEvent();

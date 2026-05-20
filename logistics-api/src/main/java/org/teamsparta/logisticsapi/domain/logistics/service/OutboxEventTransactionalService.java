@@ -58,6 +58,16 @@ public class OutboxEventTransactionalService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markPermanentFailed(Long id) {
+        OutboxEvent event = outboxEventRepository.findById(id)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
+        event.markPermanentFailure();
+        outboxEventRepository.save(event);
+        log.warn("[OutboxPermanent] non-retryable failure. id={} eventType={} aggregateId={} retryCount={}",
+                id, event.getEventType(), event.getAggregateId(), event.getRetryCount());
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markFailed(Long id) {
         OutboxEvent event = outboxEventRepository.findById(id)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));

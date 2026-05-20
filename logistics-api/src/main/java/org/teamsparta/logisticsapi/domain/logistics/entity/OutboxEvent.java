@@ -90,6 +90,12 @@ public class OutboxEvent {
         }
     }
 
+    // 재시도 없이 즉시 FAILED로 전이한다. retryCount는 유지해 누적 이력을 보존한다.
+    public void markPermanentFailure() {
+        this.status = OutboxStatus.FAILED;
+        this.nextRetryAt = null;
+    }
+
     public boolean isFailed() {
         return OutboxStatus.FAILED.equals(this.status);
     }
