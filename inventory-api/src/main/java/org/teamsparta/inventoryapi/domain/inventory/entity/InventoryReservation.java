@@ -50,6 +50,7 @@ public class InventoryReservation {
 
     public static InventoryReservation create(Long orderId, UUID sagaId, ReservationStatus status, ZonedDateTime expiresAt) {
         InventoryReservation inventoryReservation = new InventoryReservation();
+        inventoryReservation.id = UUID.randomUUID();
         inventoryReservation.orderId = orderId;
         inventoryReservation.sagaId = sagaId;
         inventoryReservation.status = status;
