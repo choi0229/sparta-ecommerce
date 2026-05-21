@@ -60,6 +60,9 @@ public class OutboxEvent {
     @Column(name = "sent_at")
     ZonedDateTime sentAt;
 
+    @Column(name = "claimed_at")
+    ZonedDateTime claimedAt;
+
     public static OutboxEvent pending(String aggregateType, String aggregateId, String eventType, String payload) {
         OutboxEvent outboxEvent = new OutboxEvent();
         outboxEvent.aggregateType = aggregateType;
@@ -72,12 +75,27 @@ public class OutboxEvent {
         return outboxEvent;
     }
 
+    /** PENDING → PROCESSING: claim 시점을 기록한다 (stale recovery 기준). */
+    public void markProcessing(ZonedDateTime now) {
+        this.status = OutboxStatus.PROCESSING;
+        this.claimedAt = now;
+    }
+
+    /** PROCESSING → SENT */
     public void markSent() {
         this.status = OutboxStatus.SENT;
         this.sentAt = ZonedDateTime.now();
         this.nextRetryAt = null;
     }
 
+    /**
+     * Stale PROCESSING → PENDING: publisher 크래시로 인해 PROCESSING이 고착된 경우
+     * retryCount는 건드리지 않는다 (전송 실패가 아닌 publisher 장애이므로).
+     */
+    public void resetStaledProcessingToPending() {
+        this.status = OutboxStatus.PENDING;
+        this.nextRetryAt = null;
+    }
 
     public void markFailedAndScheduleRetry(int maxRetry, Duration baseBackoff) {
         this.retryCount++; // 실패 횟수 증가
