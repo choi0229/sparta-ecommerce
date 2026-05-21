@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 
 @ExtendWith(MockitoExtension.class)
@@ -97,6 +98,82 @@ public class OutboxPublisherJobTest {
         assertThat(event.getRetryCount()).isEqualTo(1);
         assertThat(event.getStatus()).isEqualTo(OutboxStatus.PENDING);
         assertThat(event.getNextRetryAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("payment-succeeded-event: 올바른 topic으로 Kafka 전송되고 SENT 상태로 변경된다")
+    @SuppressWarnings("unchecked")
+    void publish_paymentSucceeded_routesToCorrectTopic() throws Exception {
+        // given
+        OutboxEvent paymentSucceeded = OutboxEvent.pending("Payment", AGGREGATE_ID, "payment-succeeded-event", "{}");
+        ReflectionTestUtils.setField(paymentSucceeded, "id", 2L);
+        ReflectionTestUtils.setField(paymentSucceeded, "retryCount", 0);
+        ReflectionTestUtils.setField(paymentSucceeded, "status", OutboxStatus.PENDING);
+
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
+                .willReturn(List.of(paymentSucceeded));
+
+        CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
+        given(kafkaTemplate.send(eq("payment-succeeded-event"), eq(AGGREGATE_ID), anyString()))
+                .willReturn(future);
+        given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
+        given(outboxEventRepository.findById(2L)).willReturn(Optional.of(paymentSucceeded));
+
+        // when
+        outboxPublisherJob.publish();
+
+        // then
+        assertThat(paymentSucceeded.getStatus()).isEqualTo(OutboxStatus.SENT);
+        then(kafkaTemplate).should(times(1)).send("payment-succeeded-event", AGGREGATE_ID, "{}");
+    }
+
+    @Test
+    @DisplayName("payment-failed-event: 올바른 topic으로 Kafka 전송되고 SENT 상태로 변경된다")
+    @SuppressWarnings("unchecked")
+    void publish_paymentFailed_routesToCorrectTopic() throws Exception {
+        // given
+        OutboxEvent paymentFailed = OutboxEvent.pending("Payment", AGGREGATE_ID, "payment-failed-event", "{}");
+        ReflectionTestUtils.setField(paymentFailed, "id", 3L);
+        ReflectionTestUtils.setField(paymentFailed, "retryCount", 0);
+        ReflectionTestUtils.setField(paymentFailed, "status", OutboxStatus.PENDING);
+
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
+                .willReturn(List.of(paymentFailed));
+
+        CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
+        given(kafkaTemplate.send(eq("payment-failed-event"), eq(AGGREGATE_ID), anyString()))
+                .willReturn(future);
+        given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
+        given(outboxEventRepository.findById(3L)).willReturn(Optional.of(paymentFailed));
+
+        // when
+        outboxPublisherJob.publish();
+
+        // then
+        assertThat(paymentFailed.getStatus()).isEqualTo(OutboxStatus.SENT);
+        then(kafkaTemplate).should(times(1)).send("payment-failed-event", AGGREGATE_ID, "{}");
+    }
+
+    @Test
+    @DisplayName("미등록 eventType: Kafka 전송 없이 handleFailure가 호출된다")
+    void publish_unknownEventType_handlesFailureWithoutKafkaSend() {
+        // given
+        OutboxEvent unknown = OutboxEvent.pending("Orders", AGGREGATE_ID, "unknown-event", "{}");
+        ReflectionTestUtils.setField(unknown, "id", 4L);
+        ReflectionTestUtils.setField(unknown, "retryCount", 0);
+        ReflectionTestUtils.setField(unknown, "status", OutboxStatus.PENDING);
+
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
+                .willReturn(List.of(unknown));
+        given(outboxEventRepository.findById(4L)).willReturn(Optional.of(unknown));
+
+        // when
+        outboxPublisherJob.publish();
+
+        // then — Kafka 전송 없이 handleFailure 경로로 처리
+        then(kafkaTemplate).should(never()).send(anyString(), anyString(), anyString());
+        assertThat(unknown.getRetryCount()).isEqualTo(1);
+        assertThat(unknown.getStatus()).isEqualTo(OutboxStatus.PENDING);
     }
 
     @Test

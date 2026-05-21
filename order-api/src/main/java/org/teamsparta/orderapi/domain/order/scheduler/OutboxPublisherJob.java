@@ -50,6 +50,8 @@ public class OutboxPublisherJob {
                 String topicName = switch(event.getEventType()){
                     case "order-create-event" -> "order-create-event";
                     case "payment-request-event" -> "payment-request-event";
+                    case "payment-succeeded-event" -> "payment-succeeded-event";
+                    case "payment-failed-event" -> "payment-failed-event";
                     case "order-confirm-event" -> "order-confirm-event";
                     case "productSnapshot-requested-event" -> "productSnapshot-requested-event";
                     default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
