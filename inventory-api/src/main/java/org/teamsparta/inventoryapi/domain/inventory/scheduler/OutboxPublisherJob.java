@@ -6,35 +6,51 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
-import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxEventRepository;
-import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxQueryRepository;
 import org.teamsparta.inventoryapi.global.exception.DomainException;
 import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
 
-import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Outbox 이벤트를 Kafka로 발행하는 스케줄러.
+ *
+ * <p>흐름:
+ * <ol>
+ *   <li>Stale PROCESSING 복구: publisher 크래시로 고착된 PROCESSING → PENDING (별도 트랜잭션)</li>
+ *   <li>PENDING claim: PENDING 이벤트를 PROCESSING으로 전이하고 커밋 (짧은 트랜잭션, DB 락 빠른 해제)</li>
+ *   <li>Kafka send: 트랜잭션 밖에서 수행 — DB 락을 잡은 채 블로킹하지 않음</li>
+ *   <li>상태 전이: 성공 시 SENT, 실패 시 PENDING(재시도) 또는 FAILED(최대 재시도 초과)</li>
+ * </ol>
+ *
+ * <p>중복 발행 방지: PROCESSING claim이 단일 트랜잭션 안에서 PESSIMISTIC_WRITE + 상태 전이를
+ * 함께 처리하므로 멀티 인스턴스 환경에서 같은 이벤트가 중복 claim되지 않는다.
+ *
+ * <p>@Transactional 없음: Kafka send는 DB 트랜잭션 밖에서 수행된다.
+ * 각 상태 전이(claimBatch, markSent, markFailed)는 OutboxEventClaimer·OutboxStatusUpdater의
+ * 개별 REQUIRES_NEW 트랜잭션으로 처리된다.
+ */
 @Component
 @Slf4j
 public class OutboxPublisherJob {
 
-    private final OutboxQueryRepository outboxQueryRepository;
-    private final OutboxEventRepository outboxEventRepository;
+    private static final int BATCH_SIZE = 50;
+    private static final long STALE_PROCESSING_TIMEOUT_MINUTES = 5;
+
+    private final OutboxEventClaimer outboxEventClaimer;
+    private final OutboxStatusUpdater outboxStatusUpdater;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final Counter publishSentCounter;
     private final Counter publishFailedCounter;
 
-    public OutboxPublisherJob(OutboxQueryRepository outboxQueryRepository,
-                              OutboxEventRepository outboxEventRepository,
+    public OutboxPublisherJob(OutboxEventClaimer outboxEventClaimer,
+                              OutboxStatusUpdater outboxStatusUpdater,
                               KafkaTemplate<String, String> kafkaTemplate,
                               MeterRegistry meterRegistry) {
-        this.outboxQueryRepository = outboxQueryRepository;
-        this.outboxEventRepository = outboxEventRepository;
+        this.outboxEventClaimer = outboxEventClaimer;
+        this.outboxStatusUpdater = outboxStatusUpdater;
         this.kafkaTemplate = kafkaTemplate;
         this.publishSentCounter = Counter.builder("inventory.outbox.publish")
                 .tag("result", "sent").register(meterRegistry);
@@ -43,12 +59,24 @@ public class OutboxPublisherJob {
     }
 
     @Scheduled(fixedDelay = 500)
-    @Transactional
     public void publish() {
-        List<OutboxEvent> batch = outboxQueryRepository.findBatchForPublish(ZonedDateTime.now(), 50);
+        ZonedDateTime now = ZonedDateTime.now();
+
+        // 1. Publisher 크래시로 고착된 stale PROCESSING 이벤트를 PENDING으로 복구
+        outboxEventClaimer.recoverStaleProcessing(
+                now.minusMinutes(STALE_PROCESSING_TIMEOUT_MINUTES), BATCH_SIZE);
+
+        // 2. PENDING → PROCESSING claim (짧은 트랜잭션, Kafka 호출 없음)
+        List<OutboxEvent> batch = outboxEventClaimer.claimBatch(now, BATCH_SIZE);
+        if (batch.isEmpty()) {
+            return;
+        }
+
+        // 3. Kafka send (DB 트랜잭션 밖에서 수행)
         for (OutboxEvent event : batch) {
-            try{
-                String topicName = switch(event.getEventType()){
+            // 3-1. topic resolve + Kafka send — 실패 시 markFailed()
+            try {
+                String topicName = switch (event.getEventType()) {
                     case "inventory-reserved-event" -> "inventory-reserved-event";
                     case "inventory-failed-event" -> "inventory-failed-event";
                     case "inventory-confirm-event" -> "inventory-confirm-event";
@@ -58,30 +86,30 @@ public class OutboxPublisherJob {
                 };
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())
                         .get(2, TimeUnit.SECONDS);
-                updateToSent(event.getId());
-                publishSentCounter.increment();
-            }catch (Exception e){
-                log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
-                handleFailure(event.getId(), e.getMessage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.error("Outbox publish interrupted. id={}, eventType={}", event.getId(), event.getEventType(), e);
+                outboxStatusUpdater.markFailed(event.getId());
                 publishFailedCounter.increment();
+                break; // interrupt 플래그 복원 후 루프 종료
+            } catch (Exception e) {
+                log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
+                outboxStatusUpdater.markFailed(event.getId());
+                publishFailedCounter.increment();
+                continue; // 다음 이벤트로 — markSent 블록은 건너뜀
+            }
+
+            // 3-2. Kafka send 성공 후 DB 상태 전이 — markFailed() 호출 금지
+            // 이미 발행된 이벤트를 재시도 대상으로 되돌리면 중복 발행이 발생한다.
+            try {
+                outboxStatusUpdater.markSent(event.getId());
+                publishSentCounter.increment();
+            } catch (Exception e) {
+                log.error("Status update failed after successful Kafka publish. id={}, eventType={}",
+                        event.getId(), event.getEventType(), e);
+                publishFailedCounter.increment();
+                break; // DB 업데이트 불안정 상태 — 남은 배치 처리 중단 (stale recovery가 복구)
             }
         }
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void updateToSent(Long id) {
-        OutboxEvent event = outboxEventRepository.findById(id)
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
-        event.markSent();
-        outboxEventRepository.save(event);
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void handleFailure(Long id, String error) {
-        OutboxEvent event = outboxEventRepository.findById(id)
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
-
-        // 최대 재시도 5회, 다음 재시도까지 1분 지연
-        event.markFailedAndScheduleRetry(5, Duration.ofMinutes(1));
     }
 }
