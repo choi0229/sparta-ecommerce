@@ -12,18 +12,15 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
-import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
 import org.teamsparta.orderapi.domain.order.repository.OutboxQueryRepository;
 import org.teamsparta.orderapi.domain.order.scheduler.OutboxPublisherJob;
+import org.teamsparta.orderapi.domain.order.scheduler.OutboxStatusUpdater;
 import org.teamsparta.orderapi.global.enums.OutboxStatus;
 
-import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
@@ -38,7 +35,7 @@ public class OutboxPublisherJobTest {
     @Mock
     private OutboxQueryRepository outboxQueryRepository;
     @Mock
-    private OutboxEventRepository outboxEventRepository;
+    private OutboxStatusUpdater outboxStatusUpdater;
     @Mock
     private KafkaTemplate<String, String> kafkaTemplate;
 
@@ -48,7 +45,7 @@ public class OutboxPublisherJobTest {
     @BeforeEach
     void setUp() {
         outboxPublisherJob = new OutboxPublisherJob(
-                outboxQueryRepository, outboxEventRepository, kafkaTemplate, new SimpleMeterRegistry());
+                outboxQueryRepository, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry());
         event = OutboxEvent.pending("Orders", AGGREGATE_ID, "order-create-event", "{}");
         ReflectionTestUtils.setField(event, "id", 1L);
         ReflectionTestUtils.setField(event, "retryCount", 0);
@@ -56,9 +53,9 @@ public class OutboxPublisherJobTest {
     }
 
     @Test
-    @DisplayName("성공: 이벤트를 Kafka로 전송하고 SENT 상태로 변경")
-    void publish_Success() throws Exception {
-        // given
+    @DisplayName("성공: Kafka 전송 성공 시 OutboxStatusUpdater.markSent(id)가 호출된다")
+    @SuppressWarnings("unchecked")
+    void publish_Success_callsMarkSent() throws Exception {
         given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
                 .willReturn(List.of(event));
 
@@ -67,21 +64,17 @@ public class OutboxPublisherJobTest {
                 .willReturn(future);
         given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
 
-        given(outboxEventRepository.findById(1L)).willReturn(Optional.of(event));
-
-        // when
         outboxPublisherJob.publish();
 
-        // then
-        assertThat(event.getStatus()).isEqualTo(OutboxStatus.SENT);
+        then(outboxStatusUpdater).should(times(1)).markSent(1L);
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
         then(kafkaTemplate).should(times(1)).send("order-create-event", AGGREGATE_ID, "{}");
-        then(outboxEventRepository).should(times(1)).save(any());
     }
 
     @Test
-    @DisplayName("실패: Kafka 전송 에러 발생 시 재시도 횟수가 증가하고 PENDING을 유지한다")
-    void publish_Fail_Retry() throws Exception {
-        // given
+    @DisplayName("실패: Kafka 전송 실패 시 OutboxStatusUpdater.markFailed(id)가 호출된다")
+    @SuppressWarnings("unchecked")
+    void publish_Fail_callsMarkFailed() throws Exception {
         given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
                 .willReturn(List.of(event));
 
@@ -89,26 +82,18 @@ public class OutboxPublisherJobTest {
         given(kafkaTemplate.send(anyString(), anyString(), anyString())).willReturn(future);
         given(future.get(2, TimeUnit.SECONDS)).willThrow(new RuntimeException("Kafka Down"));
 
-        given(outboxEventRepository.findById(1L)).willReturn(Optional.of(event));
-
-        // when
         outboxPublisherJob.publish();
 
-        // then
-        assertThat(event.getRetryCount()).isEqualTo(1);
-        assertThat(event.getStatus()).isEqualTo(OutboxStatus.PENDING);
-        assertThat(event.getNextRetryAt()).isNotNull();
+        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(never()).markSent(anyLong());
     }
 
     @Test
-    @DisplayName("payment-succeeded-event: 올바른 topic으로 Kafka 전송되고 SENT 상태로 변경된다")
+    @DisplayName("payment-succeeded-event: 올바른 topic으로 Kafka 전송 후 markSent가 호출된다")
     @SuppressWarnings("unchecked")
     void publish_paymentSucceeded_routesToCorrectTopic() throws Exception {
-        // given
         OutboxEvent paymentSucceeded = OutboxEvent.pending("Payment", AGGREGATE_ID, "payment-succeeded-event", "{}");
         ReflectionTestUtils.setField(paymentSucceeded, "id", 2L);
-        ReflectionTestUtils.setField(paymentSucceeded, "retryCount", 0);
-        ReflectionTestUtils.setField(paymentSucceeded, "status", OutboxStatus.PENDING);
 
         given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
                 .willReturn(List.of(paymentSucceeded));
@@ -117,25 +102,20 @@ public class OutboxPublisherJobTest {
         given(kafkaTemplate.send(eq("payment-succeeded-event"), eq(AGGREGATE_ID), anyString()))
                 .willReturn(future);
         given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
-        given(outboxEventRepository.findById(2L)).willReturn(Optional.of(paymentSucceeded));
 
-        // when
         outboxPublisherJob.publish();
 
-        // then
-        assertThat(paymentSucceeded.getStatus()).isEqualTo(OutboxStatus.SENT);
         then(kafkaTemplate).should(times(1)).send("payment-succeeded-event", AGGREGATE_ID, "{}");
+        then(outboxStatusUpdater).should(times(1)).markSent(2L);
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
     }
 
     @Test
-    @DisplayName("payment-failed-event: 올바른 topic으로 Kafka 전송되고 SENT 상태로 변경된다")
+    @DisplayName("payment-failed-event: 올바른 topic으로 Kafka 전송 후 markSent가 호출된다")
     @SuppressWarnings("unchecked")
     void publish_paymentFailed_routesToCorrectTopic() throws Exception {
-        // given
         OutboxEvent paymentFailed = OutboxEvent.pending("Payment", AGGREGATE_ID, "payment-failed-event", "{}");
         ReflectionTestUtils.setField(paymentFailed, "id", 3L);
-        ReflectionTestUtils.setField(paymentFailed, "retryCount", 0);
-        ReflectionTestUtils.setField(paymentFailed, "status", OutboxStatus.PENDING);
 
         given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
                 .willReturn(List.of(paymentFailed));
@@ -144,61 +124,27 @@ public class OutboxPublisherJobTest {
         given(kafkaTemplate.send(eq("payment-failed-event"), eq(AGGREGATE_ID), anyString()))
                 .willReturn(future);
         given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
-        given(outboxEventRepository.findById(3L)).willReturn(Optional.of(paymentFailed));
 
-        // when
         outboxPublisherJob.publish();
 
-        // then
-        assertThat(paymentFailed.getStatus()).isEqualTo(OutboxStatus.SENT);
         then(kafkaTemplate).should(times(1)).send("payment-failed-event", AGGREGATE_ID, "{}");
+        then(outboxStatusUpdater).should(times(1)).markSent(3L);
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
     }
 
     @Test
-    @DisplayName("미등록 eventType: Kafka 전송 없이 handleFailure가 호출된다")
-    void publish_unknownEventType_handlesFailureWithoutKafkaSend() {
-        // given
+    @DisplayName("미등록 eventType: Kafka 전송 없이 markFailed가 호출된다")
+    void publish_unknownEventType_callsMarkFailedWithoutKafkaSend() {
         OutboxEvent unknown = OutboxEvent.pending("Orders", AGGREGATE_ID, "unknown-event", "{}");
         ReflectionTestUtils.setField(unknown, "id", 4L);
-        ReflectionTestUtils.setField(unknown, "retryCount", 0);
-        ReflectionTestUtils.setField(unknown, "status", OutboxStatus.PENDING);
 
         given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
                 .willReturn(List.of(unknown));
-        given(outboxEventRepository.findById(4L)).willReturn(Optional.of(unknown));
 
-        // when
         outboxPublisherJob.publish();
 
-        // then — Kafka 전송 없이 handleFailure 경로로 처리
         then(kafkaTemplate).should(never()).send(anyString(), anyString(), anyString());
-        assertThat(unknown.getRetryCount()).isEqualTo(1);
-        assertThat(unknown.getStatus()).isEqualTo(OutboxStatus.PENDING);
-    }
-
-    @Test
-    @DisplayName("실패: 재시도 5회 초과 시 FAILED 상태로 변경")
-    void publish_Fail_MaxRetry() throws Exception {
-        // given
-        // 이미 4번 실패한 상태로 설정
-        for(int i = 0; i < 4; i++) {
-            event.markFailedAndScheduleRetry(5, Duration.ofMinutes(1));
-        }
-
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
-                .willReturn(List.of(event));
-
-        CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
-        given(kafkaTemplate.send(anyString(), anyString(), anyString())).willReturn(future);
-        given(future.get(2, TimeUnit.SECONDS)).willThrow(new RuntimeException("Kafka Down"));
-
-        given(outboxEventRepository.findById(1L)).willReturn(Optional.of(event));
-
-        // when
-        outboxPublisherJob.publish();
-
-        // then
-        assertThat(event.getRetryCount()).isEqualTo(5);
-        assertThat(event.getStatus()).isEqualTo(OutboxStatus.FAILED);
+        then(outboxStatusUpdater).should(times(1)).markFailed(4L);
+        then(outboxStatusUpdater).should(never()).markSent(anyLong());
     }
 }
