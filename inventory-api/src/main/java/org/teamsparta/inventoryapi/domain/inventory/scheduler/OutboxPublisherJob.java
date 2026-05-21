@@ -74,6 +74,7 @@ public class OutboxPublisherJob {
 
         // 3. Kafka send (DB 트랜잭션 밖에서 수행)
         for (OutboxEvent event : batch) {
+            // 3-1. topic resolve + Kafka send — 실패 시 markFailed()
             try {
                 String topicName = switch (event.getEventType()) {
                     case "inventory-reserved-event" -> "inventory-reserved-event";
@@ -85,8 +86,6 @@ public class OutboxPublisherJob {
                 };
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())
                         .get(2, TimeUnit.SECONDS);
-                outboxStatusUpdater.markSent(event.getId());
-                publishSentCounter.increment();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.error("Outbox publish interrupted. id={}, eventType={}", event.getId(), event.getEventType(), e);
@@ -97,6 +96,19 @@ public class OutboxPublisherJob {
                 log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
                 outboxStatusUpdater.markFailed(event.getId());
                 publishFailedCounter.increment();
+                continue; // 다음 이벤트로 — markSent 블록은 건너뜀
+            }
+
+            // 3-2. Kafka send 성공 후 DB 상태 전이 — markFailed() 호출 금지
+            // 이미 발행된 이벤트를 재시도 대상으로 되돌리면 중복 발행이 발생한다.
+            try {
+                outboxStatusUpdater.markSent(event.getId());
+                publishSentCounter.increment();
+            } catch (Exception e) {
+                log.error("Status update failed after successful Kafka publish. id={}, eventType={}",
+                        event.getId(), event.getEventType(), e);
+                publishFailedCounter.increment();
+                break; // DB 업데이트 불안정 상태 — 남은 배치 처리 중단 (stale recovery가 복구)
             }
         }
     }

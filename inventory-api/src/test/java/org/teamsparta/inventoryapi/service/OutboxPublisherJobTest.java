@@ -95,4 +95,23 @@ public class OutboxPublisherJobTest {
         then(outboxStatusUpdater).should(times(1)).markFailed(1L);
         then(outboxStatusUpdater).should(never()).markSent(anyLong());
     }
+
+    @Test
+    @DisplayName("Kafka 전송 성공 후 markSent()가 실패해도 markFailed()는 호출되지 않는다")
+    @SuppressWarnings("unchecked")
+    void publish_markSentFailsAfterKafkaSuccess_doesNotMarkFailed() throws Exception {
+        given(outboxEventClaimer.claimBatch(any(), anyInt())).willReturn(List.of(event));
+
+        CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
+        given(kafkaTemplate.send(eq("inventory-created-event"), eq(AGGREGATE_ID), anyString())).willReturn(future);
+        given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
+        // Kafka send 성공, markSent()는 예외 발생
+        Mockito.doThrow(new RuntimeException("DB connection lost")).when(outboxStatusUpdater).markSent(1L);
+
+        outboxPublisherJob.publish();
+
+        // markFailed()는 절대 호출되면 안 된다 — 이미 발행된 이벤트를 재시도 대상으로 되돌리면 중복 발행
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(outboxStatusUpdater).should(times(1)).markSent(1L);
+    }
 }
