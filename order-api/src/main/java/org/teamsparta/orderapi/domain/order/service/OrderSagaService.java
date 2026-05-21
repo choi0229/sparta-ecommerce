@@ -129,6 +129,12 @@ public class OrderSagaService {
         OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
 
+        if (saga.getState() == SagaState.COMPLETED) {
+            log.warn("Duplicate inventory-confirmed-event ignored. sagaId={}, orderId={}",
+                    event.sagaId(), event.orderId());
+            return;
+        }
+
         // 최종 완료 처리
         saga.updateState(SagaState.COMPLETED, null, saga.getReservationId());
         order.updateStatus(Status.COMPLETED);
