@@ -63,6 +63,7 @@ class OutboxStatusUpdaterTest {
         assertThat(event.getRetryCount()).isEqualTo(1);
         assertThat(event.getStatus()).isEqualTo(OutboxStatus.PENDING);
         assertThat(event.getNextRetryAt()).isNotNull();
+        then(outboxEventRepository).should(times(1)).save(event);
     }
 
     @Test

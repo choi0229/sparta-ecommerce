@@ -35,5 +35,6 @@ public class OutboxStatusUpdater {
         OutboxEvent event = outboxEventRepository.findById(id)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
         event.markFailedAndScheduleRetry(MAX_RETRY, BASE_BACKOFF);
+        outboxEventRepository.save(event);
     }
 }
