@@ -7,7 +7,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
-public interface ProductProjectionRepository extends JpaRepository<ProductProjection,Long> {
+public interface ProductProjectionRepository extends JpaRepository<ProductProjection, String> {
     Optional<ProductProjection> findByVariantId(Long variantId);
     List<ProductProjection> findBySkuIn(Collection<String> skus);
 }
