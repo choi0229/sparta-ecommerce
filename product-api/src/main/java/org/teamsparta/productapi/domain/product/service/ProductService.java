@@ -31,6 +31,8 @@ import org.teamsparta.productapi.global.enums.Status;
 import org.teamsparta.productapi.global.exception.DomainException;
 import org.teamsparta.productapi.global.exception.DomainExceptionCode;
 
+import org.springframework.dao.DataIntegrityViolationException;
+
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -102,7 +104,12 @@ public class ProductService {
                 ProductVariantEvent projectionEvent = ProductVariantEvent.from(saved, variant);
                 outboxEvents.add(createOutboxEvent("ProductProjection", v.sku(), "product-variant-event", projectionEvent));
             }
-            productVariantRepository.saveAll(product.getProductVariants());
+            try {
+                productVariantRepository.saveAll(product.getProductVariants());
+                productVariantRepository.flush();
+            } catch (DataIntegrityViolationException e) {
+                throw new DomainException(DomainExceptionCode.DUPLICATE_SKU);
+            }
         }
         if (!outboxEvents.isEmpty()) {
             outboxEventRepository.saveAll(outboxEvents);

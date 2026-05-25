@@ -9,6 +9,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.productapi.domain.category.entity.Category;
 import org.teamsparta.productapi.domain.category.repository.CategoryRepository;
@@ -40,6 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 
@@ -255,5 +257,37 @@ public class ProductServiceTest {
                 productService.addImages(1L, List.of(new ProductImageAddRequest("k","u", ImageType.DETAIL, 0, false))));
 
         assertThat(exception.getMessage()).isEqualTo(DomainExceptionCode.NOT_FOUND_PRODUCT.getMessage());
+    }
+
+    @Test
+    @DisplayName("상품 생성 실패 - DB unique constraint 위반 시 DomainException(DUPLICATE_SKU) 변환")
+    void createProduct_fail_dbConstraintViolation_translatesToDuplicateSku() throws Exception {
+        // given
+        // 애플리케이션 레벨 existsBySku 체크는 통과(race condition 상황 재현)
+        List<ProductVariantRequest> vars = List.of(
+                new ProductVariantRequest("SKU-RACE", new BigDecimal("1000"), 10, null)
+        );
+        ProductCreateRequest request = new ProductCreateRequest("상품", "브랜드", 1L, null, vars, null);
+
+        Category category = Category.builder()
+                .name("카테고리").parent(null).status(Status.ACTIVE).sortOrder(0).build();
+        ReflectionTestUtils.setField(category, "id", 1L);
+
+        given(categoryRepository.findById(1L)).willReturn(Optional.of(category));
+        given(productVariantRepository.existsBySku("SKU-RACE")).willReturn(false);  // app 체크 통과
+        given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        // flush() 시점에 DB unique constraint 위반 발생 (race condition 재현)
+        willThrow(new DataIntegrityViolationException("uk_product_variant_sku"))
+                .given(productVariantRepository).flush();
+
+        // when & then
+        DomainException exception = assertThrows(DomainException.class,
+                () -> productService.createProduct(request));
+
+        assertThat(exception.getMessage()).isEqualTo(DomainExceptionCode.DUPLICATE_SKU.getMessage());
+        assertThat(exception.getCode()).isEqualTo("DUPLICATE_SKU");
+        then(outboxEventRepository).should(never()).saveAll(any());
     }
 }
