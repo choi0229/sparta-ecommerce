@@ -43,15 +43,23 @@ public class OutboxPublisherJob {
                 kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())
                         .get(2, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
-                // 스레드 인터럽트 플래그 복원
+                // 스레드 인터럽트 플래그 복원 — markFailed 결과에 무관하게 반드시 복원
                 Thread.currentThread().interrupt();
                 log.error("Outbox publish interrupted. id={}, eventType={}", event.getId(), event.getEventType(), e);
-                outboxStatusUpdater.markFailed(event.getId());
+                try {
+                    outboxStatusUpdater.markFailed(event.getId());
+                } catch (Exception markEx) {
+                    log.warn("markFailed also failed during interrupt handling. id={}", event.getId(), markEx);
+                }
                 break; // 인터럽트 발생 시 루프 중단
             } catch (Exception e) {
                 log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
-                outboxStatusUpdater.markFailed(event.getId());
-                continue; // Kafka 실패 → 다음 이벤트 계속 처리
+                try {
+                    outboxStatusUpdater.markFailed(event.getId());
+                } catch (Exception markEx) {
+                    log.warn("markFailed failed for id={}. Event will be retried by stale recovery.", event.getId(), markEx);
+                }
+                continue; // Kafka 실패 → markFailed 성공 여부와 무관하게 다음 이벤트 처리
             }
 
             // ── Block 2: Kafka 전송 성공 → markSent ─────────────────────────

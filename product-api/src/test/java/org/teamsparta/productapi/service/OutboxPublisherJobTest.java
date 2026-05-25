@@ -150,4 +150,64 @@ public class OutboxPublisherJobTest {
         // interrupt flag 정리 (다음 테스트 영향 방지)
         Thread.interrupted();
     }
+
+    @Test
+    @DisplayName("Kafka 실패 후 markFailed() 예외 발생 → 루프 계속 진행 (다음 이벤트 처리)")
+    void publish_kafkaFail_markFailedThrows_loopContinuesToNextEvent() throws Exception {
+        // given
+        OutboxEvent event1 = makeEvent("product-variant-event");
+        OutboxEvent event2 = OutboxEvent.pending("Product", "SKU-2", "product-variant-event", "{}");
+        ReflectionTestUtils.setField(event2, "id", 2L);
+
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event1, event2));
+
+        CompletableFuture<SendResult<String, String>> future1 = Mockito.mock(CompletableFuture.class);
+        CompletableFuture<SendResult<String, String>> future2 = Mockito.mock(CompletableFuture.class);
+        given(kafkaTemplate.send(eq("product-variant-event"), eq(AGGREGATE_ID), eq("{}"))).willReturn(future1);
+        given(kafkaTemplate.send(eq("product-variant-event"), eq("SKU-2"), eq("{}"))).willReturn(future2);
+        given(future1.get(2, TimeUnit.SECONDS)).willThrow(new TimeoutException("Kafka timeout"));
+        given(future2.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
+
+        // event1의 markFailed는 예외를 던지지만 루프가 중단되어서는 안 됨
+        doThrow(new RuntimeException("DB error")).when(outboxStatusUpdater).markFailed(1L);
+
+        // when
+        outboxPublisherJob.publish();
+
+        // then: event1 markFailed 호출 후 예외 발생해도 event2는 정상 처리
+        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(times(1)).markSent(2L);
+        then(outboxStatusUpdater).should(never()).markFailed(2L);
+    }
+
+    @Test
+    @DisplayName("InterruptedException 발생 시 markFailed() 예외 발생 → interrupt flag 복원 후 루프 중단")
+    void publish_interruptedException_markFailedThrows_interruptFlagStillRestoredAndBreaks() throws Exception {
+        // given
+        OutboxEvent event1 = makeEvent("product-variant-event");
+        OutboxEvent event2 = OutboxEvent.pending("Product", "SKU-2", "product-variant-event", "{}");
+        ReflectionTestUtils.setField(event2, "id", 2L);
+
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event1, event2));
+
+        CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
+        given(kafkaTemplate.send(eq("product-variant-event"), eq(AGGREGATE_ID), eq("{}"))).willReturn(future);
+        given(future.get(2, TimeUnit.SECONDS)).willThrow(new InterruptedException("interrupted"));
+
+        // markFailed도 예외를 던지는 최악의 상황
+        doThrow(new RuntimeException("DB error")).when(outboxStatusUpdater).markFailed(1L);
+
+        // when
+        outboxPublisherJob.publish();
+
+        // then: markFailed 예외에도 불구하고 interrupt flag는 반드시 복원되어야 함
+        assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        // event2는 루프 중단으로 처리 안 됨
+        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(never()).markFailed(2L);
+        then(outboxStatusUpdater).should(never()).markSent(anyLong());
+
+        // interrupt flag 정리 (다음 테스트 영향 방지)
+        Thread.interrupted();
+    }
 }

@@ -356,4 +356,33 @@ public class ProductServiceTest {
         assertThat(exception.getCode()).isEqualTo("DUPLICATE_SKU");
         then(outboxEventRepository).should(never()).saveAll(any());
     }
+
+    @Test
+    @DisplayName("상품 생성 실패 - SKU 무관 DB constraint 위반은 DomainException으로 변환하지 않는다")
+    void createProduct_fail_nonSkuConstraintViolation_rethrowsAsIs() throws Exception {
+        // given — race condition 상황 재현 (app 체크 통과)
+        List<ProductVariantRequest> vars = List.of(
+                new ProductVariantRequest("SKU-RACE", new BigDecimal("1000"), 10, null)
+        );
+        ProductCreateRequest request = new ProductCreateRequest("상품", "브랜드", 1L, null, vars, null);
+
+        Category category = Category.builder()
+                .name("카테고리").parent(null).status(Status.ACTIVE).sortOrder(0).build();
+        ReflectionTestUtils.setField(category, "id", 1L);
+
+        given(categoryRepository.findById(1L)).willReturn(Optional.of(category));
+        given(productVariantRepository.existsBySku("SKU-RACE")).willReturn(false);
+        given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        // SKU와 무관한 다른 constraint 위반 (uk_product_variant_sku 포함 안 함)
+        DataIntegrityViolationException otherConstraint =
+                new DataIntegrityViolationException("uk_some_other_table_column");
+        willThrow(otherConstraint).given(productVariantRepository).flush();
+
+        // when & then: DUPLICATE_SKU가 아닌 원래 DataIntegrityViolationException이 전파되어야 함
+        DataIntegrityViolationException thrown = assertThrows(DataIntegrityViolationException.class,
+                () -> productService.createProduct(request));
+        assertThat(thrown).isSameAs(otherConstraint);
+    }
 }

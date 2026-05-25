@@ -112,7 +112,19 @@ public class ProductService {
                 productVariantRepository.saveAll(product.getProductVariants());
                 productVariantRepository.flush();
             } catch (DataIntegrityViolationException e) {
-                throw new DomainException(DomainExceptionCode.DUPLICATE_SKU);
+                // Hibernate ConstraintViolationException에서 constraint 이름 추출 (우선)
+                String constraintHint = null;
+                if (e.getCause() instanceof org.hibernate.exception.ConstraintViolationException hce) {
+                    constraintHint = hce.getConstraintName();
+                }
+                // constraint 이름을 얻지 못한 경우 mostSpecificCause 메시지로 fallback
+                if (constraintHint == null) {
+                    constraintHint = e.getMostSpecificCause().getMessage();
+                }
+                if (constraintHint != null && constraintHint.contains("uk_product_variant_sku")) {
+                    throw new DomainException(DomainExceptionCode.DUPLICATE_SKU);
+                }
+                throw e;
             }
         }
         if (!outboxEvents.isEmpty()) {
