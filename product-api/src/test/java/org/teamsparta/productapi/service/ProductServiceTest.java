@@ -22,7 +22,10 @@ import org.teamsparta.productapi.domain.product.entity.Product;
 import org.teamsparta.productapi.domain.product.entity.ProductImage;
 import org.teamsparta.productapi.domain.product.entity.ProductVariant;
 import org.teamsparta.productapi.domain.product.event.ProductVariantPublisher;
+import org.teamsparta.productapi.domain.product.dto.response.ProductSummaryResponse;
 import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
+import org.teamsparta.productapi.domain.product.repository.ProductImageRepository;
+import org.teamsparta.productapi.domain.product.repository.ProductQueryRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
 import org.teamsparta.productapi.domain.product.service.ProductService;
@@ -30,6 +33,10 @@ import org.teamsparta.productapi.global.enums.ImageType;
 import org.teamsparta.productapi.global.enums.Status;
 import org.teamsparta.productapi.global.exception.DomainException;
 import org.teamsparta.productapi.global.exception.DomainExceptionCode;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -39,6 +46,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
@@ -58,11 +66,15 @@ public class ProductServiceTest {
     @Mock
     private ProductVariantRepository productVariantRepository;
     @Mock
+    private ProductQueryRepository productQueryRepository;
+    @Mock
     private OutboxEventRepository outboxEventRepository;
     @Mock
     private ObjectMapper objectMapper;
     @Mock
     private ProductVariantPublisher productVariantPublisher;
+    @Mock
+    private ProductImageRepository productImageRepository;
 
     private List<ProductVariantRequest> variants;
     private List<ProductImageCreateRequest> images;
@@ -258,6 +270,60 @@ public class ProductServiceTest {
 
         assertThat(exception.getMessage()).isEqualTo(DomainExceptionCode.NOT_FOUND_PRODUCT.getMessage());
     }
+
+    // ── searchProducts N+1 방지 테스트 ──────────────────────────────────────
+
+    @Test
+    @DisplayName("searchProducts - productIds 기반 images batch 조회 후 대표 이미지 assembling")
+    void searchProducts_loadsImagesInBatch_assemblesPrimaryImageUrl() {
+        // given
+        Category category = Category.builder()
+                .name("전자제품").parent(null).status(Status.ACTIVE).sortOrder(0).build();
+        ReflectionTestUtils.setField(category, "id", 10L);
+
+        Product p1 = Product.builder().name("상품A").brandName("브랜드").category(category).status(Status.ACTIVE).build();
+        ReflectionTestUtils.setField(p1, "id", 1L);
+
+        Product p2 = Product.builder().name("상품B").brandName("브랜드").category(category).status(Status.ACTIVE).build();
+        ReflectionTestUtils.setField(p2, "id", 2L);
+
+        // p1에는 대표 이미지 있음, p2에는 이미지 없음
+        ProductImage img = ProductImage.builder()
+                .product(p1).storageKey("key1").url("https://cdn.example.com/img1.jpg")
+                .type(ImageType.THUMBNAIL).sortOrder(0).isPrimary(true)
+                .build();
+
+        Page<Product> productPage = new PageImpl<>(List.of(p1, p2));
+        given(productQueryRepository.searchProducts(any(), any(), any(), any(), any())).willReturn(productPage);
+        given(productImageRepository.findByProductIdIn(anyList())).willReturn(List.of(img));
+
+        // when
+        Page<ProductSummaryResponse> result = productService.searchProducts(null, null, null, null, Pageable.unpaged());
+
+        // then: images batch 조회가 단 1회 호출됨 (N+1 없음)
+        then(productImageRepository).should(times(1)).findByProductIdIn(anyList());
+
+        assertThat(result.getContent()).hasSize(2);
+        assertThat(result.getContent().get(0).primaryImageUrl()).isEqualTo("https://cdn.example.com/img1.jpg");
+        assertThat(result.getContent().get(1).primaryImageUrl()).isNull();  // 이미지 없으면 null
+    }
+
+    @Test
+    @DisplayName("searchProducts - 결과가 비어 있으면 productImageRepository를 호출하지 않는다")
+    void searchProducts_emptyPage_doesNotCallImageRepository() {
+        // given
+        Page<Product> emptyPage = Page.empty();
+        given(productQueryRepository.searchProducts(any(), any(), any(), any(), any())).willReturn(emptyPage);
+
+        // when
+        Page<ProductSummaryResponse> result = productService.searchProducts(null, null, null, null, Pageable.unpaged());
+
+        // then
+        then(productImageRepository).should(never()).findByProductIdIn(anyList());
+        assertThat(result.getContent()).isEmpty();
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
 
     @Test
     @DisplayName("상품 생성 실패 - DB unique constraint 위반 시 DomainException(DUPLICATE_SKU) 변환")

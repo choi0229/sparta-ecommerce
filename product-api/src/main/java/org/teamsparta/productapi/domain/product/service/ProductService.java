@@ -24,6 +24,7 @@ import org.teamsparta.productapi.domain.product.event.ProductInventoryEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantPublisher;
 import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
+import org.teamsparta.productapi.domain.product.repository.ProductImageRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductQueryRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
@@ -37,6 +38,8 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -49,6 +52,7 @@ public class ProductService {
     private final ProductVariantPublisher productVariantPublisher;
     private final ObjectMapper objectMapper;
     private final OutboxEventRepository outboxEventRepository;
+    private final ProductImageRepository productImageRepository;
 
     @Transactional
     public void createProduct(ProductCreateRequest request) {
@@ -181,7 +185,19 @@ public class ProductService {
             Pageable pageable
     ){
         Page<Product> productPage = productQueryRepository.searchProducts(keyword, brandName, categoryId, status, pageable);
-        return productPage.map(ProductSummaryResponse::from);
+
+        // productImages LAZY 컬렉션 N+1 방지: productId IN (…) 단일 쿼리로 batch 조회
+        List<Long> productIds = productPage.getContent().stream()
+                .map(Product::getId)
+                .toList();
+
+        Map<Long, List<ProductImage>> imagesByProductId = productIds.isEmpty()
+                ? Map.of()
+                : productImageRepository.findByProductIdIn(productIds).stream()
+                        .collect(Collectors.groupingBy(img -> img.getProduct().getId()));
+
+        return productPage.map(p ->
+                ProductSummaryResponse.from(p, imagesByProductId.getOrDefault(p.getId(), List.of())));
     }
 
 }
