@@ -29,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.springframework.test.util.ReflectionTestUtils.invokeMethod;
 
 @ExtendWith(MockitoExtension.class)
 class OrderTransactionalServiceTest {
@@ -75,6 +76,57 @@ class OrderTransactionalServiceTest {
         assertThat(captured.getRecipientName()).isEqualTo("홍길동");
         assertThat(captured.getRecipientAddress()).isEqualTo("서울시 강남구 테헤란로 1");
     }
+
+    // ── hashRequest SHA-256 검증 ─────────────────────────────────────────────
+
+    /** hashRequest 테스트용 최소 ProductSnapshotReplyResult 생성 헬퍼 */
+    private ProductSnapshotReplyResult sampleResult(Long userId, String sku, int quantity) {
+        return new ProductSnapshotReplyResult(
+                UUID.randomUUID(), null, true, null,
+                List.of(),
+                List.of(new ProductSnapshotReplyResult.Item(sku, quantity)),
+                "idem-key",
+                userId,
+                null
+        );
+    }
+
+    @Test
+    @DisplayName("hashRequest: 동일한 입력은 항상 동일한 SHA-256 hash를 반환한다")
+    void hashRequest_sameInput_returnsSameHash() {
+        ProductSnapshotReplyResult r1 = sampleResult(1L, "SKU-001", 2);
+        ProductSnapshotReplyResult r2 = sampleResult(1L, "SKU-001", 2);
+
+        String h1 = invokeMethod(service, "hashRequest", r1);
+        String h2 = invokeMethod(service, "hashRequest", r2);
+
+        assertThat(h1).isEqualTo(h2);
+    }
+
+    @Test
+    @DisplayName("hashRequest: userId가 다르면 다른 hash를 반환한다")
+    void hashRequest_differentUserId_returnsDifferentHash() {
+        ProductSnapshotReplyResult r1 = sampleResult(1L, "SKU-001", 2);
+        ProductSnapshotReplyResult r2 = sampleResult(2L, "SKU-001", 2);
+
+        String h1 = invokeMethod(service, "hashRequest", r1);
+        String h2 = invokeMethod(service, "hashRequest", r2);
+
+        assertThat(h1).isNotEqualTo(h2);
+    }
+
+    @Test
+    @DisplayName("hashRequest: 반환값은 SHA-256 hex 형식 — 길이 64, 소문자 hex 문자만 포함")
+    void hashRequest_returnsSha256HexFormat() {
+        ProductSnapshotReplyResult result = sampleResult(1L, "SKU-001", 3);
+
+        String hash = invokeMethod(service, "hashRequest", result);
+
+        assertThat(hash).hasSize(64);
+        assertThat(hash).matches("[0-9a-f]+");
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
 
     @Test
     @DisplayName("shippingAddress가 null이면 Orders의 recipientName·recipientAddress는 null로 유지된다")

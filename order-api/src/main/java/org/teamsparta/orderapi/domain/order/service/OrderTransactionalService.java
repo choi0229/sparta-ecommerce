@@ -24,6 +24,9 @@ import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -133,13 +136,22 @@ public class OrderTransactionalService {
         log.info("Order failed due to product snapshot failure. idemKey={}, reason={}", idemKey, reason);
     }
 
-    // TODO : SHA-256으로 교체
     private String hashRequest(ProductSnapshotReplyResult result) {
         String raw = result.userId() + "|" + result.requestItem().stream()
                 .map(i -> i.sku() + ":" + i.quantity())
                 .sorted()
                 .collect(Collectors.joining(","));
-        return Integer.toHexString(raw.hashCode());
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(64);
+            for (byte b : bytes) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 algorithm not available", e);
+        }
     }
 
     private String generateOrderNo() {

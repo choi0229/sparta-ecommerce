@@ -190,6 +190,30 @@ public class OrderSagaServiceTest {
     }
 
     @Test
+    @DisplayName("inventory-confirm 중복 수신 — saga가 이미 COMPLETED이면 주문/saga 상태를 변경하지 않는다")
+    void onInventoryConfirmed_duplicate_idempotent() {
+        // given: saga가 이미 COMPLETED, 주문은 PAID (COMPLETED 직전 상태로 설정)
+        ReflectionTestUtils.setField(sagaState, "reservationId", RESERVATION_ID);
+        ReflectionTestUtils.setField(sagaState, "state", SagaState.COMPLETED);
+        ReflectionTestUtils.setField(order, "status", Status.PAID);
+
+        InventoryConfirmedResult event = new InventoryConfirmedResult(
+                UUID.randomUUID(), "inventory.confirmed", ORDER_ID, SAGA_ID
+        );
+
+        given(orderRepository.findById(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
+
+        // when
+        orderSagaService.onInventoryConfirmed(event);
+
+        // then: 주문 상태가 PAID에서 COMPLETED로 변경되지 않아야 함 (guard에서 return)
+        assertThat(order.getStatus()).isEqualTo(Status.PAID);
+        assertThat(sagaState.getState()).isEqualTo(SagaState.COMPLETED);
+        verify(outboxEventRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("재고 만료 성공 - EXPIRED 전이 + 주문 EXPIRED")
     void onInventoryReservationExpired_success(){
         // given
