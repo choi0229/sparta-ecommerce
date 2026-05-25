@@ -24,6 +24,7 @@ import org.teamsparta.productapi.domain.product.event.ProductInventoryEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantPublisher;
 import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
+import org.teamsparta.productapi.domain.product.repository.ProductImageRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductQueryRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
@@ -31,10 +32,14 @@ import org.teamsparta.productapi.global.enums.Status;
 import org.teamsparta.productapi.global.exception.DomainException;
 import org.teamsparta.productapi.global.exception.DomainExceptionCode;
 
+import org.springframework.dao.DataIntegrityViolationException;
+
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -47,6 +52,7 @@ public class ProductService {
     private final ProductVariantPublisher productVariantPublisher;
     private final ObjectMapper objectMapper;
     private final OutboxEventRepository outboxEventRepository;
+    private final ProductImageRepository productImageRepository;
 
     @Transactional
     public void createProduct(ProductCreateRequest request) {
@@ -102,7 +108,24 @@ public class ProductService {
                 ProductVariantEvent projectionEvent = ProductVariantEvent.from(saved, variant);
                 outboxEvents.add(createOutboxEvent("ProductProjection", v.sku(), "product-variant-event", projectionEvent));
             }
-            productVariantRepository.saveAll(product.getProductVariants());
+            try {
+                productVariantRepository.saveAll(product.getProductVariants());
+                productVariantRepository.flush();
+            } catch (DataIntegrityViolationException e) {
+                // Hibernate ConstraintViolationException에서 constraint 이름 추출 (우선)
+                String constraintHint = null;
+                if (e.getCause() instanceof org.hibernate.exception.ConstraintViolationException hce) {
+                    constraintHint = hce.getConstraintName();
+                }
+                // constraint 이름을 얻지 못한 경우 mostSpecificCause 메시지로 fallback
+                if (constraintHint == null) {
+                    constraintHint = e.getMostSpecificCause().getMessage();
+                }
+                if (constraintHint != null && constraintHint.contains("uk_product_variant_sku")) {
+                    throw new DomainException(DomainExceptionCode.DUPLICATE_SKU);
+                }
+                throw e;
+            }
         }
         if (!outboxEvents.isEmpty()) {
             outboxEventRepository.saveAll(outboxEvents);
@@ -174,7 +197,19 @@ public class ProductService {
             Pageable pageable
     ){
         Page<Product> productPage = productQueryRepository.searchProducts(keyword, brandName, categoryId, status, pageable);
-        return productPage.map(ProductSummaryResponse::from);
+
+        // productImages LAZY 컬렉션 N+1 방지: productId IN (…) 단일 쿼리로 batch 조회
+        List<Long> productIds = productPage.getContent().stream()
+                .map(Product::getId)
+                .toList();
+
+        Map<Long, List<ProductImage>> imagesByProductId = productIds.isEmpty()
+                ? Map.of()
+                : productImageRepository.findByProductIdIn(productIds).stream()
+                        .collect(Collectors.groupingBy(img -> img.getProduct().getId()));
+
+        return productPage.map(p ->
+                ProductSummaryResponse.from(p, imagesByProductId.getOrDefault(p.getId(), List.of())));
     }
 
 }

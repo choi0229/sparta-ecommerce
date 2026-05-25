@@ -2,6 +2,7 @@ package org.teamsparta.productapi.domain.product.controller;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.teamsparta.productapi.domain.product.dto.request.ProductCreateRequest;
@@ -25,7 +26,7 @@ public class ProductAdminController {
     private final S3Service s3Service;
 
     @PostMapping
-    public ApiResponse<Void> createProduct(@RequestBody ProductCreateRequest request){
+    public ApiResponse<Void> createProduct(@Valid @RequestBody ProductCreateRequest request){
         productService.createProduct(request);
         return ApiResponse.ok();
     }
