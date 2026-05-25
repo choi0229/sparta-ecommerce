@@ -11,24 +11,21 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.productapi.domain.product.entity.OutboxEvent;
-import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
 import org.teamsparta.productapi.domain.product.repository.OutboxQueryRepository;
 import org.teamsparta.productapi.domain.product.scheduler.OutboxPublisherJob;
+import org.teamsparta.productapi.domain.product.scheduler.OutboxStatusUpdater;
 import org.teamsparta.productapi.global.enums.OutboxStatus;
 
-import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 public class OutboxPublisherJobTest {
@@ -39,118 +36,118 @@ public class OutboxPublisherJobTest {
     @Mock
     private OutboxQueryRepository outboxQueryRepository;
     @Mock
-    private OutboxEventRepository outboxEventRepository;
+    private OutboxStatusUpdater outboxStatusUpdater;
     @Mock
     private KafkaTemplate<String, String> kafkaTemplate;
 
-    @Test
-    @DisplayName("성공: 보류 중인 이벤트를 Kafka로 전송하고 완료 상태로 변경한다")
-    void publish_success()throws Exception{
-        // given
-        OutboxEvent event = OutboxEvent.pending("Product", "SKU-1", "variant-created-event", "{}");
-        ReflectionTestUtils.setField(event, "id", 1L);
+    private static final String AGGREGATE_ID = "SKU-1";
 
-        given(outboxQueryRepository.findBatchForPublish(any(), eq(50)))
-                .willReturn(List.of(event));
+    private OutboxEvent makeEvent(String eventType) {
+        OutboxEvent event = OutboxEvent.pending("Product", AGGREGATE_ID, eventType, "{}");
+        ReflectionTestUtils.setField(event, "id", 1L);
+        return event;
+    }
+
+    @Test
+    @DisplayName("Kafka 전송 성공 → outboxStatusUpdater.markSent() 호출, markFailed() 미호출")
+    void publish_kafkaSuccess_callsMarkSent() throws Exception {
+        // given
+        OutboxEvent event = makeEvent("product-variant-event");
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event));
 
         CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
-
-        given(kafkaTemplate.send(eq("variant-created-event"), eq("SKU-1"), eq("{}")))
-                .willReturn(future);
-
-        given(future.get(2, TimeUnit.SECONDS)).willReturn(null);
-
-        given(outboxEventRepository.findById(1L)).willReturn(Optional.of(event));
+        given(kafkaTemplate.send(eq("product-variant-event"), eq(AGGREGATE_ID), eq("{}"))).willReturn(future);
+        given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
 
         // when
         outboxPublisherJob.publish();
 
         // then
-        assertThat(event.getStatus()).isEqualTo(OutboxStatus.SENT);
-        verify(outboxEventRepository, times(1)).findById(1L);
-        verify(kafkaTemplate, times(1)).send(eq("variant-created-event"), eq("SKU-1"), eq("{}"));
+        then(outboxStatusUpdater).should(times(1)).markSent(1L);
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
     }
 
     @Test
-    @DisplayName("실패: Kafka 전송 에러 발생 시 재시도 횟수가 증가해야 한다")
-    void publish_fail_retry() throws Exception {
+    @DisplayName("Kafka 전송 실패 → outboxStatusUpdater.markFailed() 호출, markSent() 미호출")
+    void publish_kafkaFail_callsMarkFailed() throws Exception {
         // given
-        OutboxEvent event = OutboxEvent.pending("Product", "SKU-1", "product-variant-event", "{}");
-        ReflectionTestUtils.setField(event, "id", 1L);
-
-        given(outboxQueryRepository.findBatchForPublish(any(), eq(50)))
-                .willReturn(List.of(event));
+        OutboxEvent event = makeEvent("product-variant-event");
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event));
 
         CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
-
-        given(kafkaTemplate.send(eq("product-variant-event"), eq("SKU-1"), eq("{}")))
-                .willReturn(future);
-
+        given(kafkaTemplate.send(eq("product-variant-event"), eq(AGGREGATE_ID), eq("{}"))).willReturn(future);
         given(future.get(2, TimeUnit.SECONDS)).willThrow(new TimeoutException("Kafka timeout"));
 
-        given(outboxEventRepository.findById(1L)).willReturn(Optional.of(event));
-
         // when
         outboxPublisherJob.publish();
 
         // then
-        assertThat(event.getRetryCount()).isEqualTo(1);
-        assertThat(event.getStatus()).isEqualTo(OutboxStatus.PENDING);
+        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(never()).markSent(anyLong());
     }
 
     @Test
-    @DisplayName("실패: kafka 재시도 횟수 최대치 도달시 fail로 변경")
-    void publish_fail_max_retry() throws Exception {
+    @DisplayName("Kafka 전송 성공 후 markSent() 예외 발생 → markFailed() 호출 금지 (중복 발행 방지)")
+    void publish_markSentFailsAfterKafkaSuccess_doesNotCallMarkFailed() throws Exception {
         // given
-        OutboxEvent event = OutboxEvent.pending("Product", "SKU-1", "product-variant-event", "{}");
-        ReflectionTestUtils.setField(event, "id", 1L);
+        OutboxEvent event = makeEvent("product-variant-event");
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event));
 
-        for(int i = 0; i < 4; i++){
-            event.markFailedAndScheduleRetry(5, Duration.ofMinutes(1));
-        }
+        CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
+        given(kafkaTemplate.send(eq("product-variant-event"), eq(AGGREGATE_ID), eq("{}"))).willReturn(future);
+        given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
 
-        given(outboxQueryRepository.findBatchForPublish(any(), eq(50)))
-                .willReturn(List.of(event));
-
-        CompletableFuture<SendResult<String, String>> future =
-                Mockito.mock(CompletableFuture.class);
-
-        given(kafkaTemplate.send(eq("product-variant-event"), eq("SKU-1"), eq("{}")))
-                .willReturn(future);
-
-        given(future.get(2, TimeUnit.SECONDS)).willThrow(new ExecutionException(new RuntimeException("Kafka timeout")));
-
-        given(outboxEventRepository.findById(1L)).willReturn(Optional.of(event));
+        doThrow(new RuntimeException("DB connection lost")).when(outboxStatusUpdater).markSent(1L);
 
         // when
         outboxPublisherJob.publish();
 
-        // then
-        assertThat(event.getRetryCount()).isEqualTo(5);
-        assertThat(event.getStatus()).isEqualTo(OutboxStatus.FAILED);
+        // then: Kafka 성공 후 markSent 실패 → markFailed 호출 없어야 함
+        then(outboxStatusUpdater).should(times(1)).markSent(1L);
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
     }
 
     @Test
-    @DisplayName("실패: 알 수없는 eventType 일경우 실패처리")
-    void publish_fail_unknown_eventType()throws Exception{
+    @DisplayName("미등록 eventType → markFailed() 호출, Kafka 전송 없음")
+    void publish_unknownEventType_callsMarkFailed() {
         // given
-        OutboxEvent event = OutboxEvent.pending("Product", "SKU-1", "unknown-event-type", "{}");
-        ReflectionTestUtils.setField(event, "id", 1L);
-
-        given(outboxQueryRepository.findBatchForPublish(any(), eq(50)))
-                .willReturn(List.of(event));
-
-        given(outboxEventRepository.findById(1L)).willReturn(Optional.of(event));
+        OutboxEvent event = makeEvent("unknown-event-type");
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event));
 
         // when
         outboxPublisherJob.publish();
 
         // then
-        verify(kafkaTemplate, times(0)).send(anyString(), anyString(), anyString());
+        then(kafkaTemplate).should(never()).send(anyString(), anyString(), anyString());
+        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(never()).markSent(anyLong());
+    }
 
-        assertThat(event.getRetryCount()).isEqualTo(1);
-        assertThat(event.getStatus()).isEqualTo(OutboxStatus.PENDING);
+    @Test
+    @DisplayName("InterruptedException → interrupt flag 복원 후 markFailed, 루프 중단")
+    void publish_interruptedException_restoresInterruptFlagAndCallsMarkFailed() throws Exception {
+        // given
+        OutboxEvent event1 = makeEvent("product-variant-event");
+        OutboxEvent event2 = OutboxEvent.pending("Product", "SKU-2", "product-variant-event", "{}");
+        ReflectionTestUtils.setField(event2, "id", 2L);
 
-        verify(outboxEventRepository, times(1)).findById(1L);
+        given(outboxQueryRepository.findBatchForPublish(any(), anyInt())).willReturn(List.of(event1, event2));
+
+        CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
+        given(kafkaTemplate.send(eq("product-variant-event"), eq(AGGREGATE_ID), eq("{}"))).willReturn(future);
+        given(future.get(2, TimeUnit.SECONDS)).willThrow(new InterruptedException("interrupted"));
+
+        // when
+        outboxPublisherJob.publish();
+
+        // then: interrupt flag 복원 확인
+        assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        // event1만 markFailed, event2는 루프 중단으로 처리 안 됨
+        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(never()).markFailed(2L);
+        then(outboxStatusUpdater).should(never()).markSent(anyLong());
+
+        // interrupt flag 정리 (다음 테스트 영향 방지)
+        Thread.interrupted();
     }
 }
