@@ -5,12 +5,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentAddressUpdateRequest;
+import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCancelRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentStatusUpdateRequest;
 import java.util.UUID;
 import org.teamsparta.logisticsapi.domain.logistics.dto.response.ShipmentResponse;
 import org.teamsparta.logisticsapi.domain.logistics.entity.Shipment;
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentRepository;
+import org.teamsparta.logisticsapi.global.enums.ShipmentStatus;
 import org.teamsparta.logisticsapi.global.exception.DomainException;
 import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
 
@@ -51,6 +53,30 @@ public class LogisticsService {
         );
         log.info("Shipment status updated. shipmentId={}, status={}", shipment.getId(), shipment.getStatus());
         return ShipmentResponse.from(shipment);
+    }
+
+    /**
+     * 배송 취소 API 진입점.
+     * - 이미 CANCELED인 경우: history/outbox를 새로 생성하지 않고 현재 상태를 그대로 반환 (멱등)
+     * - READY가 아닌 경우: SHIPMENT_CANCEL_NOT_ALLOWED 예외 (트랜잭션 진입 전 조기 차단)
+     * - READY인 경우: LogisticsTransactionalService에 위임해 단일 트랜잭션으로 처리
+     */
+    public ShipmentResponse cancelShipment(Long shipmentId, ShipmentCancelRequest request) {
+        Shipment shipment = shipmentRepository.findById(shipmentId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.SHIPMENT_NOT_FOUND));
+
+        if (shipment.getStatus() == ShipmentStatus.CANCELED) {
+            log.info("Shipment already CANCELED (idempotent return). shipmentId={}", shipmentId);
+            return ShipmentResponse.from(shipment);
+        }
+
+        if (shipment.getStatus() != ShipmentStatus.READY) {
+            throw new DomainException(DomainExceptionCode.SHIPMENT_CANCEL_NOT_ALLOWED);
+        }
+
+        Shipment canceled = transactionalService.cancelShipment(shipmentId, request.cancelReason());
+        log.info("Shipment canceled. shipmentId={}, orderId={}", canceled.getId(), canceled.getOrderId());
+        return ShipmentResponse.from(canceled);
     }
 
     public ShipmentResponse updateAddress(Long shipmentId, ShipmentAddressUpdateRequest request) {

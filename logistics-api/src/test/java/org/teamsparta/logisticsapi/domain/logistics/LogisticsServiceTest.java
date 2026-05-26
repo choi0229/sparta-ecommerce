@@ -8,8 +8,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCancelRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentStatusUpdateRequest;
+import org.teamsparta.logisticsapi.domain.logistics.dto.response.ShipmentResponse;
 import org.teamsparta.logisticsapi.domain.logistics.entity.Shipment;
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentRepository;
 import org.teamsparta.logisticsapi.domain.logistics.service.LogisticsService;
@@ -22,6 +24,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -90,6 +93,42 @@ class LogisticsServiceTest {
         assertThatNoException().isThrownBy(() ->
                 logisticsService.updateStatus(1L,
                         new ShipmentStatusUpdateRequest(ShipmentStatus.SHIPPED, "출고 완료")));
+    }
+
+    @Test
+    @DisplayName("READY 상태의 배송을 취소할 수 있다")
+    void cancelShipment_ready_success() {
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(shipment));
+        given(transactionalService.cancelShipment(eq(1L), any())).willReturn(shipment);
+
+        assertThatNoException().isThrownBy(() ->
+                logisticsService.cancelShipment(1L, new ShipmentCancelRequest("고객 요청으로 취소")));
+        then(transactionalService).should(times(1)).cancelShipment(eq(1L), eq("고객 요청으로 취소"));
+    }
+
+    @Test
+    @DisplayName("이미 CANCELED 상태이면 예외 없이 현재 상태를 반환하고 transactionalService를 호출하지 않는다")
+    void cancelShipment_alreadyCanceled_idempotentReturn() {
+        shipment.changeStatus(ShipmentStatus.CANCELED);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(shipment));
+
+        ShipmentResponse response = logisticsService.cancelShipment(1L, new ShipmentCancelRequest("고객 요청"));
+
+        assertThat(response.status()).isEqualTo(ShipmentStatus.CANCELED);
+        then(transactionalService).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("READY가 아닌 상태(SHIPPED)에서 취소 시 SHIPMENT_CANCEL_NOT_ALLOWED 예외가 발생하고 transactionalService를 호출하지 않는다")
+    void cancelShipment_notReady_throwsCancelNotAllowed() {
+        shipment.changeStatus(ShipmentStatus.SHIPPED);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(shipment));
+
+        assertThatThrownBy(() ->
+                logisticsService.cancelShipment(1L, new ShipmentCancelRequest("취소 이유")))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining(DomainExceptionCode.SHIPMENT_CANCEL_NOT_ALLOWED.getMessage());
+        then(transactionalService).shouldHaveNoInteractions();
     }
 
     @Test

@@ -132,6 +132,38 @@ public class LogisticsTransactionalService {
         return shipment;
     }
 
+    /**
+     * READY 상태의 shipment를 CANCELED로 전이한다.
+     * 상태 변경 · 이력 저장 · outbox 저장을 단일 트랜잭션에서 처리한다.
+     * READY가 아닌 상태에서 호출되면 SHIPMENT_CANCEL_NOT_ALLOWED 예외를 던진다.
+     * (이미 CANCELED인 경우의 멱등 처리는 호출자인 LogisticsService에서 수행한다.)
+     */
+    @Transactional
+    public Shipment cancelShipment(Long shipmentId, String cancelReason) {
+        Shipment shipment = shipmentRepository.findById(shipmentId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.SHIPMENT_NOT_FOUND));
+
+        if (shipment.getStatus() != ShipmentStatus.READY) {
+            throw new DomainException(DomainExceptionCode.SHIPMENT_CANCEL_NOT_ALLOWED);
+        }
+
+        shipment.changeStatus(ShipmentStatus.CANCELED);
+        shipmentRepository.save(shipment);
+
+        historyRepository.save(ShipmentStatusHistory.record(
+                shipment.getId(), ShipmentStatus.CANCELED, cancelReason, null
+        ));
+
+        outboxEventRepository.save(OutboxEvent.pending(
+                "shipment",
+                String.valueOf(shipment.getId()),
+                "shipment-canceled-event",
+                toPayload(shipment, cancelReason, UUID.randomUUID().toString())
+        ));
+
+        return shipment;
+    }
+
     @Transactional
     public Shipment updateAddress(Long shipmentId, String recipientName, String recipientAddress) {
         Shipment shipment = shipmentRepository.findById(shipmentId)
