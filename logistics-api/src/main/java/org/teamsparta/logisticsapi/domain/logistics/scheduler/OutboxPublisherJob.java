@@ -56,7 +56,8 @@ public class OutboxPublisherJob {
 
     private String resolveTopicName(String eventType) {
         return switch (eventType) {
-            case "shipment-created-event", "shipment-status-changed-event" -> "shipment-event";
+            case "shipment-created-event", "shipment-status-changed-event", "shipment-canceled-event"
+                    -> "shipment-event";
             default -> throw new NonRetryableOutboxException("Unknown eventType: " + eventType);
         };
     }

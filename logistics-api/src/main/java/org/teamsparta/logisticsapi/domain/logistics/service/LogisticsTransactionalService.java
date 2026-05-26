@@ -132,6 +132,50 @@ public class LogisticsTransactionalService {
         return shipment;
     }
 
+    /**
+     * 배송 취소 — READY 상태에서만 CANCELED로 전이한다.
+     *
+     * 멱등성: 이미 CANCELED 상태이면 예외 없이 현재 상태를 반환한다.
+     * 경쟁 조건: 동일 shipment에 대한 동시 취소 요청이 들어올 경우 두 스레드 모두
+     *           READY 상태를 읽은 뒤 각각 CANCELED로 전이를 시도할 수 있다.
+     *           현재 비관적 락을 적용하지 않았으므로, 중복 history·outbox 저장 가능성이 남아 있다.
+     *           outbox Consumer(order-api)가 멱등하므로 최종 상태는 정합하지만,
+     *           향후 트래픽이 증가하면 SELECT ... FOR UPDATE 도입을 검토해야 한다.
+     */
+    @Transactional
+    public Shipment cancelShipment(Long shipmentId, String cancelReason) {
+        Shipment shipment = shipmentRepository.findById(shipmentId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.SHIPMENT_NOT_FOUND));
+
+        if (shipment.getStatus() == ShipmentStatus.CANCELED) {
+            return shipment;
+        }
+
+        if (shipment.getStatus() != ShipmentStatus.READY) {
+            throw new DomainException(DomainExceptionCode.SHIPMENT_CANCEL_NOT_ALLOWED);
+        }
+
+        String eventId = UUID.randomUUID().toString();
+
+        shipment.changeStatus(ShipmentStatus.CANCELED);
+        shipmentRepository.save(shipment);
+
+        historyRepository.save(ShipmentStatusHistory.record(
+                shipment.getId(), ShipmentStatus.CANCELED,
+                cancelReason != null ? cancelReason : "배송 취소",
+                eventId
+        ));
+
+        outboxEventRepository.save(OutboxEvent.pending(
+                "shipment",
+                String.valueOf(shipment.getId()),
+                "shipment-canceled-event",
+                toPayload(shipment, cancelReason, eventId)
+        ));
+
+        return shipment;
+    }
+
     @Transactional
     public Shipment updateAddress(Long shipmentId, String recipientName, String recipientAddress) {
         Shipment shipment = shipmentRepository.findById(shipmentId)

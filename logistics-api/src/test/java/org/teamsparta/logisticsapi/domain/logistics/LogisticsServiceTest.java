@@ -8,6 +8,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCancelRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentStatusUpdateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.entity.Shipment;
@@ -20,8 +21,12 @@ import org.teamsparta.logisticsapi.global.exception.DomainExceptionCode;
 
 import java.util.Optional;
 
+import org.teamsparta.logisticsapi.domain.logistics.service.LogisticsTransactionalService;
+
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -90,6 +95,24 @@ class LogisticsServiceTest {
         assertThatNoException().isThrownBy(() ->
                 logisticsService.updateStatus(1L,
                         new ShipmentStatusUpdateRequest(ShipmentStatus.SHIPPED, "출고 완료")));
+    }
+
+    @Test
+    @DisplayName("READY 상태 배송을 취소하면 ShipmentResponse가 반환된다")
+    void cancelShipment_ready_returnsResponse() {
+        given(transactionalService.cancelShipment(eq(1L), eq("고객 요청"))).willReturn(shipment);
+
+        assertThatNoException().isThrownBy(() ->
+                logisticsService.cancelShipment(1L, new ShipmentCancelRequest("고객 요청")));
+    }
+
+    @Test
+    @DisplayName("이미 CANCELED 상태이면 transactionalService가 현재 상태를 반환하고 예외가 발생하지 않는다")
+    void cancelShipment_alreadyCanceled_delegatesAndReturns() {
+        given(transactionalService.cancelShipment(eq(1L), isNull())).willReturn(shipment);
+
+        assertThatNoException().isThrownBy(() ->
+                logisticsService.cancelShipment(1L, new ShipmentCancelRequest(null)));
     }
 
     @Test

@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentAddressUpdateRequest;
+import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCancelRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentStatusUpdateRequest;
 import java.util.UUID;
@@ -50,6 +51,13 @@ public class LogisticsService {
                 shipmentId, request.status(), request.description(), UUID.randomUUID().toString()
         );
         log.info("Shipment status updated. shipmentId={}, status={}", shipment.getId(), shipment.getStatus());
+        return ShipmentResponse.from(shipment);
+    }
+
+    public ShipmentResponse cancelShipment(Long shipmentId, ShipmentCancelRequest request) {
+        String cancelReason = request != null ? request.cancelReason() : null;
+        Shipment shipment = transactionalService.cancelShipment(shipmentId, cancelReason);
+        log.info("Shipment cancelled. shipmentId={}", shipmentId);
         return ShipmentResponse.from(shipment);
     }
 
