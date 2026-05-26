@@ -36,9 +36,8 @@ out/
 /.nb-gradle/
 ### VS Code ###
 .vscode/
-CLAUDE.md
 **/src/main/resources/static/**
 .env
 
 ### QueryDSL ###
-/src/main/generated/
+/src/main/generated/.DS_Store

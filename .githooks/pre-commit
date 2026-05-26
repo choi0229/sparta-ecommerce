@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "── Claude guardrails (pre-commit) ──────────────────────────"
+bash "${REPO_ROOT}/scripts/claude-guardrails.sh"
+echo "────────────────────────────────────────────────────────────"

@@ -55,7 +55,7 @@ public class OrderService {
             throw new DomainException(DomainExceptionCode.NOT_FOUND_ITEMS);
         }
 
-        ProductSnapShotRequestEvent event = ProductSnapShotRequestEvent.from(UUID.randomUUID(), request.items(), idemKey, request.userId());
+        ProductSnapShotRequestEvent event = ProductSnapShotRequestEvent.from(UUID.randomUUID(), request.items(), idemKey, request.userId(), request.shippingAddress());
         String payload;
 
         try{
@@ -66,17 +66,26 @@ public class OrderService {
         }
     }
 
+    @Transactional(readOnly = true)
     public OrderStatusResponse getOrderStatus(String idemKey) {
         Optional<IdempotencyRecord> recordOpt = idempotencyRepository.findById(idemKey);
-        if(recordOpt.isEmpty()){
-            return new OrderStatusResponse(idemKey, "PENDING", null);
+        if (recordOpt.isEmpty()) {
+            return new OrderStatusResponse(idemKey, "PENDING", null, null, null);
         }
         IdempotencyRecord record = recordOpt.get();
-        return new OrderStatusResponse(
-                record.getIdemKey(),
-                record.getStatus().name(),
-                record.getOrderId()
-        );
+        String status = record.getStatus().name();
+        String shipmentStatus = null;
+        if (record.getOrderId() != null) {
+            Optional<Orders> orderOpt = orderRepository.findById(record.getOrderId());
+            if (orderOpt.isPresent()) {
+                Orders order = orderOpt.get();
+                status = order.getStatus().name();
+                shipmentStatus = order.getShipmentStatus() != null ? order.getShipmentStatus().name() : null;
+            } else {
+                log.warn("orderId={} found in IdempotencyRecord but Orders not found. idemKey={}", record.getOrderId(), idemKey);
+            }
+        }
+        return new OrderStatusResponse(record.getIdemKey(), status, record.getOrderId(), shipmentStatus, record.getFailureReason());
     }
 
 //    @Transactional

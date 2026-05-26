@@ -1,0 +1,107 @@
+package org.teamsparta.orderapi.service;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.teamsparta.orderapi.domain.order.entity.IdempotencyRecord;
+import org.teamsparta.orderapi.domain.order.entity.Orders;
+import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
+import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult;
+import org.teamsparta.orderapi.domain.order.repository.*;
+import org.teamsparta.orderapi.domain.order.service.IdempotencyService;
+import org.teamsparta.orderapi.domain.order.service.OrderTransactionalService;
+import org.teamsparta.orderapi.domain.order.service.ProductSnapshotPendingStore;
+import org.teamsparta.orderapi.domain.productProjection.repository.ProductProjectionRepository;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.BDDMockito.given;
+
+@ExtendWith(MockitoExtension.class)
+class OrderTransactionalServiceTest {
+
+    @InjectMocks OrderTransactionalService service;
+
+    @Mock OrderRepository orderRepository;
+    @Mock OrderItemRepository orderItemRepository;
+    @Mock OrderSagaStateRepository sagaStateRepository;
+    @Mock OrderEventPublisher orderEventPublisher;
+    @Mock ProductProjectionRepository productProjectionRepository;
+    @Mock ObjectMapper objectMapper;
+    @Mock IdempotencyService idempotencyService;
+    @Mock OutboxQueryRepository outboxQueryRepository;
+    @Mock OutboxEventRepository outboxEventRepository;
+    @Mock ProductSnapshotPendingStore productSnapshotPendingStore;
+    @Mock KafkaTemplate<String, String> kafkaTemplate;
+
+    @Test
+    @DisplayName("shippingAddress가 있으면 저장된 Orders에 recipientName·recipientAddress가 설정된다")
+    void createOrderInternal_withShippingAddress_setsRecipientFields() throws Exception {
+        ProductSnapshotReplyResult result = new ProductSnapshotReplyResult(
+                UUID.randomUUID(), null, true, null,
+                List.of(new ProductSnapshotReplyResult.ProductSnapshotItem(
+                        "SKU-001", 1L, "상품A", 10L, BigDecimal.valueOf(1000), Map.of()
+                )),
+                List.of(new ProductSnapshotReplyResult.Item("SKU-001", 1)),
+                "idem-addr-001",
+                1L,
+                new ProductSnapshotReplyResult.ShippingAddress("홍길동", "서울시 강남구 테헤란로 1")
+        );
+
+        IdempotencyRecord idemRecord = IdempotencyRecord.start("idem-addr-001", "some-hash");
+        given(idempotencyService.startOrThrow(eq("idem-addr-001"), any())).willReturn(idemRecord);
+
+        Orders mockSaved = Orders.createNew("O001", 1L);
+        ReflectionTestUtils.setField(mockSaved, "id", 99L);
+        ArgumentCaptor<Orders> orderCaptor = ArgumentCaptor.forClass(Orders.class);
+        given(orderRepository.save(orderCaptor.capture())).willReturn(mockSaved);
+
+        service.createOrderInternal(result, "idem-addr-001");
+
+        Orders captured = orderCaptor.getValue();
+        assertThat(captured.getRecipientName()).isEqualTo("홍길동");
+        assertThat(captured.getRecipientAddress()).isEqualTo("서울시 강남구 테헤란로 1");
+    }
+
+    @Test
+    @DisplayName("shippingAddress가 null이면 Orders의 recipientName·recipientAddress는 null로 유지된다")
+    void createOrderInternal_withNullShippingAddress_recipientFieldsRemainNull() throws Exception {
+        ProductSnapshotReplyResult result = new ProductSnapshotReplyResult(
+                UUID.randomUUID(), null, true, null,
+                List.of(new ProductSnapshotReplyResult.ProductSnapshotItem(
+                        "SKU-001", 1L, "상품A", 10L, BigDecimal.valueOf(1000), Map.of()
+                )),
+                List.of(new ProductSnapshotReplyResult.Item("SKU-001", 1)),
+                "idem-null-001",
+                1L,
+                null
+        );
+
+        IdempotencyRecord idemRecord = IdempotencyRecord.start("idem-null-001", "some-hash");
+        given(idempotencyService.startOrThrow(eq("idem-null-001"), any())).willReturn(idemRecord);
+
+        Orders mockSaved = Orders.createNew("O002", 1L);
+        ReflectionTestUtils.setField(mockSaved, "id", 100L);
+        ArgumentCaptor<Orders> orderCaptor = ArgumentCaptor.forClass(Orders.class);
+        given(orderRepository.save(orderCaptor.capture())).willReturn(mockSaved);
+
+        service.createOrderInternal(result, "idem-null-001");
+
+        Orders captured = orderCaptor.getValue();
+        assertThat(captured.getRecipientName()).isNull();
+        assertThat(captured.getRecipientAddress()).isNull();
+    }
+}

@@ -85,24 +85,19 @@ public class InventoryServiceTest {
     }
 
     @Test
-    @DisplayName("재고 생성 저장 안함 - 이미 SKU가 있으면 재고 save는 안 함")
-    void createInventory_existingSku_noStockSave() throws Exception {
+    @DisplayName("재고 생성 저장 안함 - 이미 SKU가 있으면 stock/outbox 저장 없이 return")
+    void createInventory_existingSku_noStockSave() {
         // given
         VariantCreatResult req = new VariantCreatResult(UUID.randomUUID(), "", SKU, 10);
         InventoryStock existing = InventoryStock.create(SKU, 99);
         given(inventoryStockRepository.findById(SKU)).willReturn(Optional.of(existing));
-        given(objectMapper.writeValueAsString(any(InventoryCreatedEvent.class))).willReturn("{\"ok\":true}");
 
         // when
         inventoryService.createInventory(req);
 
-        // then
+        // then: SKU 중복이면 stock save 없이 return → outbox도 발행하지 않는다
         then(inventoryStockRepository).should(never()).save(any(InventoryStock.class));
-        then(outboxEventRepository).should(times(1)).save(any(OutboxEvent.class));
-
-        // ✅ 실무적으로는 여기서 outbox도 안 발행하는게 보통이라,
-        //    원하면 createInventory()에서 기존 SKU면 return 하도록 바꾸고
-        //    이 테스트도 outbox save never로 바꾸면 됨.
+        then(outboxEventRepository).should(never()).save(any(OutboxEvent.class));
     }
 
     @Test

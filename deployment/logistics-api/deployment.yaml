@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logistics-api
+  namespace: ecommerce
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: logistics-api
+  template:
+    metadata:
+      labels:
+        app: logistics-api
+    spec:
+      containers:
+        - name: logistics-api
+          image: sparta-msa-final-project-logistics-api:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8084
+          envFrom:
+            - configMapRef:
+                name: ecommerce-config
+            - secretRef:
+                name: db-secret
+          env:
+            - name: SERVER_PORT
+              value: "8084"
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://logistics-db:5432/logisticsdb"
+              #value: "jdbc:postgresql://localhost:5436/logisticsdb"
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DB_USERNAME
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DB_PASSWORD
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka.ecommerce.svc.cluster.local:9092"
