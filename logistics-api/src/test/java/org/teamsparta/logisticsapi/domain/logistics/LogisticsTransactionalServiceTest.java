@@ -190,6 +190,51 @@ class LogisticsTransactionalServiceTest {
     }
 
     @Test
+    @DisplayName("READY 상태에서 취소 요청 시 CANCELED로 변경되고 history와 outbox가 각각 1건 저장된다")
+    void cancelShipment_readyStatus_changesCanceledAndSavesHistoryAndOutbox() throws Exception {
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+        given(shipmentRepository.save(any(Shipment.class))).willAnswer(invocation -> invocation.getArgument(0));
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        Shipment result = service.cancelShipment(1L, "고객 요청으로 취소", "evt-cancel-001");
+
+        assertThat(result.getStatus()).isEqualTo(ShipmentStatus.CANCELED);
+        then(historyRepository).should(times(1)).save(any());
+        then(outboxEventRepository).should(times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("이미 CANCELED 상태이면 idempotent 반환하고 history와 outbox를 저장하지 않는다")
+    void cancelShipment_alreadyCanceled_returnsCurrentStateWithoutSideEffects() {
+        existingShipment.changeStatus(ShipmentStatus.CANCELED);
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+
+        Shipment result = service.cancelShipment(1L, "중복 취소 요청", "evt-cancel-002");
+
+        assertThat(result.getStatus()).isEqualTo(ShipmentStatus.CANCELED);
+        then(shipmentRepository).should(never()).save(any());
+        then(historyRepository).shouldHaveNoInteractions();
+        then(outboxEventRepository).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("SHIPPED 상태에서 취소 요청 시 SHIPMENT_CANCEL_NOT_ALLOWED 예외가 발생한다")
+    void cancelShipment_shippedStatus_throwsCancelNotAllowed() {
+        existingShipment.changeStatus(ShipmentStatus.SHIPPED);
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+
+        assertThatThrownBy(() -> service.cancelShipment(1L, "취소 시도", "evt-cancel-003"))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining(DomainExceptionCode.SHIPMENT_CANCEL_NOT_ALLOWED.getMessage());
+
+        then(historyRepository).shouldHaveNoInteractions();
+        then(outboxEventRepository).shouldHaveNoInteractions();
+    }
+
+    @Test
     @DisplayName("PENDING 레코드가 있고 같은 orderId 배송이 이미 존재하면 새 배송을 생성하지 않는다")
     void pendingRecord_duplicateOrderId_doesNotCreateNewShipment() {
         IdempotencyRecord pending = IdempotencyRecord.start(IDEM_KEY);

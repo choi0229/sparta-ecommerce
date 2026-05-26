@@ -133,6 +133,33 @@ public class LogisticsTransactionalService {
     }
 
     @Transactional
+    public Shipment cancelShipment(Long shipmentId, String cancelReason, String eventId) {
+        Shipment shipment = shipmentRepository.findById(shipmentId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.SHIPMENT_NOT_FOUND));
+
+        if (shipment.getStatus() == ShipmentStatus.CANCELED) {
+            return shipment;
+        }
+        if (shipment.getStatus() != ShipmentStatus.READY) {
+            throw new DomainException(DomainExceptionCode.SHIPMENT_CANCEL_NOT_ALLOWED);
+        }
+
+        shipment.changeStatus(ShipmentStatus.CANCELED);
+        shipmentRepository.save(shipment);
+
+        historyRepository.save(ShipmentStatusHistory.record(
+                shipment.getId(), ShipmentStatus.CANCELED, cancelReason, eventId));
+
+        outboxEventRepository.save(OutboxEvent.pending(
+                "shipment",
+                String.valueOf(shipment.getId()),
+                "shipment-canceled-event",
+                toPayload(shipment, cancelReason, eventId)));
+
+        return shipment;
+    }
+
+    @Transactional
     public Shipment updateAddress(Long shipmentId, String recipientName, String recipientAddress) {
         Shipment shipment = shipmentRepository.findById(shipmentId)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.SHIPMENT_NOT_FOUND));
