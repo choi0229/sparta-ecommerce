@@ -12,8 +12,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.logisticsapi.domain.logistics.dto.request.ShipmentCreateRequest;
 import org.teamsparta.logisticsapi.domain.logistics.entity.IdempotencyRecord;
+import org.teamsparta.logisticsapi.domain.logistics.entity.OutboxEvent;
 import org.teamsparta.logisticsapi.domain.logistics.entity.Shipment;
 import org.teamsparta.logisticsapi.domain.logistics.entity.ShipmentAddressHistory;
+import org.teamsparta.logisticsapi.domain.logistics.entity.ShipmentStatusHistory;
 import org.teamsparta.logisticsapi.domain.logistics.repository.IdempotencyRecordRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.OutboxEventRepository;
 import org.teamsparta.logisticsapi.domain.logistics.repository.ShipmentAddressHistoryRepository;
@@ -187,6 +189,37 @@ class LogisticsTransactionalServiceTest {
         assertThatThrownBy(() -> service.updateAddress(1L, "김철수", "부산시"))
                 .isInstanceOf(DomainException.class)
                 .hasMessageContaining(DomainExceptionCode.ADDRESS_UPDATE_NOT_ALLOWED.getMessage());
+    }
+
+    @Test
+    @DisplayName("READY 상태의 배송을 취소하면 CANCELED 상태로 변경되고 history와 outbox가 1건씩 저장된다")
+    void cancelShipment_ready_savesHistoryAndOutbox() throws Exception {
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+        given(shipmentRepository.save(any(Shipment.class))).willAnswer(invocation -> invocation.getArgument(0));
+        given(objectMapper.writeValueAsString(any())).willReturn("{}");
+
+        Shipment result = service.cancelShipment(1L, "고객 요청으로 취소");
+
+        assertThat(result.getStatus()).isEqualTo(ShipmentStatus.CANCELED);
+        then(historyRepository).should(times(1)).save(any(ShipmentStatusHistory.class));
+        then(outboxEventRepository).should(times(1)).save(any(OutboxEvent.class));
+        then(idempotencyRecordRepository).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("READY가 아닌 상태(SHIPPED)의 배송을 cancelShipment 하면 SHIPMENT_CANCEL_NOT_ALLOWED 예외가 발생한다")
+    void cancelShipment_notReady_throwsCancelNotAllowed() {
+        existingShipment.changeStatus(ShipmentStatus.SHIPPED);
+        ReflectionTestUtils.setField(existingShipment, "id", 1L);
+        given(shipmentRepository.findById(1L)).willReturn(Optional.of(existingShipment));
+
+        assertThatThrownBy(() -> service.cancelShipment(1L, "취소 이유"))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining(DomainExceptionCode.SHIPMENT_CANCEL_NOT_ALLOWED.getMessage());
+
+        then(historyRepository).shouldHaveNoInteractions();
+        then(outboxEventRepository).shouldHaveNoInteractions();
     }
 
     @Test

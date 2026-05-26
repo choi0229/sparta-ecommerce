@@ -82,6 +82,25 @@ class OutboxPublisherJobTest {
     }
 
     @Test
+    @DisplayName("shipment-canceled-event는 shipment-event 토픽으로 발행된다")
+    @SuppressWarnings("unchecked")
+    void shipmentCanceledEvent_resolvesToShipmentEventTopic() {
+        OutboxEvent event = OutboxEvent.pending("shipment", "5", "shipment-canceled-event", "{}");
+        ReflectionTestUtils.setField(event, "id", 5L);
+        given(outboxEventTransactionalService.claimBatch(any(), anyInt())).willReturn(List.of(event));
+        CompletableFuture<SendResult<String, String>> successFuture =
+                CompletableFuture.completedFuture(mock(SendResult.class));
+        given(kafkaTemplate.send(anyString(), anyString(), anyString())).willReturn(successFuture);
+
+        job.publish();
+
+        then(kafkaTemplate).should(times(1)).send("shipment-event", "5", "{}");
+        then(outboxEventTransactionalService).should(times(1)).markSent(5L);
+        then(outboxEventTransactionalService).should(never()).markFailed(anyLong());
+        then(outboxEventTransactionalService).should(never()).markPermanentFailed(anyLong());
+    }
+
+    @Test
     @DisplayName("미등록 eventType이면 kafkaTemplate.send는 호출되지 않고 markPermanentFailed(id)가 호출된다")
     void unknownEventType_callsMarkPermanentFailedWithoutKafkaSend() {
         OutboxEvent event = OutboxEvent.pending("shipment", "1", "unknown-event", "{}");
