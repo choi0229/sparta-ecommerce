@@ -67,6 +67,7 @@ services:
 
   order-db:
     image: postgres:16
+    command: postgres -c shared_preload_libraries=pg_stat_statements
     environment:
       POSTGRES_DB: orderdb
       POSTGRES_USER: root
@@ -135,14 +136,14 @@ services:
     ports:
       - "9090:9090"
     volumes:
-#      - ./datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      #      - ./datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
     networks:
       - ecommerce-network
     hostname: prometheus
@@ -194,7 +195,7 @@ services:
     image: docker.elastic.co/logstash/logstash:8.5.0
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
-#      - ./logs:/usr/share/logstash/logs:ro
+    #      - ./logs:/usr/share/logstash/logs:ro
     ports:
       - "5000:5000"
     depends_on:
@@ -216,7 +217,11 @@ services:
     networks:
       - ecommerce-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/ready || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -f http://localhost:9000/minio/health/ready || exit 1",
+        ]
       #test: ["CMD-SHELL", "wget -qO- http://localhost:9000/minio/health/ready >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
@@ -236,7 +241,6 @@ services:
       mc mb -p local/product-images || true &&
       mc anonymous set download local/product-images || true &&
       echo 'MinIO bucket ready.';"
-
 
 networks:
   ecommerce-network:
