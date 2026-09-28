@@ -48,7 +48,6 @@ public class OrderService {
     private final ProductSnapshotPendingStore productSnapshotPendingStore;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final OrderTransactionalService orderTransactionalService;
-    private final IdempotencyRepository idempotencyRepository;
 
     public void createOrder(CreateOrderRequest request, String idemKey){
         if(request.items() == null || request.items().isEmpty()){
@@ -66,18 +65,6 @@ public class OrderService {
         }
     }
 
-    public OrderStatusResponse getOrderStatus(String idemKey) {
-        Optional<IdempotencyRecord> recordOpt = idempotencyRepository.findById(idemKey);
-        if(recordOpt.isEmpty()){
-            return new OrderStatusResponse(idemKey, "PENDING", null);
-        }
-        IdempotencyRecord record = recordOpt.get();
-        return new OrderStatusResponse(
-                record.getIdemKey(),
-                record.getStatus().name(),
-                record.getOrderId()
-        );
-    }
 
 //    @Transactional
 //    public CreateOrderResponse createOrder(CreateOrderRequest request, String idemKey) {

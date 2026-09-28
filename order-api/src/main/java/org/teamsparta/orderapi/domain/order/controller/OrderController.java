@@ -7,6 +7,7 @@ import org.teamsparta.orderapi.domain.order.dto.response.AcceptedOrderResponse;
 import org.teamsparta.orderapi.domain.order.dto.response.CreateOrderResponse;
 import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
 import org.teamsparta.orderapi.domain.order.service.OrderService;
+import org.teamsparta.orderapi.domain.order.service.OrderStatusQueryService;
 import org.teamsparta.orderapi.global.response.ApiResponse;
 
 import java.util.UUID;
@@ -17,6 +18,7 @@ import java.util.UUID;
 public class OrderController {
 
     private final OrderService orderService;
+    private final OrderStatusQueryService orderStatusQueryService;
 
     @PostMapping
     public ApiResponse<AcceptedOrderResponse> createOrder(@RequestBody CreateOrderRequest request){
@@ -28,6 +30,6 @@ public class OrderController {
 
     @GetMapping("/status/{idemKey}")
     public ApiResponse<OrderStatusResponse> getOrderStatus(@PathVariable String idemKey) {
-        return ApiResponse.ok(orderService.getOrderStatus(idemKey));
+        return ApiResponse.ok(orderStatusQueryService.getOrderStatus(idemKey));
     }
 }
