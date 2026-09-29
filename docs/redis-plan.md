@@ -13,6 +13,10 @@ k6와 Prometheus로 DB QPS, p95/p99, CPU, fallback 동작을 정량 검증한다
 - 202 응답 직후에는 idempotency 레코드가 아직 없을 수 있다. 이때 서비스는 row 없이 PENDING을 반환한다.
 - application.yml에 show-sql: true가 켜져 있다.
 
+## 현재 구조 (Before)
+Client polling → OrderController → OrderService.getOrderStatus
+            → IdempotencyRepository.findById(idemKey) → PostgreSQL (매 요청)
+
 ## 설계 결정
 - Payment 엔티티는 만들지 않는다. 폴링 응답에 Orders.status를 추가해 상태 전이를 노출한다.
 - 캐시 키는 order:status:{idemKey}, 값은 OrderStatusResponse JSON. TTL은 5분 단일값이며 설정으로 분리한다.

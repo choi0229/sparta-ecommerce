@@ -33,11 +33,21 @@ case "${1:-}" in
       -e SKU_CSV="${SKU_CSV}" -e ITEMS_PER_ORDER="${ITEMS_PER_ORDER}" \
       "${SCRIPTS}/distributed-sku.js"
     ;;
+  poll)
+    RATE="${RATE:-100}"
+    DURATION="${DURATION:-5m}"
+    SEED_COUNT="${SEED_COUNT:-10000}"
+    echo "[RUN] order-status-poll (RATE=${RATE}/s, DURATION=${DURATION}, SEED_COUNT=${SEED_COUNT})"
+    k6 run -e BASE_URL="${BASE_URL}" -e RATE="${RATE}" \
+      -e DURATION="${DURATION}" -e SEED_COUNT="${SEED_COUNT}" \
+      "${SCRIPTS}/order-status-poll.js"
+    ;;
   *)
     echo "Usage:"
     echo "  ./run.sh create      # 기본 주문 부하"
     echo "  ./run.sh hot         # 핫 SKU 경합"
     echo "  ./run.sh dist        # 분산 SKU (CSV)"
+    echo "  ./run.sh poll        # 주문 상태 폴링 (RATE, DURATION, SEED_COUNT)"
     echo
     echo "Env examples:"
     echo "  BASE_URL=http://localhost:8080 ./run.sh create"
