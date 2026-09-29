@@ -41,7 +41,7 @@ Client polling → OrderController → OrderService.getOrderStatus
 - [ ] pg_stat_statements 활성화
 - [ ] orders + idempotency_request seed 데이터 (약 1만 건)
 - [ ] k6 order-status-poll.js (constant-arrival-rate 100 RPS, 5분, seed된 idemKey 풀에서 무작위 선택)
-- [ ] avg/p95/p99, error rate, DB QPS, DB CPU, App CPU 기록
+- [x] avg/p95/p99, error rate, DB QPS, DB CPU, App CPU 기록
 - commit: perf: add DB-only polling benchmark
 
 ### Phase 3. Redis 환경
@@ -91,4 +91,53 @@ Client polling → OrderController → OrderService.getOrderStatus
 - 결제 상태 모델이 필요해지면 Payment 도메인 분리
 
 ## 측정 결과 기록
-(실제 측정 후 채움)
+
+### 측정 환경
+- order-api는 perf 프로필(show-sql: false)로 로컬 실행
+- order-api는 bootRun 기본 옵션 -XX:TieredStopAtLevel=1(C1 JIT만 사용)으로 실행
+- order-db(postgres:16), zookeeper, kafka는 docker compose로 실행, pg_stat_statements 활성화
+- seed 데이터: idempotency_request idem_key seed-000001 ~ seed-010000 (1만 건)과 대응 orders
+- CPU 수집 (5초 간격)
+  - DB: `docker stats --no-stream --format '{{.CPUPerc}}' <order-db 컨테이너>` (코어 1개 = 100%)
+  - App: `/actuator/prometheus`의 `process_cpu_usage` × 100 (전체 코어 합 = 100%, system_cpu_count = 10)
+  - 두 값은 기준이 달라 서로 직접 비교하지 않는다. 같은 지표끼리 RATE·조건 간 비교에만 쓴다.
+
+### 측정 절차
+```bash
+bash loadtest/k6/measure-poll.sh <label> <run번호> [RATE]   # RATE 기본값 100
+bash loadtest/k6/measure-poll.sh <label> idle               # k6 없이 5분간 CPU만 기록
+# 예: bash loadtest/k6/measure-poll.sh baseline 1 300
+```
+- 결과 경로: loadtest/results/<label>/rate-<RATE>/run-<N>/{k6.log, db.log, cpu.log}, idle은 loadtest/results/<label>/idle/cpu.log
+- 순서: 같은 RATE로 워밍업 1분(저장 안 함) → pg_stat_statements_reset → CPU 기록 시작 → 본 측정 5분 → CPU 기록 중지 → polling-query-stats.sql
+- order-db 컨테이너는 `docker compose ps -q order-db`로 찾는다.
+- 멈춤 조건: dropped_iterations 발생, http_req_failed > 0, checks < 100%
+
+### DB-only 베이스라인 (2026-09-29)
+idle 1회, RATE별 3회. 모든 회차에서 dropped_iterations 0, http_req_failed 0, checks 100%.
+표의 값은 RATE별 3회 중앙값.
+
+| RATE | avg (ms) | p95 (ms) | p99 (ms) | 실제 RPS | error rate | DB QPS | DB CPU 평균 | DB CPU (idle 차감) | App CPU 평균 |
+|---|---|---|---|---|---|---|---|---|---|
+| idle | - | - | - | - | - | - | 0.52% | - | 0.16% |
+| 100 | 1.83 | 2.69 | 3.29 | 100.00 | 0.00% | 200.01 | 3.42% | 2.90% | 0.64% |
+| 300 | 2.25 | 2.75 | 3.26 | 300.00 | 0.00% | 600.01 | 9.93% | 9.41% | 2.88% |
+| 500 | 1.87 | 2.57 | 2.94 | 500.02 | 0.00% | 1000.01 | 13.46% | 12.94% | 3.97% |
+
+- DB QPS = db.log의 idempotency_request 조회 + orders 조회 calls 합 ÷ 300 (요청 1건당 쿼리 2회)
+- CPU 평균 = cpu.log에서 본 측정(idle은 기록) 시작~종료 시각 사이 샘플(회차당 48개)의 평균
+- DB CPU (idle 차감) = 해당 RATE의 DB CPU 중앙값 − idle DB CPU(0.52%)
+
+### 해석 시 주의
+- 저부하(100 RPS)에서 응답시간이 고부하보다 느리거나 비슷하게 나온다. 추정 원인은 CPU 전력 관리(저부하 시 클럭·코어 절전)이며 검증하지 않았다.
+- 따라서 응답시간은 같은 RATE끼리만 비교한다 (예: DB-only 300 RPS vs Redis 300 RPS).
+- 100 RPS run-3은 avg 2.55ms / p95 3.30ms / p99 4.01ms로 run-1·2(avg 1.81~1.83ms)보다 높았다. 중앙값에는 run-2 값이 쓰였다.
+- 같은 100 RPS에서 baseline-v1(avg 2.98ms)과 v2(avg 1.83ms)가 약 1ms 차이 났다. 측정 세션 간 편차가 약 1ms이므로 응답시간 차이가 이보다 작으면 개선으로 주장하지 않는다. DB QPS는 세션과 무관하게 일정하므로 주 비교 지표로 쓴다.
+- Redis 측정은 앱 재시작 후 진행되므로, 측정 전 500 RPS로 3분간 사전 워밍업한다.
+
+로그 파일:
+- loadtest/results/baseline/idle/cpu.log
+- loadtest/results/baseline/rate-{100,300,500}/run-{1,2,3}/{k6.log, db.log, cpu.log}
+
+### baseline-v1 (보관)
+loadtest/results/baseline-v1/은 측정 방법 변경(App CPU를 ps → actuator process_cpu_usage, idle 측정 추가) 전 결과다. 위 표와 비교하지 않는다.
