@@ -78,6 +78,10 @@ management:
     redis:
       enabled: false
 
+order:
+  status-cache:
+    ttl: ${ORDER_STATUS_CACHE_TTL:5m}
+
 logging:
   level:
     root: INFO
