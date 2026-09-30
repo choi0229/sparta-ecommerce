@@ -43,6 +43,7 @@ export default function () {
 
   check(res, {
     "status is 200": (r) => r.status === 200,
-    "orderStatus exists": (r) => r.json("data.orderStatus") !== null,
+    "orderStatus exists": (r) =>
+      r.status === 200 && r.json("data.orderStatus") != null,
   });
 }
