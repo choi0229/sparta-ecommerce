@@ -13,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.teamsparta.orderapi.domain.order.cache.CacheResult;
 import org.teamsparta.orderapi.domain.order.cache.OrderStatusCacheRepository;
 import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
 
@@ -54,9 +55,9 @@ class OrderStatusCacheRepositoryTest {
         given(redisTemplate.opsForValue()).willReturn(valueOperations);
         given(valueOperations.get(REDIS_KEY)).willReturn(null);
 
-        Optional<OrderStatusResponse> result = cacheRepository.find(IDEM_KEY);
+        CacheResult<OrderStatusResponse> result = cacheRepository.find(IDEM_KEY);
 
-        assertThat(result).isEmpty();
+        assertThat(result.isMiss()).isTrue();
     }
 
     @Test
@@ -68,9 +69,10 @@ class OrderStatusCacheRepositoryTest {
         given(redisTemplate.opsForValue()).willReturn(valueOperations);
         given(valueOperations.get(REDIS_KEY)).willReturn(json);
 
-        Optional<OrderStatusResponse> result = cacheRepository.find(IDEM_KEY);
+        CacheResult<OrderStatusResponse> result = cacheRepository.find(IDEM_KEY);
 
-        assertThat(result).contains(
+        assertThat(result.isHit()).isTrue();
+        assertThat(result.value()).isEqualTo(
                 new OrderStatusResponse("seed-000001", "COMPLETED", 1L, "PAID")
         );
     }
@@ -81,9 +83,9 @@ class OrderStatusCacheRepositoryTest {
         given(redisTemplate.opsForValue()).willReturn(valueOperations);
         given(valueOperations.get(REDIS_KEY)).willReturn("{not-json");
 
-        Optional<OrderStatusResponse> result = cacheRepository.find(IDEM_KEY);
+        CacheResult<OrderStatusResponse> result = cacheRepository.find(IDEM_KEY);
 
-        assertThat(result).isEmpty();
+        assertThat(result.isMiss()).isTrue();
     }
 
     @Test

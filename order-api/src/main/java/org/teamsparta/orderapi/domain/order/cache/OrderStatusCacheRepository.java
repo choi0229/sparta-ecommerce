@@ -11,7 +11,6 @@ import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
 import org.teamsparta.orderapi.global.enums.Status;
 
 import java.time.Duration;
-import java.util.Optional;
 import java.util.Set;
 
 @Slf4j
@@ -42,16 +41,23 @@ public class OrderStatusCacheRepository {
         this.finalTtl = finalTtl;
     }
 
-    public Optional<OrderStatusResponse> find(String idemKey){
-        String json = redisTemplate.opsForValue().get(key(idemKey));
-        if(json == null){
-            return Optional.empty();
+    public CacheResult<OrderStatusResponse> find(String idemKey) {
+        String json;
+        try {
+            json = redisTemplate.opsForValue().get(key(idemKey));
+        } catch (DataAccessException e) {
+            log.warn("주문 상태 캐시 조회 실패, DB로 fallback. idemKey={}, cause={}", idemKey, e.getMessage());
+            return CacheResult.error();
+        }
+
+        if (json == null) {
+            return CacheResult.miss();
         }
         try {
-            return Optional.of(objectMapper.readValue(json, OrderStatusResponse.class));
+            return CacheResult.hit(objectMapper.readValue(json, OrderStatusResponse.class));
         } catch (JsonProcessingException e) {
             log.warn("주문 상태 캐시 역직렬화 실패, miss로 처리. idemKey={}", idemKey, e);
-            return Optional.empty();
+            return CacheResult.miss();
         }
     }
 
@@ -63,14 +69,18 @@ public class OrderStatusCacheRepository {
             log.warn("주문 상태 캐시 직렬화 실패, 저장 생략. idemKey={}", idemKey, e);
             return;
         }
-        redisTemplate.opsForValue().set(key(idemKey), json, ttlFor(response));
+        try {
+            redisTemplate.opsForValue().set(key(idemKey), json, ttlFor(response));
+        } catch (DataAccessException e) {
+            log.warn("주문 상태 캐시 저장 실패. idemKey={}, cause={}", idemKey, e.getMessage());
+        }
     }
 
     public void evict(String idemKey) {
         try {
             redisTemplate.delete(key(idemKey));
         } catch (DataAccessException e) {
-            log.warn("주문 상태 캐시 삭제 실패, TTL 만료에 맡김. idemKey={}", idemKey, e);
+            log.warn("주문 상태 캐시 삭제 실패, TTL 만료에 맡김. idemKey={}, cause={}", idemKey, e.getMessage());
         }
     }
 

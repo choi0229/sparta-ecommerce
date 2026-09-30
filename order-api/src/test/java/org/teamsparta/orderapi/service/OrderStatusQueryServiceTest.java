@@ -6,6 +6,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.teamsparta.orderapi.domain.order.cache.CacheResult;
 import org.teamsparta.orderapi.domain.order.cache.OrderStatusCacheRepository;
 import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
 import org.teamsparta.orderapi.domain.order.service.OrderStatusQueryService;
@@ -33,16 +34,17 @@ class OrderStatusQueryServiceTest {
     private OrderStatusQueryService orderStatusQueryService;
 
     private static final String IDEM_KEY = "idem-key-1";
+    private static final OrderStatusResponse LOADED =
+            new OrderStatusResponse(IDEM_KEY, "COMPLETED", 1L, "PAID");
 
     @Test
     @DisplayName("캐시에 있으면 캐시 값을 반환하고 DB는 조회하지 않는다")
     void getOrderStatus_cacheHit() {
-        OrderStatusResponse cached = new OrderStatusResponse(IDEM_KEY, "COMPLETED", 1L, "PAID");
-        given(cacheRepository.find(IDEM_KEY)).willReturn(Optional.of(cached));
+        given(cacheRepository.find(IDEM_KEY)).willReturn(CacheResult.hit(LOADED));
 
         OrderStatusResponse response = orderStatusQueryService.getOrderStatus(IDEM_KEY);
 
-        assertThat(response).isEqualTo(cached);
+        assertThat(response).isEqualTo(LOADED);
         verify(orderStatusReader, never()).read(anyString());
         verify(cacheRepository, never()).save(anyString(), any());
     }
@@ -50,25 +52,36 @@ class OrderStatusQueryServiceTest {
     @Test
     @DisplayName("캐시에 없고 DB에 있으면 DB 결과를 반환하고 캐시에 저장한다")
     void getOrderStatus_cacheMiss_found() {
-        OrderStatusResponse loaded = new OrderStatusResponse(IDEM_KEY, "COMPLETED", 1L, "PAID");
-        given(cacheRepository.find(IDEM_KEY)).willReturn(Optional.empty());
-        given(orderStatusReader.read(IDEM_KEY)).willReturn(Optional.of(loaded));
+        given(cacheRepository.find(IDEM_KEY)).willReturn(CacheResult.miss());
+        given(orderStatusReader.read(IDEM_KEY)).willReturn(Optional.of(LOADED));
 
         OrderStatusResponse response = orderStatusQueryService.getOrderStatus(IDEM_KEY);
 
-        assertThat(response).isEqualTo(loaded);
-        verify(cacheRepository).save(IDEM_KEY, loaded);
+        assertThat(response).isEqualTo(LOADED);
+        verify(cacheRepository).save(IDEM_KEY, LOADED);
     }
 
     @Test
     @DisplayName("캐시에도 DB에도 없으면 PENDING을 반환하고 캐시에 저장하지 않는다")
     void getOrderStatus_cacheMiss_notFound() {
-        given(cacheRepository.find(IDEM_KEY)).willReturn(Optional.empty());
+        given(cacheRepository.find(IDEM_KEY)).willReturn(CacheResult.miss());
         given(orderStatusReader.read(IDEM_KEY)).willReturn(Optional.empty());
 
         OrderStatusResponse response = orderStatusQueryService.getOrderStatus(IDEM_KEY);
 
         assertThat(response).isEqualTo(new OrderStatusResponse(IDEM_KEY, "PENDING", null, null));
+        verify(cacheRepository, never()).save(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("Redis 장애면 DB 결과를 반환하고 캐시 저장은 건너뛴다")
+    void getOrderStatus_cacheError_fallbackToDb() {
+        given(cacheRepository.find(IDEM_KEY)).willReturn(CacheResult.error());
+        given(orderStatusReader.read(IDEM_KEY)).willReturn(Optional.of(LOADED));
+
+        OrderStatusResponse response = orderStatusQueryService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response).isEqualTo(LOADED);
         verify(cacheRepository, never()).save(anyString(), any());
     }
 }
