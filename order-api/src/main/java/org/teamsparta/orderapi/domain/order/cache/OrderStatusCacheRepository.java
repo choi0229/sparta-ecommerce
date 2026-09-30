@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
@@ -56,7 +57,11 @@ public class OrderStatusCacheRepository {
     }
 
     public void evict(String idemKey) {
-        redisTemplate.delete(key(idemKey));
+        try {
+            redisTemplate.delete(key(idemKey));
+        } catch (DataAccessException e) {
+            log.warn("주문 상태 캐시 삭제 실패, TTL 만료에 맡김. idemKey={}", idemKey, e);
+        }
     }
 
     private String key(String idemKey) {

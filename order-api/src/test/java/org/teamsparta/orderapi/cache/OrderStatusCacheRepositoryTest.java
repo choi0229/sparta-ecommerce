@@ -8,6 +8,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.teamsparta.orderapi.domain.order.cache.OrderStatusCacheRepository;
@@ -17,6 +18,7 @@ import java.time.Duration;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.AssertionsForClassTypes.assertThatCode;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
@@ -102,5 +104,15 @@ class OrderStatusCacheRepositoryTest {
         cacheRepository.evict(IDEM_KEY);
 
         verify(redisTemplate).delete(REDIS_KEY);
+    }
+
+    @Test
+    @DisplayName("캐시 삭제 중 Redis 예외가 나도 호출자에게 전파하지 않는다")
+    void evict_redisFailure() {
+        given(redisTemplate.delete(REDIS_KEY))
+                .willThrow(new RedisConnectionFailureException("redis down"));
+
+        assertThatCode(() -> cacheRepository.evict(IDEM_KEY))
+                .doesNotThrowAnyException();
     }
 }
