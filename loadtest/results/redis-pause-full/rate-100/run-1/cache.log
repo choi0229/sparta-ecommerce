@@ -1,0 +1,4 @@
+before hit=724171 miss=347275 error=1376 write_error_save=0 write_error_evict=0
+after  hit=724171 miss=347275 error=31376 write_error_save=0 write_error_evict=0
+delta  hit=0 miss=0 error=30000 write_error_save=0 write_error_evict=0
+hit_ratio=0.0000

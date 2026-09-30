@@ -1,0 +1,13 @@
+label=redis-pause-full
+run=1
+rate=100
+git_commit=e29d211
+fault=pause
+fault_at_sec=0
+fault_for_sec=300
+main_start=2026-10-01T00:58:55+0900
+fault_start=2026-10-01T00:58:55+0900
+fault_end=2026-10-01T01:03:55+0900
+main_end=2026-10-01T01:03:55+0900
+k6_exit=0
+redis_healthy=2026-10-01T01:04:06+0900

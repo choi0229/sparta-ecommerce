@@ -1,0 +1,7 @@
+label=redis
+run=2
+rate=300
+git_commit=e29d211
+main_start=2026-10-01T00:28:50+0900
+main_end=2026-10-01T00:33:50+0900
+k6_exit=0

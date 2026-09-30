@@ -1,0 +1,13 @@
+label=redis-stop-mid
+run=1
+rate=100
+git_commit=e29d211
+fault=stop
+fault_at_sec=60
+fault_for_sec=120
+main_start=2026-10-01T01:17:19+0900
+fault_start=2026-10-01T01:18:20+0900
+fault_end=2026-10-01T01:20:20+0900
+redis_healthy=2026-10-01T01:20:30+0900
+main_end=2026-10-01T01:22:20+0900
+k6_exit=0

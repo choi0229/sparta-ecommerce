@@ -1,0 +1,6 @@
+                                                                                                      query                                                                                                      | calls | mean_ms | total_ms | rows  
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------+---------+----------+-------
+ select ir1_0.idem_key,ir1_0.created_at,ir1_0.order_id,ir1_0.request_hash,ir1_0.status,ir1_0.updated_at from idempotency_request ir1_0 where ir1_0.idem_key=$1                                                   | 29765 |   0.024 |    700.7 | 29765
+ select o1_0.id,o1_0.created_at,o1_0.discount_amount,o1_0.failure_reason,o1_0.order_no,o1_0.pay_amount,o1_0.saga_id,o1_0.status,o1_0.total_amount,o1_0.updated_at,o1_0.user_id from orders o1_0 where o1_0.id=$1 | 29765 |   0.015 |    442.2 | 29765
+(2 rows)
+

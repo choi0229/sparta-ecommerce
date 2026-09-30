@@ -1,0 +1,4 @@
+before hit=484271 miss=251174 error=1376 write_error_save=0 write_error_evict=0
+after  hit=591465 miss=293980 error=1376 write_error_save=0 write_error_evict=0
+delta  hit=107194 miss=42806 error=0 write_error_save=0 write_error_evict=0
+hit_ratio=0.7146
