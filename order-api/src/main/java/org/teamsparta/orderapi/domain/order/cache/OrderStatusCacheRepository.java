@@ -2,6 +2,8 @@ package org.teamsparta.orderapi.domain.order.cache;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
@@ -29,16 +31,29 @@ public class OrderStatusCacheRepository {
     private final Duration inProgressTtl;
     private final Duration finalTtl;
 
+    private final Counter hitCounter;
+    private final Counter missCounter;
+    private final Counter errorCounter;
+    private final Counter saveErrorCounter;
+    private final Counter evictErrorCounter;
+
     public OrderStatusCacheRepository(
-        StringRedisTemplate redisTemplate,
-        ObjectMapper objectMapper,
-        @Value("${order.status-cache.ttl.in-progress:5s}") Duration inProgressTtl,
-        @Value("${order.status-cache.ttl.final:5m}") Duration finalTtl
-    ){
+            StringRedisTemplate redisTemplate,
+            ObjectMapper objectMapper,
+            MeterRegistry meterRegistry,
+            @Value("${order.status-cache.ttl.in-progress:5s}") Duration inProgressTtl,
+            @Value("${order.status-cache.ttl.final:5m}") Duration finalTtl
+    ) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.inProgressTtl = inProgressTtl;
         this.finalTtl = finalTtl;
+
+        this.hitCounter = requestCounter(meterRegistry, "hit");
+        this.missCounter = requestCounter(meterRegistry, "miss");
+        this.errorCounter = requestCounter(meterRegistry, "error");
+        this.saveErrorCounter = writeErrorCounter(meterRegistry, "save");
+        this.evictErrorCounter = writeErrorCounter(meterRegistry, "evict");
     }
 
     public CacheResult<OrderStatusResponse> find(String idemKey) {
@@ -46,16 +61,22 @@ public class OrderStatusCacheRepository {
         try {
             json = redisTemplate.opsForValue().get(key(idemKey));
         } catch (DataAccessException e) {
+            errorCounter.increment();
             log.warn("주문 상태 캐시 조회 실패, DB로 fallback. idemKey={}, cause={}", idemKey, e.getMessage());
             return CacheResult.error();
         }
 
         if (json == null) {
+            missCounter.increment();
             return CacheResult.miss();
         }
         try {
-            return CacheResult.hit(objectMapper.readValue(json, OrderStatusResponse.class));
+            CacheResult<OrderStatusResponse> hit =
+                    CacheResult.hit(objectMapper.readValue(json, OrderStatusResponse.class));
+            hitCounter.increment();
+            return hit;
         } catch (JsonProcessingException e) {
+            missCounter.increment();
             log.warn("주문 상태 캐시 역직렬화 실패, miss로 처리. idemKey={}", idemKey, e);
             return CacheResult.miss();
         }
@@ -72,6 +93,7 @@ public class OrderStatusCacheRepository {
         try {
             redisTemplate.opsForValue().set(key(idemKey), json, ttlFor(response));
         } catch (DataAccessException e) {
+            saveErrorCounter.increment();
             log.warn("주문 상태 캐시 저장 실패. idemKey={}, cause={}", idemKey, e.getMessage());
         }
     }
@@ -80,6 +102,7 @@ public class OrderStatusCacheRepository {
         try {
             redisTemplate.delete(key(idemKey));
         } catch (DataAccessException e) {
+            evictErrorCounter.increment();
             log.warn("주문 상태 캐시 삭제 실패, TTL 만료에 맡김. idemKey={}, cause={}", idemKey, e.getMessage());
         }
     }
@@ -98,5 +121,19 @@ public class OrderStatusCacheRepository {
         }
         // 주문 없이 끝난 멱등성 요청(FAILED)은 완료 상태, PENDING은 진행 중
         return "FAILED".equals(response.status()) ? finalTtl : inProgressTtl;
+    }
+
+    private static Counter requestCounter(MeterRegistry registry, String result) {
+        return Counter.builder("order.status.cache.requests")
+                .description("주문 상태 캐시 조회 결과 (error는 DB fallback 건수)")
+                .tag("result", result)
+                .register(registry);
+    }
+
+    private static Counter writeErrorCounter(MeterRegistry registry, String operation) {
+        return Counter.builder("order.status.cache.write.errors")
+                .description("주문 상태 캐시 저장/삭제 실패")
+                .tag("operation", operation)
+                .register(registry);
     }
 }
