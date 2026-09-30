@@ -56,6 +56,13 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: ${REDIS_TIMEOUT:100ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:100ms}
+
 management:
   endpoints:
     web:
@@ -67,6 +74,9 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  health:
+    redis:
+      enabled: false
 
 logging:
   level:
