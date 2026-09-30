@@ -1,0 +1,2 @@
+{"error":{"errorCode":"SERVER_ERROR","errorMessage":"Redis exception"}}
+HTTP 500 time 0.003094s

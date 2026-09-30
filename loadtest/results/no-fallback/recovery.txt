@@ -1,0 +1,5 @@
+== 22:36:38 curl seed-000001
+{"data":{"idemKey":"seed-000001","status":"COMPLETED","orderId":1,"orderStatus":"COMPLETED"}}
+HTTP 200 time 0.006629s
+== 22:36:38 redis-cli GET order:status:seed-000001
+{"idemKey":"seed-000001","status":"COMPLETED","orderId":1,"orderStatus":"COMPLETED"}

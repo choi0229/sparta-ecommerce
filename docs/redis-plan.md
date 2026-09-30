@@ -141,3 +141,23 @@ idle 1회, RATE별 3회. 모든 회차에서 dropped_iterations 0, http_req_fail
 
 ### baseline-v1 (보관)
 loadtest/results/baseline-v1/은 측정 방법 변경(App CPU를 ps → actuator process_cpu_usage, idle 측정 추가) 전 결과다. 위 표와 비교하지 않는다.
+
+### fallback 전 Redis 장애 측정 (2026-09-30)
+- 측정 시점 커밋: 76e3c2b (Cache-Aside만 적용, Redis 예외 처리 없음), perf 프로필
+- 조건: k6 constant-arrival-rate 100 RPS × 30초, 시나리오별 1회. normal만 30초 워밍업(캐시 채우기) 후 측정했고, stop/pause는 장애 주입 직후 워밍업 없이 측정했다. 참고용이며 베이스라인 표와 비교하지 않는다.
+
+| 시나리오 | http_reqs | error rate | avg (ms) | p95 (ms) | p99 (ms) |
+|---|---|---|---|---|---|
+| normal | 3001 | 0.00% (0/3001) | 2.77 | 4.44 | 5.11 |
+| stop | 3001 | 100.00% (3001/3001) | 0.43 | 0.69 | 1.35 |
+| pause | 3001 | 100.00% (3001/3001) | 103.98 | 105.57 | 105.90 |
+
+- stop: HTTP 500, `{"errorCode":"SERVER_ERROR","errorMessage":"Redis exception"}`, 응답 0.003s
+- pause: HTTP 500, `{"errorCode":"SERVER_ERROR","errorMessage":"Redis command timed out"}`, 응답 0.106s
+- 두 메시지 모두 GlobalExceptionHandler의 `Exception` catch-all이 `ex.getMessage()`를 그대로 내려준 값이다. 예외 클래스는 앱 로그로 확인하지 않았다.
+- 복구 확인: unpause 후 healthy 확인 직후 seed-000001 조회 HTTP 200, `redis-cli GET order:status:seed-000001`로 캐시 값이 다시 채워진 것을 확인했다.
+
+로그 파일:
+- loadtest/results/no-fallback/{normal,stop,pause}/k6.log
+- loadtest/results/no-fallback/{stop,pause}/sample-response.txt
+- loadtest/results/no-fallback/recovery.txt
