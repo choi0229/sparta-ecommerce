@@ -1,11 +1,13 @@
 package org.teamsparta.orderapi.domain.order.service;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.orderapi.domain.order.entity.IdempotencyRecord;
+import org.teamsparta.orderapi.domain.order.event.OrderStatusChangedEvent;
 import org.teamsparta.orderapi.domain.order.repository.IdempotencyRepository;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
@@ -15,6 +17,7 @@ import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 public class IdempotencyService {
 
     private final IdempotencyRepository idempotencyRepository;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public IdempotencyRecord startOrThrow(String key, String requestHash) {
@@ -51,5 +54,6 @@ public class IdempotencyService {
         IdempotencyRecord existing = idempotencyRepository.findById(key).orElseThrow();
         existing.complete(orderId);
         idempotencyRepository.save(existing);
+        applicationEventPublisher.publishEvent(new OrderStatusChangedEvent(orderId));
     }
 }

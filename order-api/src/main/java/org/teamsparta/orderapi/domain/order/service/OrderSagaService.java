@@ -3,6 +3,7 @@ package org.teamsparta.orderapi.domain.order.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationAdapter;
@@ -12,6 +13,7 @@ import org.teamsparta.orderapi.domain.order.entity.Orders;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
 import org.teamsparta.orderapi.domain.order.event.InventoryConfirmRequestedEvent;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
+import org.teamsparta.orderapi.domain.order.event.OrderStatusChangedEvent;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservationExpiredResult;
 import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
@@ -37,6 +39,7 @@ public class OrderSagaService {
     private final OrderEventPublisher orderEventPublisher;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     @Transactional
     public void onInventoryReserved(InventoryReservedResult event){
@@ -51,7 +54,7 @@ public class OrderSagaService {
         }
 
         saga.updateState(SagaState.INVENTORY_RESERVED, null, event.reservationId());
-        order.updateStatus(Status.RESERVED);
+        changeStatus(order, Status.RESERVED);
 
         // 결제 요청
         PaymentRequestedEvent paymentRequest = PaymentRequestedEvent.from(saga.getOrderId(), saga.getSagaId(), order.getUserId(), order.getPayAmount());
@@ -80,7 +83,7 @@ public class OrderSagaService {
         }
 
         saga.updateState(SagaState.FAILED, null, saga.getReservationId());
-        order.updateStatus(Status.FAILED);
+        changeStatus(order, Status.FAILED);
     }
 
     @Transactional
@@ -94,7 +97,7 @@ public class OrderSagaService {
 
         // 1. Saga 및 주문 상태 최종 완료
         saga.updateState(SagaState.PAYMENT_COMPLETED, null, saga.getReservationId());
-        order.updateStatus(Status.PAID);
+        changeStatus(order, Status.PAID);
 
         // 재고 감소 및 확정 요청
         InventoryConfirmRequestedEvent inventoryConfirmRequestedEvent = InventoryConfirmRequestedEvent.from(saga.getOrderId(), saga.getSagaId(), saga.getReservationId());
@@ -119,7 +122,7 @@ public class OrderSagaService {
         if (saga.getState() == SagaState.FAILED) return;
 
         saga.updateState(SagaState.FAILED, null, saga.getReservationId());
-        order.updateStatus(Status.FAILED);
+        changeStatus(order, Status.FAILED);
     }
 
     @Transactional
@@ -131,7 +134,7 @@ public class OrderSagaService {
 
         // 최종 완료 처리
         saga.updateState(SagaState.COMPLETED, null, saga.getReservationId());
-        order.updateStatus(Status.COMPLETED);
+        changeStatus(order, Status.COMPLETED);
 
         log.info("Saga Fully Completed for Order: {}", order.getId());
     }
@@ -153,6 +156,11 @@ public class OrderSagaService {
         }
 
         saga.updateState(SagaState.EXPIRED, "TTL_EXPIRED", event.reservationId());
-        order.updateStatus(Status.EXPIRED);
+        changeStatus(order, Status.EXPIRED);
+    }
+
+    private void changeStatus(Orders order, Status status) {
+        order.updateStatus(status);
+        applicationEventPublisher.publishEvent(new OrderStatusChangedEvent(order.getId()));
     }
 }

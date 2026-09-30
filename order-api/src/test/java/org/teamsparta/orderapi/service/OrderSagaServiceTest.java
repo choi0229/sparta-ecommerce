@@ -9,11 +9,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.orderapi.domain.order.entity.OrderSagaState;
 import org.teamsparta.orderapi.domain.order.entity.Orders;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
 import org.teamsparta.orderapi.domain.order.event.InventoryConfirmRequestedEvent;
+import org.teamsparta.orderapi.domain.order.event.OrderStatusChangedEvent;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservationExpiredResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReserveFailedResult;
@@ -55,6 +57,8 @@ public class OrderSagaServiceTest {
     private OrderRepository orderRepository;
     @Mock
     private ObjectMapper objectMapper;
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
 
     private Orders order;
     private OrderSagaState sagaState;
@@ -97,6 +101,7 @@ public class OrderSagaServiceTest {
         assertThat(sagaState.getState()).isEqualTo(SagaState.PAYMENT_REQUESTED);
         assertThat(sagaState.getReservationId()).isEqualTo(RESERVATION_ID);
         assertThat(order.getStatus()).isEqualTo(Status.RESERVED);
+        verify(applicationEventPublisher).publishEvent(any(OrderStatusChangedEvent.class));
     }
 
     @Test
@@ -116,6 +121,7 @@ public class OrderSagaServiceTest {
         assertThat(sagaState.getState()).isEqualTo(SagaState.FAILED);
         assertThat(order.getStatus()).isEqualTo(Status.FAILED);
         verify(outboxEventRepository, never()).save(any());
+        verify(applicationEventPublisher).publishEvent(any(OrderStatusChangedEvent.class));
     }
 
     @Test
@@ -144,6 +150,7 @@ public class OrderSagaServiceTest {
 
         assertThat(order.getStatus()).isEqualTo(Status.PAID);
         assertThat(sagaState.getState()).isEqualTo(SagaState.PAYMENT_COMPLETED);
+        verify(applicationEventPublisher).publishEvent(any(OrderStatusChangedEvent.class));
     }
 
     @Test
@@ -164,6 +171,7 @@ public class OrderSagaServiceTest {
         assertThat(sagaState.getState()).isEqualTo(SagaState.FAILED);
         assertThat(order.getStatus()).isEqualTo(Status.FAILED);
         verify(outboxEventRepository, never()).save(any());
+        verify(applicationEventPublisher).publishEvent(any(OrderStatusChangedEvent.class));
     }
 
     @Test
@@ -187,6 +195,7 @@ public class OrderSagaServiceTest {
         assertThat(sagaState.getState()).isEqualTo(SagaState.COMPLETED);
         assertThat(order.getStatus()).isEqualTo(Status.COMPLETED);
         verify(outboxEventRepository, never()).save(any());
+        verify(applicationEventPublisher).publishEvent(any(OrderStatusChangedEvent.class));
     }
 
     @Test
@@ -210,5 +219,6 @@ public class OrderSagaServiceTest {
         assertThat(order.getStatus()).isEqualTo(Status.EXPIRED);
         assertThat(sagaState.getLastError()).isEqualTo("TTL_EXPIRED");
         verify(outboxEventRepository, never()).save(any());
+        verify(applicationEventPublisher).publishEvent(any(OrderStatusChangedEvent.class));
     }
 }
