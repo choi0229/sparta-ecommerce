@@ -6,6 +6,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.teamsparta.orderapi.domain.order.cache.OrderStatusCacheRepository;
 import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
 import org.teamsparta.orderapi.domain.order.service.OrderStatusQueryService;
 import org.teamsparta.orderapi.domain.order.service.OrderStatusReader;
@@ -13,7 +14,11 @@ import org.teamsparta.orderapi.domain.order.service.OrderStatusReader;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
 class OrderStatusQueryServiceTest {
@@ -21,29 +26,49 @@ class OrderStatusQueryServiceTest {
     @Mock
     private OrderStatusReader orderStatusReader;
 
+    @Mock
+    private OrderStatusCacheRepository cacheRepository;
+
     @InjectMocks
     private OrderStatusQueryService orderStatusQueryService;
 
     private static final String IDEM_KEY = "idem-key-1";
 
     @Test
-    @DisplayName("DB에 레코드가 없으면 PENDING을 반환한다")
-    void getOrderStatus_notFound() {
-        given(orderStatusReader.read(IDEM_KEY)).willReturn(Optional.empty());
+    @DisplayName("캐시에 있으면 캐시 값을 반환하고 DB는 조회하지 않는다")
+    void getOrderStatus_cacheHit() {
+        OrderStatusResponse cached = new OrderStatusResponse(IDEM_KEY, "COMPLETED", 1L, "PAID");
+        given(cacheRepository.find(IDEM_KEY)).willReturn(Optional.of(cached));
 
         OrderStatusResponse response = orderStatusQueryService.getOrderStatus(IDEM_KEY);
 
-        assertThat(response).isEqualTo(new OrderStatusResponse(IDEM_KEY, "PENDING", null, null));
+        assertThat(response).isEqualTo(cached);
+        verify(orderStatusReader, never()).read(anyString());
+        verify(cacheRepository, never()).save(anyString(), any());
     }
 
     @Test
-    @DisplayName("DB 조회 결과가 있으면 그대로 반환한다")
-    void getOrderStatus_found() {
+    @DisplayName("캐시에 없고 DB에 있으면 DB 결과를 반환하고 캐시에 저장한다")
+    void getOrderStatus_cacheMiss_found() {
         OrderStatusResponse loaded = new OrderStatusResponse(IDEM_KEY, "COMPLETED", 1L, "PAID");
+        given(cacheRepository.find(IDEM_KEY)).willReturn(Optional.empty());
         given(orderStatusReader.read(IDEM_KEY)).willReturn(Optional.of(loaded));
 
         OrderStatusResponse response = orderStatusQueryService.getOrderStatus(IDEM_KEY);
 
         assertThat(response).isEqualTo(loaded);
+        verify(cacheRepository).save(IDEM_KEY, loaded);
+    }
+
+    @Test
+    @DisplayName("캐시에도 DB에도 없으면 PENDING을 반환하고 캐시에 저장하지 않는다")
+    void getOrderStatus_cacheMiss_notFound() {
+        given(cacheRepository.find(IDEM_KEY)).willReturn(Optional.empty());
+        given(orderStatusReader.read(IDEM_KEY)).willReturn(Optional.empty());
+
+        OrderStatusResponse response = orderStatusQueryService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response).isEqualTo(new OrderStatusResponse(IDEM_KEY, "PENDING", null, null));
+        verify(cacheRepository, never()).save(anyString(), any());
     }
 }
