@@ -80,7 +80,9 @@ management:
 
 order:
   status-cache:
-    ttl: ${ORDER_STATUS_CACHE_TTL:5m}
+    ttl:
+      in-progress: ${ORDER_STATUS_CACHE_TTL_IN_PROGRESS:5s}
+      final: ${ORDER_STATUS_CACHE_TTL_FINAL:5m}
 
 logging:
   level:

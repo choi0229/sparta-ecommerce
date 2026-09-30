@@ -5,6 +5,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -38,11 +40,12 @@ class OrderStatusCacheRepositoryTest {
 
     private static final String IDEM_KEY = "seed-000001";
     private static final String REDIS_KEY = "order:status:seed-000001";
-    private static final Duration TTL = Duration.ofMinutes(5);
+    private static final Duration IN_PROGRESS_TTL = Duration.ofSeconds(5);
+    private static final Duration FINAL_TTL = Duration.ofMinutes(5);
 
     @BeforeEach
     void setUp() {
-        cacheRepository = new OrderStatusCacheRepository(redisTemplate, objectMapper, TTL);
+        cacheRepository = new OrderStatusCacheRepository(redisTemplate, objectMapper, IN_PROGRESS_TTL, FINAL_TTL);
     }
 
     @Test
@@ -84,21 +87,6 @@ class OrderStatusCacheRepositoryTest {
     }
 
     @Test
-    @DisplayName("order:status:{idemKey} 키에 TTL과 함께 JSON으로 저장한다")
-    void save() throws Exception {
-        OrderStatusResponse response =
-                new OrderStatusResponse("seed-000001", "COMPLETED", 1L, "PAID");
-        given(redisTemplate.opsForValue()).willReturn(valueOperations);
-
-        cacheRepository.save(IDEM_KEY, response);
-
-        ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
-        verify(valueOperations).set(eq(REDIS_KEY), jsonCaptor.capture(), eq(TTL));
-        assertThat(objectMapper.readValue(jsonCaptor.getValue(), OrderStatusResponse.class))
-                .isEqualTo(response);
-    }
-
-    @Test
     @DisplayName("같은 키로 캐시를 삭제한다")
     void evict() {
         cacheRepository.evict(IDEM_KEY);
@@ -114,5 +102,30 @@ class OrderStatusCacheRepositoryTest {
 
         assertThatCode(() -> cacheRepository.evict(IDEM_KEY))
                 .doesNotThrowAnyException();
+    }
+
+    @ParameterizedTest(name = "status={0}, orderStatus={1} → TTL {2}초")
+    @CsvSource(nullValues = "null", value = {
+            "COMPLETED, COMPLETED, 300",
+            "COMPLETED, FAILED,    300",
+            "COMPLETED, CANCELED,  300",
+            "COMPLETED, EXPIRED,   300",
+            "COMPLETED, PAID,      5",
+            "COMPLETED, RESERVED,  5",
+            "COMPLETED, CREATED,   5",
+            "PENDING,   null,      5",
+            "FAILED,    null,      300"
+    })
+    @DisplayName("주문 상태에 따라 TTL을 다르게 저장한다")
+    void save_ttlByStatus(String status, String orderStatus, long expectedTtlSeconds) throws Exception {
+        OrderStatusResponse response = new OrderStatusResponse(IDEM_KEY, status, 1L, orderStatus);
+        given(redisTemplate.opsForValue()).willReturn(valueOperations);
+
+        cacheRepository.save(IDEM_KEY, response);
+
+        ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
+        verify(valueOperations).set(eq(REDIS_KEY), jsonCaptor.capture(), eq(Duration.ofSeconds(expectedTtlSeconds)));
+        assertThat(objectMapper.readValue(jsonCaptor.getValue(), OrderStatusResponse.class))
+                .isEqualTo(response);
     }
 }

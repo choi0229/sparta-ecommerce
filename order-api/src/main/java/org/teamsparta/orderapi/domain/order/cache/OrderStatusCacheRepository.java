@@ -8,9 +8,11 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.teamsparta.orderapi.domain.order.dto.response.OrderStatusResponse;
+import org.teamsparta.orderapi.global.enums.Status;
 
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -18,18 +20,26 @@ public class OrderStatusCacheRepository {
 
     private static final String KEY_PREFIX = "order:status:";
 
+    private static final Set<String> FINAL_ORDER_STATUSES = Set.of(
+            Status.COMPLETED.name(), Status.FAILED.name(),
+            Status.CANCELED.name(), Status.EXPIRED.name()
+    );
+
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
-    private final Duration ttl;
+    private final Duration inProgressTtl;
+    private final Duration finalTtl;
 
     public OrderStatusCacheRepository(
         StringRedisTemplate redisTemplate,
         ObjectMapper objectMapper,
-        @Value("${order.status-cache.ttl:5m}") Duration ttl
+        @Value("${order.status-cache.ttl.in-progress:5s}") Duration inProgressTtl,
+        @Value("${order.status-cache.ttl.final:5m}") Duration finalTtl
     ){
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
-        this.ttl = ttl;
+        this.inProgressTtl = inProgressTtl;
+        this.finalTtl = finalTtl;
     }
 
     public Optional<OrderStatusResponse> find(String idemKey){
@@ -53,7 +63,7 @@ public class OrderStatusCacheRepository {
             log.warn("주문 상태 캐시 직렬화 실패, 저장 생략. idemKey={}", idemKey, e);
             return;
         }
-        redisTemplate.opsForValue().set(key(idemKey), json, ttl);
+        redisTemplate.opsForValue().set(key(idemKey), json, ttlFor(response));
     }
 
     public void evict(String idemKey) {
@@ -66,5 +76,17 @@ public class OrderStatusCacheRepository {
 
     private String key(String idemKey) {
         return KEY_PREFIX + idemKey;
+    }
+
+    /**
+     * 더 이상 바뀌지 않는 상태는 길게, 바뀔 수 있는 상태는 짧게 캐시한다.
+     * 조회-무효화 경쟁 조건으로 옛날 값이 캐시되더라도 진행 중 상태는 짧은 TTL로 빨리 해소된다.
+     */
+    private Duration ttlFor(OrderStatusResponse response) {
+        if (response.orderStatus() != null) {
+            return FINAL_ORDER_STATUSES.contains(response.orderStatus()) ? finalTtl : inProgressTtl;
+        }
+        // 주문 없이 끝난 멱등성 요청(FAILED)은 완료 상태, PENDING은 진행 중
+        return "FAILED".equals(response.status()) ? finalTtl : inProgressTtl;
     }
 }
