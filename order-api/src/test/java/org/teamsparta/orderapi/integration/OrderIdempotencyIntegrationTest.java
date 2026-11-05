@@ -147,6 +147,26 @@ class OrderIdempotencyIntegrationTest {
         assertThat(recordCount(maxKey)).isEqualTo(1);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{\"userId\":1,\"items\":[{\"sku\":\"SKU-A\",\"quantity\":0}],\"addressId\":7}",
+            "{\"userId\":1,\"items\":[{\"sku\":\"SKU-A\",\"quantity\":-1}],\"addressId\":7}",
+            "{\"userId\":1,\"items\":[{\"sku\":\"SKU-A\"}],\"addressId\":7}",
+            "{\"userId\":1,\"items\":[{\"sku\":\"\",\"quantity\":1}],\"addressId\":7}",
+            "{\"userId\":1,\"items\":[{\"sku\":\"   \",\"quantity\":1}],\"addressId\":7}",
+            "{\"userId\":1,\"items\":[{\"quantity\":1}],\"addressId\":7}",
+            "{\"userId\":1,\"items\":[null],\"addressId\":7}",
+            "{\"userId\":1,\"items\":[{\"sku\":\"SKU-A\",\"quantity\":1},{\"sku\":\"SKU-A\",\"quantity\":2}],\"addressId\":7}",
+            "{\"userId\":1,\"items\":[{\"sku\":\"SKU-A\",\"quantity\":1},{\"sku\":\" SKU-A \",\"quantity\":2}],\"addressId\":7}"
+    })
+    @DisplayName("수량 0 이하, 빈 SKU, 중복 SKU는 접수 단계에서 400, 주소 조회·기록·Outbox 없음")
+    void invalidItems_returns400WithoutSideEffects(String body) throws Exception {
+        assertThat(send(newKey(), body).getResponse().getStatus()).isEqualTo(400);
+
+        assertNothingAccepted();
+        verify(addressServiceClient, never()).findById(anyLong(), anyLong());
+    }
+
     @Test
     @DisplayName("같은 키·같은 요청의 순차 재전송 → 같은 응답, Outbox 1건, 기존 기록 불변")
     void sequentialRetry_returnsSameResultWithoutNewOutbox() throws Exception {

@@ -92,6 +92,11 @@ public class Orders {
         this.status = status;
     }
 
+    public void applyTotalAmount(BigDecimal totalAmount) {
+        this.totalAmount = totalAmount;
+        this.payAmount = totalAmount.subtract(this.discountAmount);
+    }
+
     public void markFailed(String failureReason) {
         this.status = Status.FAILED;
         this.failureReason = failureReason;

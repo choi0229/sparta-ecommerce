@@ -3,7 +3,6 @@ package org.teamsparta.orderapi.domain.order.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.orderapi.domain.order.entity.IdempotencyRecord;
 import org.teamsparta.orderapi.domain.order.repository.IdempotencyRepository;
@@ -36,19 +35,18 @@ public class IdempotencyService {
         idempotencyRepository.save(existing);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /** 호출자의 트랜잭션에서 FAILED와 사유를 저장한다. 이미 끝난 기록은 바꾸지 않는다. */
+    @Transactional
     public void fail(String key, String reason) {
-        IdempotencyRecord existing = idempotencyRepository.findById(key)
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_IDEMPOTENCY));
+        IdempotencyRecord existing = getForUpdate(key);
         if (existing.getStatus() == IdempotencyStatus.FAILED) {
             return; // 중복 이벤트 — 멱등 처리
         }
         if (existing.getStatus() == IdempotencyStatus.COMPLETED) {
-            log.warn("Product snapshot failure ignored: order already completed. idemKey={}", key);
+            log.warn("Order creation failure ignored: order already created. idemKey={}", key);
             return;
         }
         existing.fail(reason);
-        idempotencyRepository.save(existing);
         log.info("IdempotencyRecord marked FAILED. idemKey={}, reason={}", key, reason);
     }
 }

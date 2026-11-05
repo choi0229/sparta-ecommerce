@@ -56,12 +56,6 @@ public class OrderTransactionalService {
 
     @Transactional
     public void createOrderInternal(ProductSnapshotReplyResult result, String idemKey) {
-        Map<String, ProductSnapshotItem> bySku = result.items().stream()
-                .collect(Collectors.toMap(ProductSnapshotItem::sku, it -> it));
-        List<String> skus = result.requestItem().stream()
-                .map(ProductSnapshotReplyResult.Item::sku)
-                .toList();
-
         IdempotencyRecord idemRecord = idempotencyService.getForUpdate(idemKey);
 
         if(idemRecord.getStatus() != IdempotencyStatus.PENDING){
@@ -69,16 +63,25 @@ public class OrderTransactionalService {
             return;
         }
 
-        List<String> missing = skus.stream()
-                .filter(sku -> !bySku.containsKey(sku))
-                .distinct()
-                .toList();
-        if(!missing.isEmpty()){
-            throw new DomainException(DomainExceptionCode.PRODUCT_SNAPSHOT_NOT_READY);
+        // 비즈니스 실패는 주문을 저장하기 전에 판별해 FAILED로 커밋한다 (고아 주문 방지)
+        Optional<String> failureReason = findBusinessFailure(result);
+        if(failureReason.isPresent()){
+            log.warn("Order creation rejected. idemKey={}, reason={}", idemKey, failureReason.get());
+            idemRecord.fail(failureReason.get());
+            return;
+        }
+
+        Map<String, ProductSnapshotItem> bySku = result.items().stream()
+                .collect(Collectors.toMap(ProductSnapshotItem::sku, it -> it, (first, second) -> first));
+
+        BigDecimal total = BigDecimal.ZERO;
+        for(ProductSnapshotReplyResult.Item item : result.requestItem()){
+            total = total.add(bySku.get(item.sku()).price().multiply(BigDecimal.valueOf(item.quantity())));
         }
 
         String orderNo = generateOrderNo();
         Orders order = Orders.createNew(orderNo, result.userId());
+        order.applyTotalAmount(total);
         if (result.shippingAddress() != null) {
             order.setShippingAddress(result.shippingAddress().recipientName(), result.shippingAddress().recipientAddress());
         }
@@ -87,30 +90,19 @@ public class OrderTransactionalService {
         OrderSagaState sagaState = OrderSagaState.start(order.getSagaId(), savedOrder.getId());
         sagaStateRepository.save(sagaState);
 
-        BigDecimal total = BigDecimal.ZERO;
         List<OrderItem> orderItems = new ArrayList<>();
         for(ProductSnapshotReplyResult.Item item : result.requestItem()){
-            if(item.quantity() == null || item.quantity() <= 0){
-                throw new DomainException(DomainExceptionCode.INVALID_QUANTITY);
-            }
-
             ProductSnapshotItem snap = bySku.get(item.sku());
-
-            BigDecimal unitPrice = snap.price();
-            BigDecimal lineAmount = unitPrice.multiply(BigDecimal.valueOf(item.quantity()));
-            total = total.add(lineAmount);
-
-            Map<String, Object> optionJsonSnapShot = snap.optionJson();
 
             OrderItem orderItem = OrderItem.of(
                     savedOrder.getId(),
                     snap.sku(),
                     item.quantity(),
-                    unitPrice,
+                    snap.price(),
                     snap.productName(),
                     null,
-                    optionJsonSnapShot,
-                    snap.productId().toString()
+                    snap.optionJson(),
+                    null
             );
             orderItems.add(orderItem);
         }
@@ -129,14 +121,74 @@ public class OrderTransactionalService {
         idempotencyService.complete(idemKey, savedOrder.getId());
     }
 
+    /** 스냅샷 응답을 주문으로 만들 수 없는 이유를 찾는다. 접수 단계를 통과한 뒤 이벤트로 들어온 값도 믿지 않는다. */
+    private Optional<String> findBusinessFailure(ProductSnapshotReplyResult result) {
+        if(result.items() == null || result.items().isEmpty()){
+            return Optional.of("EMPTY_PRODUCT_SNAPSHOT");
+        }
+        if(result.requestItem() == null || result.requestItem().isEmpty()){
+            return Optional.of("EMPTY_ORDER_ITEMS");
+        }
+        if(result.userId() == null){
+            return Optional.of("MISSING_USER");
+        }
 
+        List<ProductSnapshotReplyResult.Item> requested = result.requestItem();
+        List<String> blank = requested.stream()
+                .map(ProductSnapshotReplyResult.Item::sku)
+                .filter(sku -> sku == null || sku.isBlank())
+                .toList();
+        if(!blank.isEmpty()){
+            return Optional.of("INVALID_SKU");
+        }
+
+        List<String> duplicated = requested.stream()
+                .collect(Collectors.groupingBy(ProductSnapshotReplyResult.Item::sku, Collectors.counting()))
+                .entrySet().stream()
+                .filter(entry -> entry.getValue() > 1)
+                .map(Map.Entry::getKey)
+                .sorted()
+                .toList();
+        if(!duplicated.isEmpty()){
+            return Optional.of("DUPLICATE_SKU=" + duplicated);
+        }
+
+        List<String> invalidQuantity = requested.stream()
+                .filter(item -> item.quantity() == null || item.quantity() <= 0)
+                .map(ProductSnapshotReplyResult.Item::sku)
+                .toList();
+        if(!invalidQuantity.isEmpty()){
+            return Optional.of("INVALID_QUANTITY=" + invalidQuantity);
+        }
+
+        Map<String, ProductSnapshotItem> bySku = result.items().stream()
+                .collect(Collectors.toMap(ProductSnapshotItem::sku, it -> it, (first, second) -> first));
+        List<String> missing = requested.stream()
+                .map(ProductSnapshotReplyResult.Item::sku)
+                .filter(sku -> !bySku.containsKey(sku))
+                .toList();
+        if(!missing.isEmpty()){
+            return Optional.of("MISSING_SKU=" + missing);
+        }
+
+        List<String> missingPrice = requested.stream()
+                .map(ProductSnapshotReplyResult.Item::sku)
+                .filter(sku -> bySku.get(sku).price() == null)
+                .toList();
+        if(!missingPrice.isEmpty()){
+            return Optional.of("MISSING_PRICE=" + missingPrice);
+        }
+        return Optional.empty();
+    }
+
+    @Transactional
     public void failOrder(String idemKey, String reason) {
         idempotencyService.fail(idemKey, reason);
-        log.info("Order failed due to product snapshot failure. idemKey={}, reason={}", idemKey, reason);
     }
 
     private String generateOrderNo() {
-        return "O" + System.currentTimeMillis();
+        // 인스턴스가 여러 개여도 겹치지 않도록 난수를 붙인다 (order_no 최대 32자)
+        return "O" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
 

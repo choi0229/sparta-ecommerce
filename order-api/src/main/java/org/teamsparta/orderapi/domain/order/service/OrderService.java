@@ -69,6 +69,7 @@ public class OrderService {
         if(request.items() == null || request.items().isEmpty()){
             throw new DomainException(DomainExceptionCode.NOT_FOUND_ITEMS);
         }
+        validateItems(request.items());
 
         String requestHash = hashRequest(request);
         Optional<IdempotencyRecord> existing = idempotencyRepository.findById(idemKey);
@@ -101,6 +102,21 @@ public class OrderService {
                 || idemKey.length() > MAX_IDEMPOTENCY_KEY_LENGTH
                 || idemKey.startsWith(SHIPMENT_EVENT_KEY_PREFIX)) {
             throw new DomainException(DomainExceptionCode.INVALID_IDEMPOTENCY_KEY);
+        }
+    }
+
+    private void validateItems(List<CreateOrderRequest.Item> items) {
+        Set<String> skus = new HashSet<>();
+        for (CreateOrderRequest.Item item : items) {
+            if (item == null || item.sku() == null || item.sku().isBlank()) {
+                throw new DomainException(DomainExceptionCode.INVALID_SKU);
+            }
+            if (item.quantity() == null || item.quantity() <= 0) {
+                throw new DomainException(DomainExceptionCode.INVALID_QUANTITY);
+            }
+            if (!skus.add(item.sku().trim())) {
+                throw new DomainException(DomainExceptionCode.DUPLICATE_SKU);
+            }
         }
     }
 
