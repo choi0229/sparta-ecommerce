@@ -80,7 +80,7 @@ public class OrderSagaServiceTest {
         InventoryReservedResult event = new InventoryReservedResult(
                 UUID.randomUUID(), "inventory.reserved", SAGA_ID, ORDER_ID, RESERVATION_ID, null,null
         );
-        given(orderRepository.findById(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
         given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
         given(objectMapper.writeValueAsString(any(PaymentRequestedEvent.class))).willReturn("{\"ok\":true}");
 
@@ -109,7 +109,7 @@ public class OrderSagaServiceTest {
         InventoryReserveFailedResult event = new InventoryReserveFailedResult(
                 UUID.randomUUID(), "inventory.failed", SAGA_ID, ORDER_ID, "OUT_OF_STOCK"
         );
-        given(orderRepository.findById(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
         given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
 
         // when
@@ -125,11 +125,12 @@ public class OrderSagaServiceTest {
     @DisplayName("결제 성공 - 재고 확정 요청 outbox 발행 및 주문 상태 paid 변경")
     void onPaymentSucceeded_success()throws Exception{
         // given
+        order.updateStatus(Status.RESERVED);
         ReflectionTestUtils.setField(sagaState, "reservationId", RESERVATION_ID);
         ReflectionTestUtils.setField(sagaState, "state", SagaState.PAYMENT_REQUESTED);
 
         PaymentSucceededEvent event = PaymentSucceededEvent.from(PaymentRequestedEvent.from(ORDER_ID, SAGA_ID, 1L, java.math.BigDecimal.valueOf(1000)));
-        given(orderRepository.findById(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
         given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
         given(objectMapper.writeValueAsString(any(InventoryConfirmRequestedEvent.class))).willReturn("{\"confirm\":true}");
 
@@ -153,11 +154,12 @@ public class OrderSagaServiceTest {
     @DisplayName("주문 실패 - FAILED 전이 + 주문 FAILED")
     void onPaymentFailed_success(){
         // given
+        order.updateStatus(Status.RESERVED);
         ReflectionTestUtils.setField(sagaState, "reservationId", RESERVATION_ID);
         ReflectionTestUtils.setField(sagaState, "state", SagaState.PAYMENT_REQUESTED);
         PaymentFailedEvent event = PaymentFailedEvent.from(PaymentRequestedEvent.from(ORDER_ID, SAGA_ID, 1L, java.math.BigDecimal.valueOf(1000)), "DECLINED");
 
-        given(orderRepository.findById(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
         given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
 
         // when
@@ -173,6 +175,7 @@ public class OrderSagaServiceTest {
     @DisplayName("재고 성공 - 최종 COMPLETED 전이 + 주문 COMPLETED")
     void onInventoryConfirmed_success(){
         // given
+        order.updateStatus(Status.PAID);
         ReflectionTestUtils.setField(sagaState, "reservationId", RESERVATION_ID);
         ReflectionTestUtils.setField(sagaState, "state", SagaState.PAYMENT_COMPLETED);
 
@@ -180,7 +183,7 @@ public class OrderSagaServiceTest {
                 UUID.randomUUID(), "inventory.confirmed", ORDER_ID, SAGA_ID
         );
 
-        given(orderRepository.findById(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
         given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
 
         // when
@@ -193,25 +196,25 @@ public class OrderSagaServiceTest {
     }
 
     @Test
-    @DisplayName("inventory-confirm 중복 수신 — saga가 이미 COMPLETED이면 주문/saga 상태를 변경하지 않는다")
+    @DisplayName("inventory-confirm 중복 수신 — 주문이 이미 COMPLETED이면 주문/saga 상태를 변경하지 않는다")
     void onInventoryConfirmed_duplicate_idempotent() {
-        // given: saga가 이미 COMPLETED, 주문은 PAID (COMPLETED 직전 상태로 설정)
+        // given: 주문과 saga가 이미 COMPLETED
         ReflectionTestUtils.setField(sagaState, "reservationId", RESERVATION_ID);
         ReflectionTestUtils.setField(sagaState, "state", SagaState.COMPLETED);
-        ReflectionTestUtils.setField(order, "status", Status.PAID);
+        order.updateStatus(Status.COMPLETED);
 
         InventoryConfirmedResult event = new InventoryConfirmedResult(
                 UUID.randomUUID(), "inventory.confirmed", ORDER_ID, SAGA_ID
         );
 
-        given(orderRepository.findById(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
         given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
 
         // when
         orderSagaService.onInventoryConfirmed(event);
 
-        // then: 주문 상태가 PAID에서 COMPLETED로 변경되지 않아야 함 (guard에서 return)
-        assertThat(order.getStatus()).isEqualTo(Status.PAID);
+        // then
+        assertThat(order.getStatus()).isEqualTo(Status.COMPLETED);
         assertThat(sagaState.getState()).isEqualTo(SagaState.COMPLETED);
         verify(outboxEventRepository, never()).save(any());
     }

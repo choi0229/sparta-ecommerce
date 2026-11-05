@@ -102,6 +102,11 @@ public class Orders {
         this.failureReason = failureReason;
     }
 
+    public void markExpired(String failureReason) {
+        this.status = Status.EXPIRED;
+        this.failureReason = failureReason;
+    }
+
     public void updateShipmentStatus(ShipmentStatus shipmentStatus) {
         this.shipmentStatus = shipmentStatus;
     }

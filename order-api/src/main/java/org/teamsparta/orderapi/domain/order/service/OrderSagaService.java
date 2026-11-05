@@ -28,6 +28,9 @@ import org.teamsparta.orderapi.global.enums.Status;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 
+import java.util.Arrays;
+import java.util.UUID;
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -40,16 +43,27 @@ public class OrderSagaService {
     private final ObjectMapper objectMapper;
 
     private static final String RESERVATION_EXPIRED_AFTER_PAYMENT = "RESERVATION_EXPIRED_AFTER_PAYMENT";
+    private static final String TTL_EXPIRED = "TTL_EXPIRED";
+
+    /*
+     * 상태 전이 (출발 상태는 orders.status로 판단하고, 주문 행 잠금으로 토픽 간 처리를 직렬화한다)
+     *   inventory-reserved-event        CREATED  → RESERVED
+     *   inventory-failed-event          CREATED  → FAILED
+     *   payment-succeeded-event         RESERVED → PAID
+     *   payment-failed-event            RESERVED → FAILED
+     *   inventory-confirm-event         PAID     → COMPLETED
+     *   inventory-confirm-failed-event  PAID     → FAILED
+     *   inventory-expired-event         RESERVED → EXPIRED (PAID는 확정 결과를 기다리며 유지)
+     * 이미 처리된 상태면 중복(info), 그 외는 순서 오류(warn)로 기록하고 상태를 바꾸지 않는다.
+     */
 
     @Transactional
     public void onInventoryReserved(InventoryReservedResult event){
-        Orders order = orderRepository.findById(event.orderId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+        Orders order = lockOrder(event.orderId());
+        OrderSagaState saga = findSaga(event.sagaId());
 
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
-
-        if(saga.getState() == SagaState.INVENTORY_RESERVED){
+        if(!canTransition(order, "inventory-reserved-event", Status.CREATED,
+                Status.RESERVED, Status.PAID, Status.COMPLETED)){
             return;
         }
 
@@ -72,30 +86,27 @@ public class OrderSagaService {
 
     @Transactional
     public void onInventoryReserveFailed(InventoryReserveFailedResult event){
-        Orders order = orderRepository.findById(event.orderId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+        Orders order = lockOrder(event.orderId());
+        OrderSagaState saga = findSaga(event.sagaId());
 
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
-
-        if(saga.getState() == SagaState.FAILED){
+        if(!canTransition(order, "inventory-failed-event", Status.CREATED, Status.FAILED)){
             return;
         }
 
-        saga.updateState(SagaState.FAILED, null, saga.getReservationId());
-        order.updateStatus(Status.FAILED);
+        saga.updateState(SagaState.FAILED, event.message(), saga.getReservationId());
+        order.markFailed(event.message());
     }
 
     @Transactional
     public void onPaymentSucceeded(PaymentSucceededEvent event){
-        Orders order = orderRepository.findById(event.orderId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
+        Orders order = lockOrder(event.orderId());
+        OrderSagaState saga = findSaga(event.sagaId());
 
-        if (saga.getState() == SagaState.COMPLETED) return;
+        // TODO: 결제가 끝났는데 주문이 FAILED/EXPIRED로 끝난 경우 환불·결제 취소 보상이 필요하다
+        if(!canTransition(order, "payment-succeeded-event", Status.RESERVED, Status.PAID, Status.COMPLETED)){
+            return;
+        }
 
-        // 1. Saga 및 주문 상태 최종 완료
         saga.updateState(SagaState.PAYMENT_COMPLETED, null, saga.getReservationId());
         order.updateStatus(Status.PAID);
 
@@ -114,27 +125,23 @@ public class OrderSagaService {
 
     @Transactional
     public void onPaymentFailed(PaymentFailedEvent event){
-        Orders order = orderRepository.findById(event.orderId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
+        Orders order = lockOrder(event.orderId());
+        OrderSagaState saga = findSaga(event.sagaId());
 
-        if (saga.getState() == SagaState.FAILED) return;
+        if(!canTransition(order, "payment-failed-event", Status.RESERVED, Status.FAILED)){
+            return;
+        }
 
-        saga.updateState(SagaState.FAILED, null, saga.getReservationId());
-        order.updateStatus(Status.FAILED);
+        saga.updateState(SagaState.FAILED, event.reason(), saga.getReservationId());
+        order.markFailed(event.reason());
     }
 
     @Transactional
     public void onInventoryConfirmed(InventoryConfirmedResult event) {
-        Orders order = orderRepository.findById(event.orderId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
+        Orders order = lockOrder(event.orderId());
+        OrderSagaState saga = findSaga(event.sagaId());
 
-        if (saga.getState() == SagaState.COMPLETED) {
-            log.warn("Duplicate inventory-confirmed-event ignored. sagaId={}, orderId={}",
-                    event.sagaId(), event.orderId());
+        if(!canTransition(order, "inventory-confirm-event", Status.PAID, Status.COMPLETED)){
             return;
         }
 
@@ -147,19 +154,10 @@ public class OrderSagaService {
 
     @Transactional
     public void onInventoryConfirmFailed(InventoryConfirmFailedResult event) {
-        Orders order = orderRepository.findByIdForUpdate(event.orderId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
+        Orders order = lockOrder(event.orderId());
+        OrderSagaState saga = findSaga(event.sagaId());
 
-        if (order.getStatus() == Status.FAILED) {
-            log.info("Duplicate inventory-confirm-failed-event ignored. orderId={}, sagaId={}",
-                    event.orderId(), event.sagaId());
-            return;
-        }
-        if (order.getStatus() != Status.PAID) {
-            log.warn("inventory-confirm-failed-event ignored: order is not PAID. orderId={}, sagaId={}, status={}",
-                    event.orderId(), event.sagaId(), order.getStatus());
+        if(!canTransition(order, "inventory-confirm-failed-event", Status.PAID, Status.FAILED)){
             return;
         }
 
@@ -170,15 +168,8 @@ public class OrderSagaService {
 
     @Transactional
     public void onInventoryExpired(InventoryReservationExpiredResult event){
-        Orders order = orderRepository.findByIdForUpdate(event.orderId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
-
-        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
-
-        if(saga.getState() == SagaState.COMPLETED || saga.getState() == SagaState.FAILED || saga.getState() == SagaState.EXPIRED){
-            return;
-        }
+        Orders order = lockOrder(event.orderId());
+        OrderSagaState saga = findSaga(event.sagaId());
 
         // 결제가 끝난 주문은 확정 요청이 이미 나갔으므로, 확정 성공 또는 확정 실패 이벤트로 결과가 정해진다
         if(order.getStatus() == Status.PAID){
@@ -186,12 +177,38 @@ public class OrderSagaService {
                     event.orderId(), event.sagaId());
             return;
         }
+        if(!canTransition(order, "inventory-expired-event", Status.RESERVED, Status.EXPIRED)){
+            return;
+        }
 
         if(saga.getReservationId() != null && !saga.getReservationId().equals(event.reservationId())){
             throw new DomainException(DomainExceptionCode.INVALID_RESERVATION_ID);
         }
 
-        saga.updateState(SagaState.EXPIRED, "TTL_EXPIRED", event.reservationId());
-        order.updateStatus(Status.EXPIRED);
+        saga.updateState(SagaState.EXPIRED, TTL_EXPIRED, event.reservationId());
+        order.markExpired(TTL_EXPIRED);
+    }
+
+    private Orders lockOrder(Long orderId) {
+        return orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+    }
+
+    private OrderSagaState findSaga(UUID sagaId) {
+        return orderSagaStateRepository.findById(sagaId)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
+    }
+
+    private boolean canTransition(Orders order, String eventType, Status from, Status... alreadyApplied) {
+        Status current = order.getStatus();
+        if (current == from) {
+            return true;
+        }
+        if (Arrays.asList(alreadyApplied).contains(current)) {
+            log.info("Duplicate {} ignored. orderId={}, status={}", eventType, order.getId(), current);
+        } else {
+            log.warn("Out-of-order {} ignored. orderId={}, status={}, expected={}", eventType, order.getId(), current, from);
+        }
+        return false;
     }
 }
