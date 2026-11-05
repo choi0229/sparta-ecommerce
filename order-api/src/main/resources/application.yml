@@ -68,6 +68,11 @@ management:
     tags:
       application: ${spring.application.name}
 
+# 실제 PG 연동이 아닌 Mock 결제의 성공률(%, 0~100)
+payment:
+  mock:
+    success-rate: ${PAYMENT_MOCK_SUCCESS_RATE:100}
+
 address:
   client:
     mode: stub                      # stub | http

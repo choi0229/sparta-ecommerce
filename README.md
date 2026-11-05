@@ -113,6 +113,14 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 - 따라서 현재 구조는 Exactly-Once가 아니라 At-Least-Once 전달을 전제로 합니다. 중복 이벤트의 비즈니스 효과는 Consumer 멱등성으로 방지해야 하며, 일부 Saga 이벤트 핸들러의 중복 방어는 아직 보강 중입니다.
 - 다중 인스턴스 확장, Claim 기반 발행 구조, Stale Claim 복구는 이 구조의 범위에 포함되지 않습니다.
 
+### Mock 결제
+
+결제는 **실제 PG 연동이 아닌 Mock**입니다. 실제 결제나 환불이 일어나지 않으며, 환불·결제 취소 보상은 구현되어 있지 않습니다(코드에 TODO로 표시).
+
+- 성공 여부는 `payment.mock.success-rate`(기본 100, 0~100%)로 판정합니다. 환경 변수 `PAYMENT_MOCK_SUCCESS_RATE`로 바꿀 수 있습니다.
+- 판정 결과는 `payment_mock_result`(`order_id` PK, `amount`, `success`, `failure_reason`, `processed_at`)에 주문당 한 건만 저장합니다. 판정 기록과 결과 Outbox는 같은 트랜잭션입니다.
+- 같은 결제 요청이 다시 오면 기존 결과를 유지하고 결과 이벤트를 새로 만들지 않습니다. 동시에 처리되면 먼저 저장한 결과 하나만 남습니다.
+
 ### Kafka 재시도·DLT 정책과 미완료 주문의 알려진 제약
 
 `order-api`, `inventory-api`의 모든 리스너에 공통으로 적용됩니다.
