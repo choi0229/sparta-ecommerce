@@ -409,7 +409,7 @@ class OrderIdempotencyIntegrationTest {
     }
 
     private void assertSameResponse(MvcResult first, MvcResult second) throws Exception {
-        assertThat(first.getResponse().getStatus()).isBetween(200, 299);
+        assertThat(first.getResponse().getStatus()).isEqualTo(202);
         assertThat(second.getResponse().getStatus()).isEqualTo(first.getResponse().getStatus());
         assertThat(second.getResponse().getContentAsString()).isEqualTo(first.getResponse().getContentAsString());
     }

@@ -1,6 +1,7 @@
 package org.teamsparta.orderapi.domain.order.controller;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.teamsparta.orderapi.domain.order.dto.request.CreateOrderRequest;
 import org.teamsparta.orderapi.domain.order.dto.response.AcceptedOrderResponse;
@@ -17,6 +18,7 @@ public class OrderController {
     private final OrderService orderService;
 
     @PostMapping
+    @ResponseStatus(HttpStatus.ACCEPTED)
     public ApiResponse<AcceptedOrderResponse> createOrder(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody CreateOrderRequest request){

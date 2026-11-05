@@ -17,7 +17,7 @@
 #
 # 성공 조건:
 #   [4/7] POST /addresses(userId=9001) → 주소 생성 성공, addressId 추출
-#   [5/7] POST /api/orders(userId=9001, addressId=<생성된 ID>) → status=CREATED, shipmentStatus=READY
+#   [5/7] POST /api/orders(userId=9001, addressId=<생성된 ID>) → status=PROCESSING|SUCCEEDED, shipmentStatus=READY
 #   [6/7] POST /api/orders(userId=9002, 같은 addressId) → HTTP 404 ADDRESS_NOT_FOUND (소유자 불일치)
 #   [7/7] DELETE /addresses/{id} → 204, GET → 404, POST /api/orders → HTTP 404 + ADDRESS_NOT_FOUND
 #
@@ -303,12 +303,12 @@ while true; do
   SHIPMENT=$(extract "${STATUS_RESP}" "shipmentStatus")
   echo "[${elapsed}s] status=${STATUS:-null}  shipmentStatus=${SHIPMENT:-null}"
 
-  if [[ "${STATUS}" == "CREATED" && "${SHIPMENT}" == "READY" ]]; then
+  if [[ "${STATUS}" =~ ^(PROCESSING|SUCCEEDED)$ && "${SHIPMENT}" == "READY" ]]; then
     break
   fi
 
   if [[ ${elapsed} -ge ${MAX_WAIT_SECONDS} ]]; then
-    echo "[FAIL] ${MAX_WAIT_SECONDS}초 안에 status=CREATED, shipmentStatus=READY 에 도달하지 못했습니다."
+    echo "[FAIL] ${MAX_WAIT_SECONDS}초 안에 status=PROCESSING|SUCCEEDED, shipmentStatus=READY 에 도달하지 못했습니다."
     echo "       최종 응답: ${STATUS_RESP}"
     echo ""
     echo "=== [진단] 클러스터 pod 상태 ==="
@@ -329,7 +329,7 @@ while true; do
   elapsed=$((elapsed + POLL_INTERVAL))
 done
 
-echo "[OK] userId=${SMOKE_USER_ID}, addressId=${CREATED_ADDRESS_ID} → status=CREATED, shipmentStatus=READY"
+echo "[OK] userId=${SMOKE_USER_ID}, addressId=${CREATED_ADDRESS_ID} → status=PROCESSING|SUCCEEDED, shipmentStatus=READY"
 
 # ── 6단계: 소유자 불일치 → ADDRESS_NOT_FOUND 차단 검증 ────────────────────────
 echo ""
@@ -412,7 +412,7 @@ RUN_FAILED=false
 echo ""
 echo "=== real address-api smoke test 결과 ==="
 echo "[PASS] [4/7] POST /addresses(userId=${SMOKE_USER_ID}) → addressId=${CREATED_ADDRESS_ID} 생성"
-echo "[PASS] [5/7] userId=${SMOKE_USER_ID}, addressId=${CREATED_ADDRESS_ID} → status=CREATED, shipmentStatus=READY"
+echo "[PASS] [5/7] userId=${SMOKE_USER_ID}, addressId=${CREATED_ADDRESS_ID} → status=PROCESSING|SUCCEEDED, shipmentStatus=READY"
 echo "[PASS] [6/7] userId=9002 + addressId=${CREATED_ADDRESS_ID} → HTTP 404 ADDRESS_NOT_FOUND (소유자 불일치)"
 echo "[PASS] [7/7] 주소 삭제 후 → HTTP 204 / GET 404 / 주문 HTTP 404 ADDRESS_NOT_FOUND"
 echo "       idemKey = ${IDEM_KEY}"

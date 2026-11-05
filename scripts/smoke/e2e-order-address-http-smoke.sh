@@ -14,7 +14,7 @@
 #   bash scripts/smoke/e2e-order-address-http-smoke.sh
 #
 # 성공 조건:
-#   [5/7] addressId=1   → status=CREATED, shipmentStatus=READY
+#   [5/7] addressId=1   → status=PROCESSING|SUCCEEDED, shipmentStatus=READY
 #   [6/7] addressId=999 → HTTP 404, errorCode=ADDRESS_NOT_FOUND
 #   [7/7] addressId=503 → HTTP 500, errorCode=ADDRESS_LOOKUP_FAILED
 #
@@ -239,12 +239,12 @@ while true; do
   SHIPMENT=$(extract "${STATUS_RESP}" "shipmentStatus")
   echo "[${elapsed}s] status=${STATUS:-null}  shipmentStatus=${SHIPMENT:-null}"
 
-  if [[ "${STATUS}" == "CREATED" && "${SHIPMENT}" == "READY" ]]; then
+  if [[ "${STATUS}" =~ ^(PROCESSING|SUCCEEDED)$ && "${SHIPMENT}" == "READY" ]]; then
     break
   fi
 
   if [[ ${elapsed} -ge ${MAX_WAIT_SECONDS} ]]; then
-    echo "[FAIL] ${MAX_WAIT_SECONDS}초 안에 status=CREATED, shipmentStatus=READY 에 도달하지 못했습니다. (Kafka 리밸런싱+product-api 처리 포함)"
+    echo "[FAIL] ${MAX_WAIT_SECONDS}초 안에 status=PROCESSING|SUCCEEDED, shipmentStatus=READY 에 도달하지 못했습니다. (Kafka 리밸런싱+product-api 처리 포함)"
     echo "       최종 응답: ${STATUS_RESP}"
     echo ""
     echo "=== [진단] 클러스터 pod 상태 ==="
@@ -265,7 +265,7 @@ while true; do
   elapsed=$((elapsed + POLL_INTERVAL))
 done
 
-echo "[OK] addressId=1 → status=CREATED, shipmentStatus=READY"
+echo "[OK] addressId=1 → status=PROCESSING|SUCCEEDED, shipmentStatus=READY"
 
 # ── 6단계: addressId=999 → ADDRESS_NOT_FOUND (HTTP 404) ───────────────────────
 echo ""
@@ -326,7 +326,7 @@ RUN_FAILED=false
 # ── 최종 결과 ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== address http mode smoke test 결과 ==="
-echo "[PASS] [5/7] addressId=1   → status=CREATED, shipmentStatus=READY"
+echo "[PASS] [5/7] addressId=1   → status=PROCESSING|SUCCEEDED, shipmentStatus=READY"
 echo "[PASS] [6/7] addressId=999 → HTTP 404, errorCode=ADDRESS_NOT_FOUND"
 echo "[PASS] [7/7] addressId=503 → HTTP 500, errorCode=ADDRESS_LOOKUP_FAILED"
 echo "       idemKey = ${IDEM_KEY}"

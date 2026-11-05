@@ -13,9 +13,9 @@
 #   bash scripts/e2e-order-shipment-smoke.sh
 #
 # 성공 조건 (1차):
-#   status == CREATED  &&  shipmentStatus == READY
+#   status == PROCESSING|SUCCEEDED  &&  shipmentStatus == READY
 # 성공 조건 (2차):
-#   status == CREATED  &&  shipmentStatus == SHIPPED
+#   status == PROCESSING|SUCCEEDED  &&  shipmentStatus == SHIPPED
 #
 # 종료 코드:
 #   0 = 성공
@@ -64,7 +64,7 @@ poll_until() {
 
     echo "[${elapsed}s] status=${STATUS:-null}  shipmentStatus=${SHIPMENT:-null}"
 
-    if [[ "$STATUS" == "$target_status" && "$SHIPMENT" == "$target_shipment" ]]; then
+    if [[ "$STATUS" =~ ^(${target_status})$ && "$SHIPMENT" == "$target_shipment" ]]; then
       return 0
     fi
 
@@ -113,11 +113,11 @@ fi
 
 echo "[OK] idemKey = ${IDEM_KEY}"
 
-# ── 2단계: 1차 polling (status=CREATED, shipmentStatus=READY) ─────────────────
+# ── 2단계: 1차 polling (status=PROCESSING|SUCCEEDED, shipmentStatus=READY) ─────────────────
 poll_until "[2/5] GET /api/orders/status/${IDEM_KEY} — 1차 목표: shipmentStatus=READY" \
-  "CREATED" "READY"
+  "PROCESSING|SUCCEEDED" "READY"
 
-echo "[OK] 1차 조건 달성: status=CREATED  shipmentStatus=READY"
+echo "[OK] 1차 조건 달성: status=PROCESSING|SUCCEEDED  shipmentStatus=READY"
 
 # ── 3단계: orderId → shipmentId 조회 ──────────────────────────────────────────
 echo ""
@@ -163,15 +163,15 @@ fi
 
 echo "[OK] logistics-api shipment status = SHIPPED"
 
-# ── 5단계: 2차 polling (status=CREATED, shipmentStatus=SHIPPED) ───────────────
+# ── 5단계: 2차 polling (status=PROCESSING|SUCCEEDED, shipmentStatus=SHIPPED) ───────────────
 poll_until "[5/5] GET /api/orders/status/${IDEM_KEY} — 2차 목표: shipmentStatus=SHIPPED" \
-  "CREATED" "SHIPPED"
+  "PROCESSING|SUCCEEDED" "SHIPPED"
 
 # ── 최종 결과 ─────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Smoke test 결과 ==="
-echo "[PASS] 1차: status=CREATED  shipmentStatus=READY"
-echo "[PASS] 2차: status=CREATED  shipmentStatus=SHIPPED"
+echo "[PASS] 1차: status=PROCESSING|SUCCEEDED  shipmentStatus=READY"
+echo "[PASS] 2차: status=PROCESSING|SUCCEEDED  shipmentStatus=SHIPPED"
 echo "       idemKey    = ${IDEM_KEY}"
 echo "       orderId    = ${ORDER_ID}"
 echo "       shipmentId = ${SHIPMENT_ID}"

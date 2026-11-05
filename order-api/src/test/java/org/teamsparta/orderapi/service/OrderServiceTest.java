@@ -6,6 +6,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.http.HttpStatus;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -76,92 +79,133 @@ public class OrderServiceTest {
 
     private static final String IDEM_KEY = "idem-key-001";
 
+    // ── 최종 주문 상태 매핑 ─────────────────────────────────────────
+
+    private IdempotencyRecord recordWithOrder(Long orderId) {
+        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, "hash");
+        record.complete(orderId);
+        return record;
+    }
+
+    private Orders orderWithStatus(Status status) {
+        Orders order = Orders.createNew("O001", 42L);
+        ReflectionTestUtils.setField(order, "id", 10L);
+        order.updateStatus(status);
+        return order;
+    }
+
     @Test
-    @DisplayName("idem 레코드 없음 — status=PENDING, shipmentStatus=null 반환")
-    void getOrderStatus_noRecord_returnsPendingWithNullShipmentStatus() {
+    @DisplayName("멱등 기록 없음 — NOT_FOUND_IDEMPOTENCY(404)")
+    void getOrderStatus_noRecord_throwsNotFound() {
         given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.empty());
 
-        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
-
-        assertThat(response.idemKey()).isEqualTo(IDEM_KEY);
-        assertThat(response.status()).isEqualTo("PENDING");
-        assertThat(response.orderId()).isNull();
-        assertThat(response.shipmentStatus()).isNull();
+        assertThatThrownBy(() -> orderService.getOrderStatus(IDEM_KEY))
+                .isInstanceOf(DomainException.class)
+                .satisfies(ex -> assertThat(((DomainException) ex).getHttpStatus()).isEqualTo(HttpStatus.NOT_FOUND));
         then(orderRepository).shouldHaveNoInteractions();
     }
 
     @Test
-    @DisplayName("order 존재 + shipmentStatus=SHIPPED — orders.status와 shipmentStatus 반환")
-    void getOrderStatus_orderExists_returnsOrderStatus() {
-        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
-        record.complete(10L);
-
-        Orders order = Orders.createNew("O001", 42L);
-        ReflectionTestUtils.setField(order, "id", 10L);
-        order.updateShipmentStatus(ShipmentStatus.SHIPPED);
-
-        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(record));
-        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
-
-        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
-
-        assertThat(response.status()).isEqualTo("CREATED");
-        assertThat(response.orderId()).isEqualTo(10L);
-        assertThat(response.shipmentStatus()).isEqualTo("SHIPPED");
+    @DisplayName("배송 이벤트 기록의 키는 주문 요청이 아니므로 404")
+    void getOrderStatus_shipmentEventKey_throwsNotFound() {
+        assertThatThrownBy(() -> orderService.getOrderStatus("shipment-event:e1"))
+                .isInstanceOf(DomainException.class)
+                .satisfies(ex -> assertThat(((DomainException) ex).getHttpStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        then(idempotencyRepository).shouldHaveNoInteractions();
     }
 
     @Test
-    @DisplayName("order 존재 + shipmentStatus 미설정 — orders.status 반환, shipmentStatus=null")
-    void getOrderStatus_orderExistsNoShipment_returnsOrderStatusNullShipment() {
-        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
-        record.complete(10L);
-
-        Orders order = Orders.createNew("O001", 42L);
-        ReflectionTestUtils.setField(order, "id", 10L);
-
-        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(record));
-        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
+    @DisplayName("멱등 기록 PENDING, 주문 없음 — PROCESSING, 주문 필드는 null")
+    void getOrderStatus_pendingRecord_returnsProcessing() {
+        given(idempotencyRepository.findById(IDEM_KEY))
+                .willReturn(Optional.of(IdempotencyRecord.start(IDEM_KEY, "hash")));
 
         OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
 
-        assertThat(response.status()).isEqualTo("CREATED");
-        assertThat(response.orderId()).isEqualTo(10L);
+        assertThat(response.idemKey()).isEqualTo(IDEM_KEY);
+        assertThat(response.status()).isEqualTo("PROCESSING");
+        assertThat(response.orderId()).isNull();
+        assertThat(response.orderNo()).isNull();
         assertThat(response.shipmentStatus()).isNull();
+        assertThat(response.failureReason()).isNull();
+        then(orderRepository).shouldHaveNoInteractions();
     }
 
     @Test
-    @DisplayName("orderId 있음 + order row 없음 — idempotency_request.status를 fallback으로 반환")
-    void getOrderStatus_orderNotFound_fallbackToIdemStatus() {
-        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
-        record.complete(10L);
-
+    @DisplayName("멱등 기록 FAILED, 주문 없음 — FAILED와 멱등 기록의 사유")
+    void getOrderStatus_failedRecord_returnsFailedWithReason() {
+        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, "hash");
+        record.fail("MISSING_SKU=[SKU-X]");
         given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(record));
+
+        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response.status()).isEqualTo("FAILED");
+        assertThat(response.failureReason()).isEqualTo("MISSING_SKU=[SKU-X]");
+        assertThat(response.orderId()).isNull();
+        assertThat(response.orderNo()).isNull();
+        then(orderRepository).shouldHaveNoInteractions();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Status.class, names = {"CREATED", "RESERVE_REQUESTED", "RESERVED", "PAID"})
+    @DisplayName("주문 진행 중 상태 — PROCESSING, orderId·orderNo 포함")
+    void getOrderStatus_orderInProgress_returnsProcessing(Status status) {
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(recordWithOrder(10L)));
+        given(orderRepository.findById(10L)).willReturn(Optional.of(orderWithStatus(status)));
+
+        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response.status()).isEqualTo("PROCESSING");
+        assertThat(response.orderId()).isEqualTo(10L);
+        assertThat(response.orderNo()).isEqualTo("O001");
+        assertThat(response.failureReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("주문 COMPLETED — SUCCEEDED, 배송 상태 유지")
+    void getOrderStatus_completedOrder_returnsSucceeded() {
+        Orders order = orderWithStatus(Status.COMPLETED);
+        order.updateShipmentStatus(ShipmentStatus.SHIPPED);
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(recordWithOrder(10L)));
+        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
+
+        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response.status()).isEqualTo("SUCCEEDED");
+        assertThat(response.orderId()).isEqualTo(10L);
+        assertThat(response.orderNo()).isEqualTo("O001");
+        assertThat(response.shipmentStatus()).isEqualTo("SHIPPED");
+        assertThat(response.failureReason()).isNull();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Status.class, names = {"FAILED", "EXPIRED", "CANCELED"})
+    @DisplayName("주문 FAILED, EXPIRED, CANCELED — FAILED와 주문의 사유")
+    void getOrderStatus_terminalFailure_returnsFailedWithOrderReason(Status status) {
+        Orders order = orderWithStatus(status);
+        ReflectionTestUtils.setField(order, "failureReason", "DECLINED");
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(recordWithOrder(10L)));
+        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
+
+        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
+
+        assertThat(response.status()).isEqualTo("FAILED");
+        assertThat(response.failureReason()).isEqualTo("DECLINED");
+        assertThat(response.orderId()).isEqualTo(10L);
+        assertThat(response.orderNo()).isEqualTo("O001");
+    }
+
+    @Test
+    @DisplayName("기록에 orderId가 있는데 주문 행이 없으면 성공으로 단정하지 않고 PROCESSING")
+    void getOrderStatus_orderRowMissing_returnsProcessing() {
+        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(recordWithOrder(10L)));
         given(orderRepository.findById(10L)).willReturn(Optional.empty());
 
         OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
 
-        assertThat(response.status()).isEqualTo("COMPLETED");
+        assertThat(response.status()).isEqualTo("PROCESSING");
         assertThat(response.orderId()).isEqualTo(10L);
-        assertThat(response.shipmentStatus()).isNull();
-    }
-
-    @Test
-    @DisplayName("orderId 세팅된 idem PENDING + order 존재 — orders.status(CREATED) 반환")
-    void getOrderStatus_pendingRecordWithOrderId_returnsOrderStatus() {
-        IdempotencyRecord record = IdempotencyRecord.start(IDEM_KEY, IDEM_KEY);
-        ReflectionTestUtils.setField(record, "orderId", 10L);
-
-        Orders order = Orders.createNew("O001", 42L);
-        ReflectionTestUtils.setField(order, "id", 10L);
-
-        given(idempotencyRepository.findById(IDEM_KEY)).willReturn(Optional.of(record));
-        given(orderRepository.findById(10L)).willReturn(Optional.of(order));
-
-        OrderStatusResponse response = orderService.getOrderStatus(IDEM_KEY);
-
-        assertThat(response.status()).isEqualTo("CREATED");
-        assertThat(response.orderId()).isEqualTo(10L);
-        assertThat(response.shipmentStatus()).isNull();
     }
 
 //

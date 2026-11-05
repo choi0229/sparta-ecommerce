@@ -79,9 +79,9 @@ Checkout
 | 검증 항목 | 기대 값 |
 |---|---|
 | POST /api/orders 응답 | `idemKey` 포함 |
-| GET /api/orders/status/:key | `status=CREATED`, `shipmentStatus=READY` (30초 이내) |
+| GET /api/orders/status/:key | `status=PROCESSING` 또는 `SUCCEEDED`, `shipmentStatus=READY` (30초 이내) |
 | PATCH /shipments/:id/status 응답 | `status=SHIPPED` |
-| GET /api/orders/status/:key (2차) | `status=CREATED`, `shipmentStatus=SHIPPED` (30초 이내) |
+| GET /api/orders/status/:key (2차) | `status=PROCESSING` 또는 `SUCCEEDED`, `shipmentStatus=SHIPPED` (30초 이내) |
 
 마지막 출력에 `[PASS]` 4줄이 모두 나오면 성공입니다.
 

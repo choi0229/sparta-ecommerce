@@ -87,6 +87,22 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 - **Transactional Outbox**: DB 상태 변경과 Outbox 레코드 저장은 같은 트랜잭션으로 원자적으로 처리합니다. Kafka 발행은 DB 트랜잭션과 원자적으로 커밋되지 않으며, 발행 후 DB 커밋에 실패하면 중복 이벤트가 발생할 수 있습니다. 현재 시스템은 At-Least-Once 전달을 전제로 합니다. 발행 실패는 최대 5회 지수 백오프로 재시도한 뒤 FAILED 상태로 전환합니다.
 - **processed event / idempotency record**: Kafka 이벤트 중복 전달 상황에서도 중복 주문, 중복 재고 처리, 중복 배송 생성이 발생하지 않도록 방어
 
+### 최종 주문 상태 API
+
+`POST /api/orders`는 접수 성공 시 `202 Accepted`를 반환하고, 클라이언트는 `GET /api/orders/status/{idemKey}`로 결과를 확인합니다. 같은 키의 재전송도 같은 `202`와 본문을 받습니다.
+
+`status`는 `PROCESSING`, `SUCCEEDED`, `FAILED`만 사용합니다. 응답 필드는 `idemKey`, `status`, `orderId`, `orderNo`, `shipmentStatus`, `failureReason`입니다. 주문이 아직 없으면 `orderId`, `orderNo`는 `null`입니다.
+
+| 조건 (위에서부터 우선) | 응답 |
+|---|---|
+| 멱등 기록 없음 | `404` |
+| 멱등 기록 `FAILED` (주문 생성 전 실패) | `FAILED` + 멱등 기록의 사유 |
+| 주문 `COMPLETED` | `SUCCEEDED` |
+| 주문 `FAILED`, `EXPIRED`, `CANCELED` | `FAILED` + 주문의 사유 |
+| 그 외 | `PROCESSING` |
+
+멱등 기록의 `COMPLETED`는 주문 생성 완료를 뜻하며 최종 성공이 아닙니다. 이 문서의 이후 내용 중 과거 동작을 설명하는 부분은 당시 상태 값을 그대로 적었습니다.
+
 ### order-api Outbox 발행 구조의 알려진 제약
 
 `order-api`의 Publisher는 하나의 트랜잭션 안에서 Outbox 행을 잠그고(`FOR UPDATE`), Kafka로 전송한 뒤, 같은 트랜잭션에서 상태를 갱신합니다. 이 구조에는 다음 제약이 있습니다.
@@ -322,7 +338,7 @@ kubectl rollout status deployment/order-api -n ecommerce --timeout=120s
 검증 완료 항목:
 - `GET /addresses/1` → `홍길동 / 서울시 강남구 테헤란로 1`
 - `GET /addresses/999` → 404
-- `order-api` http 모드에서 `addressId=1` 주문 생성 → `status=CREATED`, `shipmentStatus=READY`
+- `order-api` http 모드에서 `addressId=1` 주문 생성 → `status=PROCESSING` 또는 `SUCCEEDED`, `shipmentStatus=READY`
 - CRUD API 및 soft delete → `e2e-order-address-real-smoke.sh` 전 과정 검증 완료
 
 ### real address-api 사용자 주소 관리 서비스 확장
@@ -439,7 +455,7 @@ MVP(`GET /addresses/{id}`) 이후 사용자 주소 관리 서비스로 확장했
     ▼
 [Client]
   GET /api/orders/status/{idemKey}
-  → { status: "CREATED", shipmentStatus: "IN_TRANSIT" }
+  → { status: "PROCESSING", shipmentStatus: "IN_TRANSIT" }
 ```
 
 **배송지 snapshot 포함 주문 흐름**
@@ -797,7 +813,7 @@ scripts/claude-guardrails.sh
   - invalid SKU → `FAILED + failureReason=MISSING_SKU[...]`
 - `scripts/smoke/e2e-order-address-http-smoke.sh`
   - mock address-api 빌드/배포 → order-api http 모드 전환 → 3개 시나리오 검증 → stub 모드 복원
-  - addressId=1 → `status=CREATED, shipmentStatus=READY`
+  - addressId=1 → `status=PROCESSING` 또는 `SUCCEEDED`, `shipmentStatus=READY`
   - addressId=999 → HTTP 404, `ADDRESS_NOT_FOUND`
   - addressId=503 → HTTP 500, `ADDRESS_LOOKUP_FAILED`
 - `scripts/smoke/e2e-order-address-real-smoke.sh`
@@ -897,8 +913,8 @@ bash scripts/smoke/e2e-order-shipment-smoke.sh
 ```
 
 검증 내용:
-- 1차: `status=CREATED`, `shipmentStatus=READY`
-- 2차: `PATCH /shipments/{id}/status` 후 `status=CREATED`, `shipmentStatus=SHIPPED`
+- 1차: `status=PROCESSING` 또는 `SUCCEEDED`, `shipmentStatus=READY`
+- 2차: `PATCH /shipments/{id}/status` 후 `status=PROCESSING` 또는 `SUCCEEDED`, `shipmentStatus=SHIPPED`
 
 > **Polling timeout**: Kafka/Outbox 기반 비동기 처리로 self-hosted runner/minikube 환경에서 30초를 초과할 수 있다. `MAX_WAIT_SECONDS=60`(happy path) / `MAX_WAIT_SECONDS=30`(negative)으로 설정되어 있다. timeout 발생 시 pod 상태, order-api/logistics-api/product-api 로그가 자동 출력된다.
 
@@ -947,7 +963,7 @@ curl -X POST http://localhost:8083/api/orders \
 
 ```bash
 curl http://localhost:8083/api/orders/status/<IDEM_KEY>
-# → { "status": "CREATED", "shipmentStatus": "READY", ... }
+# → { "status": "PROCESSING", "shipmentStatus": "READY", ... }
 ```
 
 **배송지 포함 주문 생성**
@@ -1069,7 +1085,7 @@ curl -X POST http://localhost:8083/api/orders   -H "Content-Type: application/js
 
 ```bash
 curl http://localhost:8083/api/orders/status/<IDEM_KEY>
-# → { "status": "CREATED", "orderId": <ORDER_ID>, "shipmentStatus": "READY", ... }
+# → { "status": "PROCESSING", "orderId": <ORDER_ID>, "orderNo": "...", "shipmentStatus": "READY", ... }
 ```
 
 **addressId 기반 orders snapshot 확인**
@@ -1232,7 +1248,7 @@ curl -i -X POST http://localhost:8083/api/orders   -H "Content-Type: application
   }'
 
 curl http://localhost:8083/api/orders/status/<IDEM_KEY>
-# → { "status": "CREATED", "orderId": <ORDER_ID>, "shipmentStatus": "READY", ... }
+# → { "status": "PROCESSING", "orderId": <ORDER_ID>, "orderNo": "...", "shipmentStatus": "READY", ... }
 ```
 
 **mock address-api 빌드 및 배포 (address-http smoke 검증용)**
@@ -1282,7 +1298,7 @@ curl -X POST http://localhost:8083/api/orders   -H "Content-Type: application/js
   }'
 
 curl http://localhost:8083/api/orders/status/<IDEM_KEY>
-# → { "status": "CREATED", "orderId": <ORDER_ID>, "shipmentStatus": "READY", ... }
+# → { "status": "PROCESSING", "orderId": <ORDER_ID>, "orderNo": "...", "shipmentStatus": "READY", ... }
 
 kubectl exec -n ecommerce order-db-0 -- psql -U postgres -d orderdb -c "
 SELECT id, order_no, status, recipient_name, recipient_address
@@ -1321,7 +1337,7 @@ bash scripts/smoke/e2e-order-address-real-smoke.sh
 2. `order-api` 를 real http 모드로 전환 (`ADDRESS_CLIENT_BASE_URL=http://address-api-svc:8090`)
 3. `order-api`(8083) + `address-api-svc`(8090) port-forward 시작 및 readiness 대기
 4. `POST /addresses` — smoke 전용 userId=9001 주소 생성, `id` 추출
-5. `POST /api/orders` — 생성된 `addressId` 로 주문 → `status=CREATED, shipmentStatus=READY` polling
+5. `POST /api/orders` — 생성된 `addressId` 로 주문 → `status=PROCESSING` 또는 `SUCCEEDED`, `shipmentStatus=READY` polling
 6. `DELETE /addresses/{id}` → 204, `GET /addresses/{id}` → 404, 주문 재시도 → HTTP 404 `ADDRESS_NOT_FOUND` 확인
 
 실패 시에도 `trap`으로 order-api env를 복원하고 port-forward를 종료합니다. real address-api smoke는 GitHub-hosted runner에서 직접 실행할 수 없으며, minikube + address-db 가 준비된 self-hosted runner 또는 로컬 환경에서 실행합니다.

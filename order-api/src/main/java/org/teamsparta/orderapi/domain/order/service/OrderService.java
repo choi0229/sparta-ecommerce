@@ -23,6 +23,7 @@ import org.teamsparta.orderapi.domain.order.client.AddressServiceClient;
 import org.teamsparta.orderapi.domain.order.repository.*;
 import org.teamsparta.orderapi.domain.productProjection.entity.ProductProjection;
 import org.teamsparta.orderapi.domain.productProjection.repository.ProductProjectionRepository;
+import org.teamsparta.orderapi.global.enums.IdempotencyStatus;
 import org.teamsparta.orderapi.global.enums.SagaState;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
@@ -178,26 +179,37 @@ public class OrderService {
         throw new DomainException(DomainExceptionCode.SHIPPING_ADDRESS_REQUIRED);
     }
 
+    /**
+     * 클라이언트에 보여 줄 최종 상태: PROCESSING / SUCCEEDED / FAILED.
+     * 멱등 기록의 COMPLETED는 주문 생성 완료일 뿐이므로, 성공은 주문 COMPLETED로만 판단한다.
+     */
     @Transactional(readOnly = true)
     public OrderStatusResponse getOrderStatus(String idemKey) {
-        Optional<IdempotencyRecord> recordOpt = idempotencyRepository.findById(idemKey);
-        if (recordOpt.isEmpty()) {
-            return new OrderStatusResponse(idemKey, "PENDING", null, null, null);
+        if (idemKey.startsWith(SHIPMENT_EVENT_KEY_PREFIX)) {
+            throw new DomainException(DomainExceptionCode.NOT_FOUND_IDEMPOTENCY);
         }
-        IdempotencyRecord record = recordOpt.get();
-        String status = record.getStatus().name();
-        String shipmentStatus = null;
-        if (record.getOrderId() != null) {
-            Optional<Orders> orderOpt = orderRepository.findById(record.getOrderId());
-            if (orderOpt.isPresent()) {
-                Orders order = orderOpt.get();
-                status = order.getStatus().name();
-                shipmentStatus = order.getShipmentStatus() != null ? order.getShipmentStatus().name() : null;
-            } else {
-                log.warn("orderId={} found in IdempotencyRecord but Orders not found. idemKey={}", record.getOrderId(), idemKey);
-            }
+        IdempotencyRecord record = idempotencyRepository.findById(idemKey)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_IDEMPOTENCY));
+
+        if (record.getStatus() == IdempotencyStatus.FAILED) {
+            return new OrderStatusResponse(idemKey, "FAILED", record.getOrderId(), null, null, record.getFailureReason());
         }
-        return new OrderStatusResponse(record.getIdemKey(), status, record.getOrderId(), shipmentStatus, record.getFailureReason());
+        if (record.getOrderId() == null) {
+            return new OrderStatusResponse(idemKey, "PROCESSING", null, null, null, null);
+        }
+        Optional<Orders> orderOpt = orderRepository.findById(record.getOrderId());
+        if (orderOpt.isEmpty()) {
+            log.warn("orderId={} found in IdempotencyRecord but Orders not found. idemKey={}", record.getOrderId(), idemKey);
+            return new OrderStatusResponse(idemKey, "PROCESSING", record.getOrderId(), null, null, null);
+        }
+
+        Orders order = orderOpt.get();
+        String shipmentStatus = order.getShipmentStatus() != null ? order.getShipmentStatus().name() : null;
+        return switch (order.getStatus()) {
+            case COMPLETED -> new OrderStatusResponse(idemKey, "SUCCEEDED", order.getId(), order.getOrderNo(), shipmentStatus, null);
+            case FAILED, EXPIRED, CANCELED -> new OrderStatusResponse(idemKey, "FAILED", order.getId(), order.getOrderNo(), shipmentStatus, order.getFailureReason());
+            default -> new OrderStatusResponse(idemKey, "PROCESSING", order.getId(), order.getOrderNo(), shipmentStatus, null);
+        };
     }
 
 //    @Transactional
