@@ -99,6 +99,7 @@ CREATE_BODY='{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}],"shipping
 
 CREATE_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: smoke-$(date +%s)-${RANDOM}${RANDOM}" \
   -d "${CREATE_BODY}")
 
 echo "응답: ${CREATE_RESP}"

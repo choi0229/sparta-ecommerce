@@ -215,6 +215,7 @@ echo "=== [5/7] addressId=1 성공 경로 검증 ==="
 
 if ! CREATE_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: smoke-$(date +%s)-${RANDOM}${RANDOM}" \
   -d '{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}],"addressId":1}'); then
   echo "[FAIL] POST /api/orders 요청 실패 — port-forward 가 동작하지 않거나 order-api 응답 없음"
   echo "       port-forward 로그:"
@@ -273,6 +274,7 @@ echo "=== [6/7] addressId=999 → ADDRESS_NOT_FOUND 검증 ==="
 HTTP_CODE=$(curl -s -o "${RESP_TMP}" -w "%{http_code}" \
   -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: smoke-$(date +%s)-${RANDOM}${RANDOM}" \
   -d '{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}],"addressId":999}')
 
 RESP_BODY=$(cat "${RESP_TMP}")
@@ -299,6 +301,7 @@ echo "=== [7/7] addressId=503 → ADDRESS_LOOKUP_FAILED 검증 ==="
 HTTP_CODE=$(curl -s -o "${RESP_TMP}" -w "%{http_code}" \
   -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: smoke-$(date +%s)-${RANDOM}${RANDOM}" \
   -d '{"userId":1,"items":[{"sku":"SKU-TEST-001","quantity":1}],"addressId":503}')
 
 RESP_BODY=$(cat "${RESP_TMP}")

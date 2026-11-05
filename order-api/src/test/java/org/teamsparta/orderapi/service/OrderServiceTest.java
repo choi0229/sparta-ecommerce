@@ -452,6 +452,64 @@ public class OrderServiceTest {
 //        then(objectMapper).shouldHaveNoInteractions();
 //    }
 //
+    // ── hashRequest 검증 ─────────────────────────────────────────────
+
+    private CreateOrderRequest directAddressRequest(Long userId, String sku, int quantity, String address) {
+        return new CreateOrderRequest(userId, List.of(new CreateOrderRequest.Item(sku, quantity)), null,
+                new CreateOrderRequest.ShippingAddress("홍길동", address));
+    }
+
+    private String hash(CreateOrderRequest request) {
+        return ReflectionTestUtils.invokeMethod(orderService, "hashRequest", request);
+    }
+
+    @Test
+    @DisplayName("hashRequest: 동일한 입력은 항상 동일한 SHA-256 hash를 반환한다")
+    void hashRequest_sameInput_returnsSameHash() {
+        assertThat(hash(directAddressRequest(1L, "SKU-001", 2, "서울")))
+                .isEqualTo(hash(directAddressRequest(1L, "SKU-001", 2, "서울")));
+    }
+
+    @Test
+    @DisplayName("hashRequest: userId, 수량, SKU, 주소가 다르면 다른 hash를 반환한다")
+    void hashRequest_differentInput_returnsDifferentHash() {
+        String base = hash(directAddressRequest(1L, "SKU-001", 2, "서울"));
+
+        assertThat(hash(directAddressRequest(2L, "SKU-001", 2, "서울"))).isNotEqualTo(base);
+        assertThat(hash(directAddressRequest(1L, "SKU-001", 3, "서울"))).isNotEqualTo(base);
+        assertThat(hash(directAddressRequest(1L, "SKU-002", 2, "서울"))).isNotEqualTo(base);
+        assertThat(hash(directAddressRequest(1L, "SKU-001", 2, "부산"))).isNotEqualTo(base);
+    }
+
+    @Test
+    @DisplayName("hashRequest: 받는 사람과 주소의 경계만 다른 값은 다른 hash를 반환한다")
+    void hashRequest_fieldBoundaryDiffers_returnsDifferentHash() {
+        CreateOrderRequest first = new CreateOrderRequest(1L, ITEMS, null,
+                new CreateOrderRequest.ShippingAddress("ab", "c"));
+        CreateOrderRequest second = new CreateOrderRequest(1L, ITEMS, null,
+                new CreateOrderRequest.ShippingAddress("a", "bc"));
+
+        assertThat(hash(first)).isNotEqualTo(hash(second));
+    }
+
+    @Test
+    @DisplayName("hashRequest: addressId가 있으면 함께 보낸 직접 입력 주소는 해시에 영향을 주지 않는다")
+    void hashRequest_addressIdTakesPriorityOverShippingAddress() {
+        CreateOrderRequest idOnly = new CreateOrderRequest(1L, ITEMS, 7L, null);
+        CreateOrderRequest both = new CreateOrderRequest(1L, ITEMS, 7L,
+                new CreateOrderRequest.ShippingAddress("홍길동", "서울"));
+        CreateOrderRequest otherId = new CreateOrderRequest(1L, ITEMS, 8L, null);
+
+        assertThat(hash(idOnly)).isEqualTo(hash(both));
+        assertThat(hash(idOnly)).isNotEqualTo(hash(otherId));
+    }
+
+    @Test
+    @DisplayName("hashRequest: 반환값은 SHA-256 hex 형식 — 길이 64, 소문자 hex 문자만 포함")
+    void hashRequest_returnsSha256HexFormat() {
+        assertThat(hash(directAddressRequest(1L, "SKU-001", 3, "서울"))).hasSize(64).matches("[0-9a-f]+");
+    }
+
     // ── 배송지 해소(resolve) 테스트 ─────────────────────────────────
 
     private static final List<CreateOrderRequest.Item> ITEMS =
@@ -469,7 +527,7 @@ public class OrderServiceTest {
         orderService.createOrder(request, IDEM_KEY);
 
         then(addressServiceClient).shouldHaveNoInteractions();
-        then(outboxEventRepository).should(times(1)).save(any());
+        then(orderTransactionalService).should(times(1)).acceptOrder(eq(IDEM_KEY), any(), eq("{}"));
     }
 
     @Test
@@ -483,7 +541,7 @@ public class OrderServiceTest {
         orderService.createOrder(request, IDEM_KEY);
 
         then(addressServiceClient).should(times(1)).findById(1L, 1L);
-        then(outboxEventRepository).should(times(1)).save(any());
+        then(orderTransactionalService).should(times(1)).acceptOrder(eq(IDEM_KEY), any(), eq("{}"));
     }
 
     @Test
@@ -500,7 +558,7 @@ public class OrderServiceTest {
         orderService.createOrder(request, IDEM_KEY);
 
         then(addressServiceClient).should(times(1)).findById(2L, 1L);
-        then(outboxEventRepository).should(times(1)).save(any());
+        then(orderTransactionalService).should(times(1)).acceptOrder(eq(IDEM_KEY), any(), eq("{}"));
     }
 
     @Test
@@ -513,7 +571,7 @@ public class OrderServiceTest {
                 .hasMessageContaining(DomainExceptionCode.SHIPPING_ADDRESS_REQUIRED.getMessage());
 
         then(addressServiceClient).shouldHaveNoInteractions();
-        then(outboxEventRepository).shouldHaveNoInteractions();
+        then(orderTransactionalService).shouldHaveNoInteractions();
     }
 
     @Test
@@ -527,7 +585,7 @@ public class OrderServiceTest {
                 .isInstanceOf(DomainException.class)
                 .hasMessageContaining(DomainExceptionCode.ADDRESS_NOT_FOUND.getMessage());
 
-        then(outboxEventRepository).shouldHaveNoInteractions();
+        then(orderTransactionalService).shouldHaveNoInteractions();
     }
 
     @Test
@@ -541,7 +599,7 @@ public class OrderServiceTest {
                 .isInstanceOf(DomainException.class)
                 .hasMessageContaining(DomainExceptionCode.ADDRESS_NOT_FOUND.getMessage());
 
-        then(outboxEventRepository).shouldHaveNoInteractions();
+        then(orderTransactionalService).shouldHaveNoInteractions();
     }
 
 //    @Test

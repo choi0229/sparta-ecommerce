@@ -31,7 +31,8 @@ public enum DomainExceptionCode {
     PRODUCT_INACTIVE(HttpStatus.BAD_REQUEST, "주문 할 수 없는 상품입니다."),
     NOT_FOUND_ORDER(HttpStatus.NOT_FOUND, "주문을 찾을 수 없습니다."),
 
-    IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST(HttpStatus.BAD_REQUEST, "동일한 멱등키에 대해 다른 요청 내용이 감지되었습니다."),
+    INVALID_IDEMPOTENCY_KEY(HttpStatus.BAD_REQUEST, "Idempotency-Key 헤더가 없거나 유효하지 않습니다."),
+    IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST(HttpStatus.CONFLICT, "동일한 멱등키에 대해 다른 요청 내용이 감지되었습니다."),
     IDEMPOTENCY_IN_PROGRESS(HttpStatus.CONFLICT, "동일한 요청이 현재 처리 중입니다."),
     EVENT_PUBLISH_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "kafka 이벤트 발행과정에서 오류가 발생했습니다."),
     NOT_FOUND_SAGA(HttpStatus.NOT_FOUND, "SAGA를 찾을 수 없습니다."),

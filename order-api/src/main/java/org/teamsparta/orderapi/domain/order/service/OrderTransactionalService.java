@@ -9,7 +9,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.teamsparta.orderapi.domain.order.dto.request.CreateOrderRequest;
-import org.teamsparta.orderapi.domain.order.dto.response.CreateOrderResponse;
 import org.teamsparta.orderapi.domain.order.entity.*;
 import org.teamsparta.orderapi.domain.order.event.OrderCreatedEvent;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
@@ -19,14 +18,12 @@ import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult
 import org.teamsparta.orderapi.domain.order.repository.*;
 import org.teamsparta.orderapi.domain.productProjection.entity.ProductProjection;
 import org.teamsparta.orderapi.domain.productProjection.repository.ProductProjectionRepository;
+import org.teamsparta.orderapi.global.enums.IdempotencyStatus;
 import org.teamsparta.orderapi.global.enums.SagaState;
 import org.teamsparta.orderapi.global.exception.DomainException;
 import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -50,21 +47,26 @@ public class OrderTransactionalService {
     private final ProductSnapshotPendingStore productSnapshotPendingStore;
     private final KafkaTemplate<String, String> kafkaTemplate;
 
+    /** 멱등 기록과 주문 접수 Outbox를 같은 트랜잭션에 저장한다. 같은 키가 이미 있으면 함께 롤백된다. */
     @Transactional
-    public CreateOrderResponse createOrderInternal(ProductSnapshotReplyResult result, String idemKey) {
+    public void acceptOrder(String idemKey, String requestHash, String snapshotRequestPayload) {
+        idempotencyService.start(idemKey, requestHash);
+        outboxEventRepository.save(OutboxEvent.pending("Orders", UUID.randomUUID().toString(), "productSnapshot-requested-event", snapshotRequestPayload));
+    }
+
+    @Transactional
+    public void createOrderInternal(ProductSnapshotReplyResult result, String idemKey) {
         Map<String, ProductSnapshotItem> bySku = result.items().stream()
                 .collect(Collectors.toMap(ProductSnapshotItem::sku, it -> it));
         List<String> skus = result.requestItem().stream()
                 .map(ProductSnapshotReplyResult.Item::sku)
                 .toList();
 
-        String requestHash = hashRequest(result);
-        IdempotencyRecord idemRecord = idempotencyService.startOrThrow(idemKey, requestHash);
+        IdempotencyRecord idemRecord = idempotencyService.getForUpdate(idemKey);
 
-        if("COMPLETED".equals(idemRecord.getStatus().name()) && idemRecord.getOrderId() != null){
-            Orders existing = orderRepository.findById(idemRecord.getOrderId())
-                    .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
-            return new CreateOrderResponse(existing.getId(), existing.getOrderNo(), existing.getStatus());
+        if(idemRecord.getStatus() != IdempotencyStatus.PENDING){
+            log.info("Duplicate product snapshot reply ignored. idemKey={}, status={}", idemKey, idemRecord.getStatus());
+            return;
         }
 
         List<String> missing = skus.stream()
@@ -125,33 +127,12 @@ public class OrderTransactionalService {
         }
         outboxEventRepository.save(OutboxEvent.pending("Orders", savedOrder.getId().toString(), "order-create-event", payload));
         idempotencyService.complete(idemKey, savedOrder.getId());
-
-        return new CreateOrderResponse(savedOrder.getId(), savedOrder.getOrderNo(), savedOrder.getStatus());
-
     }
 
 
     public void failOrder(String idemKey, String reason) {
         idempotencyService.fail(idemKey, reason);
         log.info("Order failed due to product snapshot failure. idemKey={}, reason={}", idemKey, reason);
-    }
-
-    private String hashRequest(ProductSnapshotReplyResult result) {
-        String raw = result.userId() + "|" + result.requestItem().stream()
-                .map(i -> i.sku() + ":" + i.quantity())
-                .sorted()
-                .collect(Collectors.joining(","));
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] bytes = digest.digest(raw.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(64);
-            for (byte b : bytes) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 algorithm not available", e);
-        }
     }
 
     private String generateOrderNo() {

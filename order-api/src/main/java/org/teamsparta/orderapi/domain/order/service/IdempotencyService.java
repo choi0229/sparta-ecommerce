@@ -2,7 +2,6 @@ package org.teamsparta.orderapi.domain.order.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,35 +18,16 @@ public class IdempotencyService {
 
     private final IdempotencyRepository idempotencyRepository;
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public IdempotencyRecord startOrThrow(String key, String requestHash) {
-        // 1) 있으면 검사
-        var existing = idempotencyRepository.findById(key).orElse(null);
-        if(existing != null){
-            // 키는 같은데 내용 다름
-            if(!existing.getRequestHash().equals(requestHash)){
-                throw new DomainException(DomainExceptionCode.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
-            }
-            // 이미 성공 요청
-            if("COMPLETED".equals(existing.getStatus())){
-                return existing;
-            }
-            // 기록은 있는데 COMPLETED가 아님
-            throw new DomainException(DomainExceptionCode.IDEMPOTENCY_IN_PROGRESS);
-        }
+    /** 호출자의 트랜잭션 안에서 기록을 바로 insert한다. 같은 키가 이미 있으면 PK 충돌로 실패한다. */
+    @Transactional
+    public void start(String key, String requestHash) {
+        idempotencyRepository.saveAndFlush(IdempotencyRecord.start(key, requestHash));
+    }
 
-        try{
-            return idempotencyRepository.save(IdempotencyRecord.start(key, requestHash));
-        }catch (DataIntegrityViolationException e){
-            var again = idempotencyRepository.findById(key).orElseThrow();
-            if(!again.getRequestHash().equals(requestHash)){
-                throw new DomainException(DomainExceptionCode.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
-            }
-            if("COMPLETED".equals(again.getStatus()) && again.getOrderId() != null){
-                return again;
-            }
-            throw new DomainException(DomainExceptionCode.IDEMPOTENCY_IN_PROGRESS);
-        }
+    /** 처리 대상 기록을 잠가 같은 키의 후속 처리를 직렬화한다. 접수 시 선기록되므로 없으면 시스템 오류다. */
+    public IdempotencyRecord getForUpdate(String key) {
+        return idempotencyRepository.findByIdForUpdate(key)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_IDEMPOTENCY));
     }
 
     public void complete(String key, Long orderId) {
@@ -58,20 +38,17 @@ public class IdempotencyService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void fail(String key, String reason) {
-        IdempotencyRecord existing = idempotencyRepository.findById(key).orElse(null);
-        if (existing != null) {
-            if (existing.getStatus() == IdempotencyStatus.FAILED) {
-                return; // 중복 이벤트 — 멱등 처리
-            }
-            if (existing.getStatus() == IdempotencyStatus.COMPLETED) {
-                log.warn("Product snapshot failure ignored: order already completed. idemKey={}", key);
-                return;
-            }
-            existing.fail(reason);
-            idempotencyRepository.save(existing);
-        } else {
-            idempotencyRepository.save(IdempotencyRecord.createFailed(key, reason));
+        IdempotencyRecord existing = idempotencyRepository.findById(key)
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_IDEMPOTENCY));
+        if (existing.getStatus() == IdempotencyStatus.FAILED) {
+            return; // 중복 이벤트 — 멱등 처리
         }
+        if (existing.getStatus() == IdempotencyStatus.COMPLETED) {
+            log.warn("Product snapshot failure ignored: order already completed. idemKey={}", key);
+            return;
+        }
+        existing.fail(reason);
+        idempotencyRepository.save(existing);
         log.info("IdempotencyRecord marked FAILED. idemKey={}, reason={}", key, reason);
     }
 }

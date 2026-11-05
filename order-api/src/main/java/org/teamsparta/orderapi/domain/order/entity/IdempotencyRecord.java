@@ -10,6 +10,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.springframework.data.domain.Persistable;
 import org.teamsparta.orderapi.global.enums.IdempotencyStatus;
 
 import java.time.ZonedDateTime;
@@ -22,7 +23,7 @@ import java.time.ZonedDateTime;
 @FieldDefaults(level = AccessLevel.PRIVATE)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-public class IdempotencyRecord {
+public class IdempotencyRecord implements Persistable<String> {
     @Id
     @Column(name = "idem_key", length = 128)
     String idemKey;
@@ -48,6 +49,26 @@ public class IdempotencyRecord {
     @UpdateTimestamp
     ZonedDateTime updatedAt;
 
+    /** ID를 직접 지정하므로, 표시하지 않으면 save()가 merge로 동작해 기존 기록을 덮어쓴다. */
+    @Transient
+    boolean isNew = true;
+
+    @Override
+    public String getId() {
+        return idemKey;
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }
+
+    @PrePersist
+    @PostLoad
+    void markNotNew() {
+        this.isNew = false;
+    }
+
     public static IdempotencyRecord start(String idemKey, String requestHash){
         IdempotencyRecord idempotencyRecord = new IdempotencyRecord();
         idempotencyRecord.idemKey = idemKey;
@@ -56,17 +77,6 @@ public class IdempotencyRecord {
         idempotencyRecord.createdAt = ZonedDateTime.now();
         idempotencyRecord.updatedAt = ZonedDateTime.now();
         return idempotencyRecord;
-    }
-
-    public static IdempotencyRecord createFailed(String idemKey, String reason) {
-        IdempotencyRecord record = new IdempotencyRecord();
-        record.idemKey = idemKey;
-        record.requestHash = idemKey; // snapshot reply 실패 시 아직 hash가 없으므로 idemKey를 sentinel로 사용
-        record.status = IdempotencyStatus.FAILED;
-        record.failureReason = truncate(reason, 512);
-        record.createdAt = ZonedDateTime.now();
-        record.updatedAt = ZonedDateTime.now();
-        return record;
     }
 
     public void complete(Long orderId) {

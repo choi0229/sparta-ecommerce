@@ -281,6 +281,7 @@ echo "=== [5/7] 주문 생성 및 상태 조회 (userId=${SMOKE_USER_ID}, addres
 
 if ! CREATE_ORDER_RESP=$(curl -s -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: smoke-$(date +%s)-${RANDOM}${RANDOM}" \
   -d "{\"userId\":${SMOKE_USER_ID},\"items\":[{\"sku\":\"SKU-TEST-001\",\"quantity\":1}],\"addressId\":${CREATED_ADDRESS_ID}}"); then
   echo "[FAIL] POST /api/orders 요청 실패 — port-forward 가 동작하지 않거나 order-api 응답 없음"
   exit 1
@@ -337,6 +338,7 @@ echo "=== [6/7] 소유자 불일치 검증 (userId=9002, addressId=${CREATED_ADD
 HTTP_CODE=$(curl -s -o "${RESP_TMP}" -w "%{http_code}" \
   -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: smoke-$(date +%s)-${RANDOM}${RANDOM}" \
   -d "{\"userId\":9002,\"items\":[{\"sku\":\"SKU-TEST-001\",\"quantity\":1}],\"addressId\":${CREATED_ADDRESS_ID}}")
 
 RESP_BODY=$(cat "${RESP_TMP}")
@@ -384,6 +386,7 @@ echo "[OK] GET /addresses/${CREATED_ADDRESS_ID} (삭제 후) → HTTP 404"
 HTTP_CODE=$(curl -s -o "${RESP_TMP}" -w "%{http_code}" \
   -X POST "${ORDER_API}/api/orders" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: smoke-$(date +%s)-${RANDOM}${RANDOM}" \
   -d "{\"userId\":${SMOKE_USER_ID},\"items\":[{\"sku\":\"SKU-TEST-001\",\"quantity\":1}],\"addressId\":${CREATED_ADDRESS_ID}}")
 
 RESP_BODY=$(cat "${RESP_TMP}")
