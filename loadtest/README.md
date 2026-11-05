@@ -166,3 +166,74 @@ RUN_ID=rps10 PROFILE=constant RATE=10 DURATION=2m ./run.sh e2e
 - **`maxVUs`는 `목표 RPS × (15초 + 여유 5초)`입니다.** 주문마다 VU가 최종 상태까지 점유되므로, 처리가 늦어질수록 필요한 VU가 늘어납니다. 그래도 `dropped_iterations`가 발생하면 부하 발생기나 서버가 한계입니다.
 - **코드상 Outbox 처리 상한:** order-api Publisher는 500ms마다 최대 50건을 순차 발행하므로 최대 약 100건/초입니다. 성공 주문 1건당 5건을 발행해 약 20주문/초가 상한입니다(계산값이며 측정값이 아닙니다). 이를 넘는 구간에서는 적체와 `orders_timeout` 증가가 예상됩니다.
 - 결과 보고 형식: 접수 건수, 최종 성공·실패·타임아웃 건수, E2E p50/p95/p99, `dropped_iterations`, 정합성 검증 결과.
+
+# DB 정합성 검증
+
+주문 DB와 재고 DB가 분리되어 있어 각각 검증하고, `verify.sh`가 결과를 합칩니다. 이번 테스트의 주문은 멱등키 접두사(`<RUN_ID>-`)로 식별합니다. 검증 스크립트는 데이터를 변경하지 않으며, 세션 임시 객체만 사용합니다.
+
+## 실행 순서
+
+`docker compose` 프로젝트 디렉터리에서 실행하는 것을 기본으로 합니다. 다른 환경이면 `ORDER_PSQL`, `INVENTORY_PSQL`, `PRODUCT_PSQL`, `KAFKA_GROUPS` 환경 변수로 명령을 바꿉니다.
+
+```bash
+# 1. 측정 전: SKU별 재고 스냅샷 저장 (inventorydb에 loadtest_stock_snapshot 테이블을 만듭니다)
+docker compose exec -T inventory-db psql -U root -d inventorydb \
+  -v run_id=rps10 -v skus='LOADTEST-SKU-A,LOADTEST-SKU-B' < loadtest/sql/before.sql
+
+# 2. 측정 중: 다른 터미널에서 Outbox 적체와 컨슈머 지연 기록
+INTERVAL=5 ./loadtest/outbox-watch.sh > loadtest/results/rps10-outbox.csv
+
+# 3. 부하 실행
+(cd loadtest/k6 && RUN_ID=rps10 PROFILE=constant RATE=10 DURATION=2m ./run.sh e2e)
+
+# 4. 모든 주문이 끝난 뒤 검증. 종료 코드 2(WAIT)면 잠시 후 다시 실행
+./loadtest/verify.sh rps10
+```
+
+## 판정
+
+| 판정 | 뜻 | 종료 코드 |
+|---|---|---|
+| `PASS` | 항목 통과 | 전체 통과 시 0 |
+| `FAIL` | 정합성 위반. 원인을 확인할 때까지 수치를 신뢰하지 않습니다 | 1 |
+| `WAIT` | 처리 중인 주문이나 Outbox 적체가 남아 있어 판단 보류 | 2 |
+| `INFO` | 참고 집계 | 영향 없음 |
+
+## 검사 항목
+
+| 항목 | 내용 |
+|---|---|
+| `stock.total_conservation.<sku>` | 초기 total = 현재 total + 이번 테스트의 확정 수량 |
+| `stock.reserved_conservation.<sku>` | 현재 reserved = 초기 reserved + 이번 테스트에서 남은 `RESERVED` 수량 |
+| `stock.invariant_total_ge_reserved_ge_0` | total ≥ reserved ≥ 0 |
+| `reservation.completed_order_not_confirmed` | SUCCEEDED(주문 `COMPLETED`) 주문의 예약이 `CONFIRMED`인지 |
+| `reservation.confirmed_but_order_failed` | 재고가 확정됐는데 주문이 실패로 끝난 건 |
+| `order.duplicate_order_no` | 주문번호 중복 |
+| `order.order_shared_by_keys` | 한 주문을 여러 멱등키가 가리키는 건. `idem_key`가 PK라 키 중복은 원래 불가능하므로 이 방향으로 검사합니다 |
+| `order.orphan_orders` | 테스트 시간대의 주문 중 고객 멱등 기록이 없는 건. `shipment-event:` 기록은 제외합니다 |
+| `order.failed_request_without_reason`, `order.failed_order_without_reason` | 실패 사유 누락 |
+| `order.saga_mismatch` | 주문과 Saga 상태 불일치 |
+| `order.amount_mismatch`, `order.payment_amount_mismatch` | 주문 총액과 항목 합계, 결제 금액 불일치 |
+| `order.completed_without_payment_success`, `order.declined_but_progressed` | 결제 결과와 주문 상태 불일치 |
+| `*.outbox_failed`, `*.outbox_backlog` | 재시도를 소진한 Outbox 행(`FAIL`), 미발행 적체(`WAIT`) |
+
+## 결과 해석과 주의사항
+
+- **`reservation.pending_ttl`은 위반이 아닙니다.** 결제 실패 주문은 예약 해제 보상이 없어 TTL(30분)이 지날 때까지 `RESERVED`로 남고 재고를 점유합니다. 그래서 결제 90% 시나리오에서는 reserved가 0으로 돌아오지 않으며, 재고 보존 검사는 남은 `RESERVED` 수량을 반영해 판단합니다. TTL이 지난 뒤 다시 실행하면 `EXPIRED`로 바뀌고 reserved가 줄어듭니다.
+- **`reservation.expired_not_released`가 `WAIT`**이면 만료 스케줄러가 아직 처리하지 않은 건입니다. 계속 남으면 inventory-api 만료 작업을 확인합니다.
+- **같은 SKU에 다른 주문이 섞이면 재고 보존 검사가 `FAIL`이 될 수 있습니다.** 측정 중에는 다른 트래픽을 넣지 말고, 실행마다 새 `RUN_ID`를 씁니다. 이전 실행의 `RESERVED` 예약이 측정 중에 만료되어도 reserved가 달라지므로, 앞선 실행의 예약이 남아 있으면 TTL이 지난 뒤 측정하거나 SKU를 분리합니다.
+- **`order.orphan_orders`도 시간대 기준이라** 다른 트래픽이 있으면 오탐할 수 있습니다.
+- **`FAIL`이 나오면** 그 주문의 Outbox 행, `<토픽>.DLT` 레코드, 서비스 로그 순서로 확인합니다.
+
+## Outbox 처리량·적체 확인
+
+| 방법 | 확인 내용 |
+|---|---|
+| `outbox-watch.sh` | 서비스별 `pending`, `processing`, `sent`, `failed`, `consumer_lag` 추이를 CSV로 기록. `pending`이 계속 늘면 Publisher가 병목, `consumer_lag`가 늘면 Consumer가 병목입니다 |
+| `sql/outbox-throughput.sql` | 각 서비스 DB에서 초당 발행량과 발행 지연(`sent_at - created_at`) 조회. 예: `psql -v since="'2026-01-01 00:00:00+09'" -f outbox-throughput.sql` |
+| Prometheus | `order_outbox_events{status}`, `inventory_outbox_events{status}`, `order_outbox_publish_total`, `inventory_outbox_publish_total`. product-api에는 이 메트릭이 없어 위 SQL로 확인합니다 |
+
+## 부하 테스트 본문과 VU 설정
+
+요청 본문에는 현재 API가 요구하는 `shippingAddress`가 포함됩니다. 폴링으로 VU 점유 시간이 길어지므로 `maxVUs`는 `목표 RPS × (15초 + 여유 5초)`이고, `dropped_iterations`가 0보다 크면 threshold 실패입니다. E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.
+

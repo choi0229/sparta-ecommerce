@@ -115,7 +115,7 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 
 ### 주문 E2E 부하 테스트
 
-`loadtest/k6/scripts/create-order-e2e.js`로 접수 성공, 최종 성공·실패, 관측 타임아웃을 구분해 측정합니다. **E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.** 실행과 결과 해석은 [`loadtest/README.md`](loadtest/README.md)를 참고하세요.
+`loadtest/k6/scripts/create-order-e2e.js`로 접수 성공, 최종 성공·실패, 관측 타임아웃을 구분해 측정합니다. **E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.** 테스트 후 `loadtest/verify.sh <RUN_ID>`로 주문 DB와 재고 DB의 정합성을 검증합니다. 실행과 결과 해석은 [`loadtest/README.md`](loadtest/README.md)를 참고하세요.
 
 ### Mock 결제
 
