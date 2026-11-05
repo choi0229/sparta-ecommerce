@@ -15,9 +15,9 @@ import java.time.Duration;
 /**
  * Outbox 상태 전이(SENT / FAILED)를 담당하는 Bean.
  *
- * <p>OutboxPublisherJob과 분리된 이유:
- * Spring AOP 프록시는 같은 Bean 내부에서 this.method()로 호출되는 경우 트랜잭션 어노테이션을
- * 적용하지 않는다. 이 Bean으로 분리하면 REQUIRES_NEW 트랜잭션이 실제로 동작한다.
+ * <p>REQUIRED로 Publisher 트랜잭션에 합류한다. Publisher가 FOR UPDATE로 행을 잠근 상태에서
+ * REQUIRES_NEW로 같은 행을 수정하면, 내부 트랜잭션은 바깥의 잠금 해제를 기다리고 바깥은 내부 종료를
+ * 기다려 Publisher가 끝나지 않는다. DB는 이를 교착으로 감지하지 못한다.
  */
 @Component
 @RequiredArgsConstructor
@@ -29,7 +29,7 @@ public class OutboxStatusUpdater {
 
     private final OutboxEventRepository outboxEventRepository;
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(propagation = Propagation.REQUIRED)
     public void markSent(Long id) {
         OutboxEvent event = outboxEventRepository.findById(id)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
@@ -37,7 +37,7 @@ public class OutboxStatusUpdater {
         outboxEventRepository.save(event);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(propagation = Propagation.REQUIRED)
     public void markFailed(Long id) {
         OutboxEvent event = outboxEventRepository.findById(id)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
