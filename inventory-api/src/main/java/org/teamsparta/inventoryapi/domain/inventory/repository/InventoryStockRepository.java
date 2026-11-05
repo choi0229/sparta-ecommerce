@@ -11,7 +11,7 @@ import java.util.List;
 
 public interface InventoryStockRepository extends JpaRepository<InventoryStock, String> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select s from InventoryStock s where s.sku in :skus")
+    @Query("select s from InventoryStock s where s.sku in :skus order by s.sku")
     List<InventoryStock> findAllSkuInForUpdate(@Param("skus") List<String> skus);
 
 

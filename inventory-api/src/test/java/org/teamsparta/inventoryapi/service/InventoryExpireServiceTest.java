@@ -71,6 +71,7 @@ public class InventoryExpireServiceTest {
 
         // then
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.EXPIRED);
+        assertThat(stock.getTotalQuantity()).isEqualTo(10);
         assertThat(stock.getReservedQuantity()).isEqualTo(0);
 
         // Outbox 이벤트 발행 확인

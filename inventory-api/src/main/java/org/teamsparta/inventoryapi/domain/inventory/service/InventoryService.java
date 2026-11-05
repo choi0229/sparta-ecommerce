@@ -162,12 +162,17 @@ public class InventoryService {
 
     @Transactional
     public void onInventoryConfirmed(OrderConfirmResult event){
-        // 1. 예약 정보 조회 (이미 확정되었는지 확인하여 멱등성 보장)
-        InventoryReservation reservation = inventoryReservationRepository.findById(event.reservationId())
+        // 1. 예약 행을 잠가 만료 처리와 직렬화한다 (예약 → 재고 순서로 잠금, expireOne과 동일)
+        InventoryReservation reservation = inventoryReservationRepository.findByIdForUpdate(event.reservationId())
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.RESERVATION_NOT_FOUND));
 
         if (reservation.getStatus() == ReservationStatus.CONFIRMED) {
             log.info("Idempotent: Reservation already confirmed. reservationId={}", event.reservationId());
+            return;
+        }
+        if (reservation.getStatus() != ReservationStatus.RESERVED) {
+            log.warn("Reservation cannot be confirmed. reservationId={}, orderId={}, status={}",
+                    event.reservationId(), event.orderId(), reservation.getStatus());
             return;
         }
 
@@ -179,7 +184,10 @@ public class InventoryService {
 
         for (InventoryReservationItem item : items) {
             InventoryStock stock = stockMap.get(item.getSku());
-            stock.decreaseReserved(item.getQuantity());
+            if (stock == null) {
+                throw new DomainException(DomainExceptionCode.STOCK_NOT_FOUND);
+            }
+            stock.confirm(item.getQuantity());
         }
 
         // 3. 예약 상태 변경 및 결과 이벤트 발행

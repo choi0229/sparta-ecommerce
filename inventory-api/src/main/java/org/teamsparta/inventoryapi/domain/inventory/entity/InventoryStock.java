@@ -44,11 +44,31 @@ public class InventoryStock {
         this.reservedQuantity += quantity;
     }
 
-    public void decreaseReserved(Integer quantity) {
-        if (this.reservedQuantity < quantity) {
+    /** 예약분을 확정한다. 실제 재고에서 빠지므로 total과 reserved가 함께 줄어든다. */
+    public void confirm(Integer quantity) {
+        validateReservedDecrease(quantity);
+        validateInvariant(totalQuantity - quantity, reservedQuantity - quantity);
+        this.totalQuantity -= quantity;
+        this.reservedQuantity -= quantity;
+    }
+
+    /** 예약분을 해제한다. 실제 재고는 그대로이므로 reserved만 줄어든다. */
+    public void release(Integer quantity) {
+        validateReservedDecrease(quantity);
+        validateInvariant(totalQuantity, reservedQuantity - quantity);
+        this.reservedQuantity -= quantity;
+    }
+
+    private void validateReservedDecrease(Integer quantity) {
+        if (quantity == null || quantity <= 0 || reservedQuantity < quantity) {
             throw new DomainException(DomainExceptionCode.INVALID_QUANTITY);
         }
-        this.reservedQuantity -= quantity;
+    }
+
+    private void validateInvariant(int totalAfter, int reservedAfter) {
+        if (totalAfter < reservedAfter || reservedAfter < 0) {
+            throw new DomainException(DomainExceptionCode.INVALID_QUANTITY);
+        }
     }
 
     @Builder

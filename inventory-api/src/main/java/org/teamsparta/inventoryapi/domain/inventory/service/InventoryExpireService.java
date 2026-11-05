@@ -60,7 +60,7 @@ public class InventoryExpireService {
             if(stock == null){
                 throw new DomainException(DomainExceptionCode.STOCK_NOT_FOUND);
             }
-            stock.decreaseReserved(item.getQuantity());
+            stock.release(item.getQuantity());
         }
 
         reservation.updateStatus(ReservationStatus.EXPIRED);

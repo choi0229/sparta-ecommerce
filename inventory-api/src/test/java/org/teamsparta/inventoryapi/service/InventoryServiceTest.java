@@ -206,7 +206,7 @@ public class InventoryServiceTest {
     }
 
     @Test
-    @DisplayName("onInventoryConfirmed 성공 -> reserved 감소 + reservation CONFIRMED + outbox(inventory-confirm-event)")
+    @DisplayName("onInventoryConfirmed 성공 -> total·reserved 감소 + reservation CONFIRMED + outbox(inventory-confirm-event)")
     void onInventoryConfirmed_success() throws Exception {
         // given
         UUID sagaId = UUID.randomUUID();
@@ -222,7 +222,7 @@ public class InventoryServiceTest {
         );
         ReflectionTestUtils.setField(reservation, "id", reservationId);
 
-        given(inventoryReservationRepository.findById(reservationId)).willReturn(Optional.of(reservation));
+        given(inventoryReservationRepository.findByIdForUpdate(reservationId)).willReturn(Optional.of(reservation));
 
         InventoryReservationItem item = InventoryReservationItem.create(reservationId, SKU, 2);
         given(inventoryReservationItemRepository.findAllByReservationId(reservationId)).willReturn(List.of(item));
@@ -240,7 +240,8 @@ public class InventoryServiceTest {
 
         // then
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
-        // reserved 감소 검증 (2 -> 0)
+        // 확정분이 실제 재고에서 빠졌는지 검증 (total 10 -> 8, reserved 2 -> 0)
+        assertThat(stock.getTotalQuantity()).isEqualTo(8);
         assertThat(stock.getReservedQuantity()).isEqualTo(0);
 
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
