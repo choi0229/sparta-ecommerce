@@ -1,0 +1,9 @@
+# 부하 테스트용 프로필: 로그 출력 비용이 측정값을 왜곡하지 않도록 SQL·DEBUG 로그를 끈다.
+spring:
+  jpa:
+    show-sql: false
+
+logging:
+  level:
+    org.springframework.kafka: INFO
+    org.springframework.transaction: INFO
