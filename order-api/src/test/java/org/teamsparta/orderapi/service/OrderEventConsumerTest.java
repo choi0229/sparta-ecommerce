@@ -1,5 +1,6 @@
 package org.teamsparta.orderapi.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -16,6 +17,7 @@ import org.teamsparta.orderapi.domain.order.service.OrderTransactionalService;
 import org.teamsparta.orderapi.domain.order.service.ProductSnapshotPendingStore;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.times;
@@ -39,7 +41,7 @@ class OrderEventConsumerTest {
 
     @Test
     @DisplayName("success=false인 응답 수신 시 failOrder()가 idemKey와 error message로 호출된다")
-    void successFalse_callsFailOrder_withErrorMessage() {
+    void successFalse_callsFailOrder_withErrorMessage() throws Exception {
         String message = """
                 {
                   "requestId": "00000000-0000-0000-0000-000000000001",
@@ -65,7 +67,7 @@ class OrderEventConsumerTest {
 
     @Test
     @DisplayName("success=true이고 error=null이면 createOrderInternal()이 호출되고 failOrder()는 호출되지 않는다")
-    void successTrue_callsCreateOrderInternal_notFailOrder() {
+    void successTrue_callsCreateOrderInternal_notFailOrder() throws Exception {
         String message = """
                 {
                   "requestId": "00000000-0000-0000-0000-000000000002",
@@ -88,7 +90,7 @@ class OrderEventConsumerTest {
 
     @Test
     @DisplayName("error 필드가 non-null이면 success=true여도 failOrder()가 호출된다")
-    void errorNonNull_callsFailOrder_evenIfSuccessTrue() {
+    void errorNonNull_callsFailOrder_evenIfSuccessTrue() throws Exception {
         String message = """
                 {
                   "requestId": "00000000-0000-0000-0000-000000000003",
@@ -108,9 +110,10 @@ class OrderEventConsumerTest {
     }
 
     @Test
-    @DisplayName("JSON 파싱 실패 시 failOrder()와 createOrderInternal() 모두 호출되지 않는다")
+    @DisplayName("JSON 파싱 실패 시 failOrder()와 createOrderInternal() 모두 호출되지 않고 예외가 전파된다")
     void invalidJson_callsNothing() {
-        consumer.ProductSnapshotReplyEvent("{invalid json}");
+        assertThatThrownBy(() -> consumer.ProductSnapshotReplyEvent("{invalid json}"))
+                .isInstanceOf(JsonProcessingException.class);
 
         then(orderTransactionalService).shouldHaveNoInteractions();
     }

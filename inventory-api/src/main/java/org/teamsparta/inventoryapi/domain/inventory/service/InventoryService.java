@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -41,6 +42,15 @@ public class InventoryService {
     private final InventoryEventPublisher inventoryEventPublisher;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
+
+    /** 재고 변경 전에 판별되는 예약 실패. 주문을 FAILED로 끝내야 하므로 재시도하지 않는다. */
+    private static final Set<String> RESERVE_BUSINESS_FAILURES = Set.of(
+            DomainExceptionCode.RESERVATION_ALREADY_TERMINATED.name(),
+            DomainExceptionCode.INVALID_SKU.name(),
+            DomainExceptionCode.INVALID_QUANTITY.name(),
+            DomainExceptionCode.STOCK_NOT_FOUND.name(),
+            DomainExceptionCode.OUT_OF_STOCK.name()
+    );
 
     @Transactional
     public void createInventory(VariantCreatResult request){
@@ -147,7 +157,11 @@ public class InventoryService {
             }
 
             outboxEventRepository.save(OutboxEvent.pending("Inventory", event.getOrderId().toString(), "inventory-reserved-event", payload));
-        }catch (Exception e){
+        }catch (DomainException e){
+            // 잠금 대기·DB 장애 등 시스템 예외는 여기서 잡지 않는다. 트랜잭션이 이미 중단되었을 수 있고, 재시도 대상이다.
+            if(!RESERVE_BUSINESS_FAILURES.contains(e.getCode())){
+                throw e;
+            }
             InventoryReserveFailedEvent failedEvent = InventoryReserveFailedEvent.from(request.sagaId(), request.orderId(), e.getMessage());
             // inventoryEventPublisher.publisherInventoryReservedFailed(failedEvent);
             String payload;

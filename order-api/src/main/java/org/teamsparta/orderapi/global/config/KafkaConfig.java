@@ -1,8 +1,10 @@
 package org.teamsparta.orderapi.global.config;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -12,6 +14,9 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.util.backoff.FixedBackOff;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -55,5 +60,20 @@ public class KafkaConfig {
     @Bean
     public KafkaTemplate<String, String> kafkaTemplate(){
         return new KafkaTemplate<>(producerFactory());
+    }
+
+    /**
+     * 모든 리스너에 적용되는 재시도·DLT 정책. 시스템 예외는 1초 간격 3회 재시도 후 DLT로 보내고,
+     * 재시도가 무의미한 JSON 오류는 바로 DLT로 보낸다. 비즈니스 실패는 리스너가 정상 종료하므로 여기로 오지 않는다.
+     * DLT 발행이 실패하면 오프셋을 커밋하지 않고 같은 레코드를 다시 처리한다.
+     */
+    @Bean
+    public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, String> kafkaTemplate){
+        // 파티션을 지정하지 않아 원본과 DLT의 파티션 수가 달라도 발행할 수 있다
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
+                (record, exception) -> new TopicPartition(record.topic() + ".DLT", -1));
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3L));
+        errorHandler.addNotRetryableExceptions(JsonProcessingException.class);
+        return errorHandler;
     }
 }

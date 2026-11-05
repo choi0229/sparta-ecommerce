@@ -1,5 +1,10 @@
 package org.teamsparta.inventoryapi.service;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
+import org.teamsparta.inventoryapi.global.exception.DomainException;
+import org.springframework.dao.CannotAcquireLockException;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -203,6 +208,45 @@ public class InventoryServiceTest {
         assertThat(outbox.getEventType()).isEqualTo("inventory-failed-event");
         assertThat(outbox.getAggregateId()).isEqualTo("100");
         assertThat(outbox.getPayload()).isEqualTo("{\"failed\":true}");
+    }
+
+    @Test
+    @DisplayName("reserveInventory - DB 장애는 재고 실패로 오분류하지 않고 전파하며 실패 이벤트를 저장하지 않는다")
+    void reserveInventory_systemFailure_propagatesWithoutFailedEvent() {
+        OrderCreateResult req = new OrderCreateResult(
+                UUID.randomUUID(), "order.create", 100L, UUID.randomUUID(), 1L,
+                List.of(new OrderCreateResult.Item(SKU, 1))
+        );
+        given(inventoryReservationRepository.findByOrderId(100L)).willReturn(Optional.empty());
+        given(inventoryStockRepository.findAllSkuInForUpdate(anyList()))
+                .willThrow(new CannotAcquireLockException("deadlock detected"));
+
+        assertThatThrownBy(() -> inventoryService.reserveInventory(req))
+                .isInstanceOf(CannotAcquireLockException.class);
+
+        then(outboxEventRepository).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("reserveInventory - 이벤트 직렬화 실패도 시스템 오류로 전파하며 실패 이벤트를 저장하지 않는다")
+    void reserveInventory_serializationFailure_propagatesWithoutFailedEvent() throws Exception {
+        OrderCreateResult req = new OrderCreateResult(
+                UUID.randomUUID(), "order.create", 100L, UUID.randomUUID(), 1L,
+                List.of(new OrderCreateResult.Item(SKU, 1))
+        );
+        given(inventoryReservationRepository.findByOrderId(100L)).willReturn(Optional.empty());
+        given(inventoryStockRepository.findAllSkuInForUpdate(anyList()))
+                .willReturn(List.of(InventoryStock.create(SKU, 10)));
+        given(inventoryReservationRepository.save(any())).willAnswer(invocation -> invocation.getArgument(0));
+        given(objectMapper.writeValueAsString(any(InventoryReservedEvent.class)))
+                .willThrow(new JsonProcessingException("serialization failed") { });
+
+        assertThatThrownBy(() -> inventoryService.reserveInventory(req))
+                .isInstanceOf(DomainException.class)
+                .satisfies(ex -> assertThat(((DomainException) ex).getCode())
+                        .isEqualTo(DomainExceptionCode.EVENT_PUBLISH_ERROR.name()));
+
+        then(outboxEventRepository).shouldHaveNoInteractions();
     }
 
     @Test

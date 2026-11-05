@@ -1,5 +1,6 @@
 package org.teamsparta.orderapi.domain.order.event;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,97 +23,60 @@ public class OrderEventConsumer {
     private final ProductSnapshotPendingStore productSnapshotPendingStore;
     private final OrderTransactionalService orderTransactionalService;
 
+    // 예외를 잡지 않는다. JSON 오류와 시스템 예외는 KafkaConfig의 DefaultErrorHandler가 처리한다.
+
     @KafkaListener(topics = "inventory-reserved-event", groupId = "${spring.application.name}")
-    public void InventoryReservedEvent(String message){
+    public void InventoryReservedEvent(String message) throws JsonProcessingException {
         log.info("Received inventory-reserved-event message: {}", message);
-        try{
-            InventoryReservedResult inventoryReservedResult = objectMapper.readValue(message, InventoryReservedResult.class);
-            orderSagaService.onInventoryReserved(inventoryReservedResult);
-        }catch(Exception e){
-            log.error("Error parsing inventory-reserved-event message: {}", message, e);
-        }
+        orderSagaService.onInventoryReserved(objectMapper.readValue(message, InventoryReservedResult.class));
     }
 
     @KafkaListener(topics = "inventory-failed-event", groupId = "${spring.application.name}")
-    public void InventoryReserveFailedEvent(String message){
+    public void InventoryReserveFailedEvent(String message) throws JsonProcessingException {
         log.info("Received inventory-failed-event message: {}", message);
-        try{
-            InventoryReserveFailedResult inventoryReservedResult = objectMapper.readValue(message, InventoryReserveFailedResult.class);
-            orderSagaService.onInventoryReserveFailed(inventoryReservedResult);
-        }catch(Exception e){
-            log.error("Error parsing inventory-failed-event message: {}", message, e);
-        }
+        orderSagaService.onInventoryReserveFailed(objectMapper.readValue(message, InventoryReserveFailedResult.class));
     }
 
     @KafkaListener(topics = "payment-succeeded-event", groupId = "${spring.application.name}")
-    public void PaymentRequestSucceededEvent(String message){
+    public void PaymentRequestSucceededEvent(String message) throws JsonProcessingException {
         log.info("Received payment-succeeded-event message: {}", message);
-        try{
-            PaymentSucceededEvent paymentSucceededEvent = objectMapper.readValue(message, PaymentSucceededEvent.class);
-            orderSagaService.onPaymentSucceeded(paymentSucceededEvent);
-        }catch(Exception e){
-            log.error("Error parsing payment-succeeded-event message: {}", message, e);
-        }
+        orderSagaService.onPaymentSucceeded(objectMapper.readValue(message, PaymentSucceededEvent.class));
     }
 
     @KafkaListener(topics = "payment-failed-event", groupId = "${spring.application.name}")
-    public void PaymentRequestFailedEvent(String message){
+    public void PaymentRequestFailedEvent(String message) throws JsonProcessingException {
         log.info("Received payment-failed-event message: {}", message);
-        try{
-            PaymentFailedEvent paymentFailedEvent = objectMapper.readValue(message, PaymentFailedEvent.class);
-            orderSagaService.onPaymentFailed(paymentFailedEvent);
-        }catch(Exception e){
-            log.error("Error parsing payment-succeeded-event message: {}", message, e);
-        }
+        orderSagaService.onPaymentFailed(objectMapper.readValue(message, PaymentFailedEvent.class));
     }
 
     @KafkaListener(topics = "inventory-confirm-event", groupId = "${spring.application.name}")
-    public void InventoryConfirmedEvent(String message){
+    public void InventoryConfirmedEvent(String message) throws JsonProcessingException {
         log.info("Received inventory-confirm-event message: {}", message);
-        try{
-            InventoryConfirmedResult inventoryConfirmedResult = objectMapper.readValue(message, InventoryConfirmedResult.class);
-            orderSagaService.onInventoryConfirmed(inventoryConfirmedResult);
-        }catch(Exception e){
-            log.error("Error parsing inventory-confirm-event message: {}", message, e);
-        }
+        orderSagaService.onInventoryConfirmed(objectMapper.readValue(message, InventoryConfirmedResult.class));
     }
 
     @KafkaListener(topics = "inventory-confirm-failed-event", groupId = "${spring.application.name}")
-    public void InventoryConfirmFailedEvent(String message){
+    public void InventoryConfirmFailedEvent(String message) throws JsonProcessingException {
         log.info("Received inventory-confirm-failed-event message: {}", message);
-        try{
-            InventoryConfirmFailedResult inventoryConfirmFailedResult = objectMapper.readValue(message, InventoryConfirmFailedResult.class);
-            orderSagaService.onInventoryConfirmFailed(inventoryConfirmFailedResult);
-        }catch(Exception e){
-            log.error("Error parsing inventory-confirm-failed-event message: {}", message, e);
-        }
+        orderSagaService.onInventoryConfirmFailed(objectMapper.readValue(message, InventoryConfirmFailedResult.class));
     }
 
     @KafkaListener(topics = "inventory-expired-event", groupId = "${spring.application.name}")
-    public void InventoryExpiredEvent(String message){
+    public void InventoryExpiredEvent(String message) throws JsonProcessingException {
         log.info("Received inventory-expired-event message: {}", message);
-        try{
-            InventoryReservationExpiredResult inventoryExpiredResult = objectMapper.readValue(message, InventoryReservationExpiredResult.class);
-            orderSagaService.onInventoryExpired(inventoryExpiredResult);
-        }catch(Exception e){
-            log.error("Error parsing inventory-expired-event message: {}", message, e);
-        }
+        orderSagaService.onInventoryExpired(objectMapper.readValue(message, InventoryReservationExpiredResult.class));
     }
 
     @KafkaListener(topics = "productSnapshot-reply-event", groupId = "order-api")
-    public void ProductSnapshotReplyEvent(String message){
+    public void ProductSnapshotReplyEvent(String message) throws JsonProcessingException {
         log.info("Received product-snapshot-reply-event message: {}", message);
-        try{
-            ProductSnapshotReplyResult result = objectMapper.readValue(message, ProductSnapshotReplyResult.class);
-            if (!result.success() || result.error() != null) {
-                String reason = result.error() != null ? result.error() : "Product snapshot failed";
-                log.warn("Product snapshot failed. idemKey={}, reason={}", result.idemKey(), reason);
-                orderTransactionalService.failOrder(result.idemKey(), reason);
-                return;
-            }
-            orderTransactionalService.createOrderInternal(result, result.idemKey());
-        }catch(Exception e){
-            log.error("Error processing product-snapshot-reply-event message: {}", message, e);
+        ProductSnapshotReplyResult result = objectMapper.readValue(message, ProductSnapshotReplyResult.class);
+        if (!result.success() || result.error() != null) {
+            String reason = result.error() != null ? result.error() : "Product snapshot failed";
+            log.warn("Product snapshot failed. idemKey={}, reason={}", result.idemKey(), reason);
+            orderTransactionalService.failOrder(result.idemKey(), reason);
+            return;
         }
+        orderTransactionalService.createOrderInternal(result, result.idemKey());
     }
 }
