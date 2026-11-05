@@ -173,6 +173,7 @@ public class InventoryService {
         if (reservation.getStatus() != ReservationStatus.RESERVED) {
             log.warn("Reservation cannot be confirmed. reservationId={}, orderId={}, status={}",
                     event.reservationId(), event.orderId(), reservation.getStatus());
+            saveConfirmFailedEvent(event, reservation.getStatus());
             return;
         }
 
@@ -202,5 +203,19 @@ public class InventoryService {
         }
 
         outboxEventRepository.save(OutboxEvent.pending("Inventory", inventoryConfirmedEvent.getOrderId().toString(), "inventory-confirm-event", payload));
+    }
+
+    private void saveConfirmFailedEvent(OrderConfirmResult event, ReservationStatus reservationStatus) {
+        InventoryConfirmFailedEvent failedEvent = InventoryConfirmFailedEvent.from(
+                event.orderId(), event.sagaId(), event.reservationId(), reservationStatus);
+
+        String payload;
+        try{
+            payload = objectMapper.writeValueAsString(failedEvent);
+        }catch(Exception e){
+            throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
+        }
+
+        outboxEventRepository.save(OutboxEvent.pending("Inventory", event.orderId().toString(), "inventory-confirm-failed-event", payload));
     }
 }

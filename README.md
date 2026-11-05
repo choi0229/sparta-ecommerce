@@ -79,7 +79,7 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 
 - **Idempotency**: `Idempotency-Key` 기반으로 중복 주문 및 중복 결제 요청 방어
 - **Snapshotting**: 상품명, 가격 등이 변동되어도 주문 시점의 데이터를 `jsonb` 형태로 영구 보관
-- **Transactional Outbox**: DB 커밋과 이벤트 발행의 원자성 보장. 최대 5회 지수 백오프 재시도, FAILED 상태 전환으로 유실 방지
+- **Transactional Outbox**: DB 상태 변경과 Outbox 레코드 저장은 같은 트랜잭션으로 원자적으로 처리합니다. Kafka 발행은 DB 트랜잭션과 원자적으로 커밋되지 않으며, 발행 후 DB 커밋에 실패하면 중복 이벤트가 발생할 수 있습니다. 현재 시스템은 At-Least-Once 전달을 전제로 합니다. 발행 실패는 최대 5회 지수 백오프로 재시도한 뒤 FAILED 상태로 전환합니다.
 - **processed event / idempotency record**: Kafka 이벤트 중복 전달 상황에서도 중복 주문, 중복 재고 처리, 중복 배송 생성이 발생하지 않도록 방어
 
 ### order-api Outbox 발행 구조의 알려진 제약

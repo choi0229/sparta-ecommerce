@@ -1,5 +1,7 @@
 package org.teamsparta.inventoryapi.integration;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -46,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class InventoryStockTransitionIntegrationTest extends InventoryIntegrationTestSupport {
 
     private static final AtomicLong ORDER_IDS = new AtomicLong(1000);
+    private static final String CONFIRM_FAILED = "inventory-confirm-failed-event";
 
     @Autowired
     private InventoryService inventoryService;
@@ -59,6 +62,8 @@ class InventoryStockTransitionIntegrationTest extends InventoryIntegrationTestSu
     private JdbcTemplate jdbcTemplate;
     @Autowired
     private TransactionTemplate transactionTemplate;
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @MockBean
     private KafkaTemplate<String, String> kafkaTemplate;
@@ -129,8 +134,8 @@ class InventoryStockTransitionIntegrationTest extends InventoryIntegrationTestSu
     }
 
     @Test
-    @DisplayName("이미 만료된 예약에 확정이 와도 재고가 변하지 않는다 (reserved 이중 차감 방지)")
-    void confirm_afterExpire_changesNoStock() {
+    @DisplayName("이미 만료된 예약에 확정이 오면 재고를 바꾸지 않고 확정 실패 이벤트를 Outbox에 저장한다")
+    void confirm_afterExpire_changesNoStockAndSavesFailureEvent() throws Exception {
         String sku = saveStock(10);
         InventoryReservation expired = reserve(sku, 4);
         InventoryReservation other = reserve(sku, 3);
@@ -142,6 +147,30 @@ class InventoryStockTransitionIntegrationTest extends InventoryIntegrationTestSu
         assertStock(sku, 10, 3);
         assertThat(statusOf(expired)).isEqualTo(ReservationStatus.EXPIRED);
         assertThat(statusOf(other)).isEqualTo(ReservationStatus.RESERVED);
+        assertThat(outboxCount("inventory-confirm-event", expired)).isZero();
+        assertThat(outboxCount(CONFIRM_FAILED, expired)).isEqualTo(1);
+
+        JsonNode payload = objectMapper.readTree(jdbcTemplate.queryForObject(
+                "SELECT payload FROM outbox_event WHERE event_type = ?", String.class, CONFIRM_FAILED));
+        assertThat(payload.get("orderId").asLong()).isEqualTo(expired.getOrderId());
+        assertThat(payload.get("sagaId").asText()).isEqualTo(expired.getSagaId().toString());
+        assertThat(payload.get("reservationId").asText()).isEqualTo(expired.getId().toString());
+        assertThat(payload.get("reservationStatus").asText()).isEqualTo("EXPIRED");
+        assertThat(payload.hasNonNull("eventId")).isTrue();
+    }
+
+    @Test
+    @DisplayName("만료된 예약에 확정 요청이 반복되면 재고는 그대로이고 실패 이벤트는 요청마다 저장된다")
+    void confirm_repeatedAfterExpire_savesFailureEventPerRequest() {
+        String sku = saveStock(10);
+        InventoryReservation expired = reserve(sku, 4);
+        inventoryExpireService.expireOne(expired.getId());
+
+        inventoryService.onInventoryConfirmed(confirmRequest(expired));
+        inventoryService.onInventoryConfirmed(confirmRequest(expired));
+
+        assertStock(sku, 10, 0);
+        assertThat(outboxCount(CONFIRM_FAILED, expired)).isEqualTo(2);
     }
 
     @Test
@@ -158,6 +187,7 @@ class InventoryStockTransitionIntegrationTest extends InventoryIntegrationTestSu
         assertThat(statusOf(reservation)).isEqualTo(ReservationStatus.CONFIRMED);
         assertThat(outboxCount("inventory-confirm-event", reservation)).isEqualTo(1);
         assertThat(outboxCount("inventory-expired-event", reservation)).isZero();
+        assertThat(outboxCount(CONFIRM_FAILED, reservation)).isZero();
     }
 
     @Test
@@ -174,6 +204,7 @@ class InventoryStockTransitionIntegrationTest extends InventoryIntegrationTestSu
         assertThat(statusOf(reservation)).isEqualTo(ReservationStatus.EXPIRED);
         assertThat(outboxCount("inventory-expired-event", reservation)).isEqualTo(1);
         assertThat(outboxCount("inventory-confirm-event", reservation)).isZero();
+        assertThat(outboxCount(CONFIRM_FAILED, reservation)).isEqualTo(1);
     }
 
     @RepeatedTest(20)
@@ -203,8 +234,10 @@ class InventoryStockTransitionIntegrationTest extends InventoryIntegrationTestSu
         assertThat(winner).isIn(ReservationStatus.CONFIRMED, ReservationStatus.EXPIRED);
         if (winner == ReservationStatus.CONFIRMED) {
             assertStock(sku, 7, 0);
+            assertThat(outboxCount(CONFIRM_FAILED, reservation)).isZero();
         } else {
             assertStock(sku, 10, 0);
+            assertThat(outboxCount(CONFIRM_FAILED, reservation)).isEqualTo(1);
         }
     }
 

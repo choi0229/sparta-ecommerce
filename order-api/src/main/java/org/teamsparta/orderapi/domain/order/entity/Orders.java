@@ -92,6 +92,11 @@ public class Orders {
         this.status = status;
     }
 
+    public void markFailed(String failureReason) {
+        this.status = Status.FAILED;
+        this.failureReason = failureReason;
+    }
+
     public void updateShipmentStatus(ShipmentStatus shipmentStatus) {
         this.shipmentStatus = shipmentStatus;
     }

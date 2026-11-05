@@ -77,6 +77,17 @@ public class OrderEventConsumer {
         }
     }
 
+    @KafkaListener(topics = "inventory-confirm-failed-event", groupId = "${spring.application.name}")
+    public void InventoryConfirmFailedEvent(String message){
+        log.info("Received inventory-confirm-failed-event message: {}", message);
+        try{
+            InventoryConfirmFailedResult inventoryConfirmFailedResult = objectMapper.readValue(message, InventoryConfirmFailedResult.class);
+            orderSagaService.onInventoryConfirmFailed(inventoryConfirmFailedResult);
+        }catch(Exception e){
+            log.error("Error parsing inventory-confirm-failed-event message: {}", message, e);
+        }
+    }
+
     @KafkaListener(topics = "inventory-expired-event", groupId = "${spring.application.name}")
     public void InventoryExpiredEvent(String message){
         log.info("Received inventory-expired-event message: {}", message);

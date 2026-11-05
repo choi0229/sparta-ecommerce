@@ -80,6 +80,7 @@ public class OutboxPublisherJob {
                     case "inventory-reserved-event" -> "inventory-reserved-event";
                     case "inventory-failed-event" -> "inventory-failed-event";
                     case "inventory-confirm-event" -> "inventory-confirm-event";
+                    case "inventory-confirm-failed-event" -> "inventory-confirm-failed-event";
                     case "inventory-created-event" -> "inventory-created-event";
                     case "inventory-expired-event" -> "inventory-expired-event";
                     default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);

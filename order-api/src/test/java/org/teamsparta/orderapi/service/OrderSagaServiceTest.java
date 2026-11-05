@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -14,6 +16,7 @@ import org.teamsparta.orderapi.domain.order.entity.OrderSagaState;
 import org.teamsparta.orderapi.domain.order.entity.Orders;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
 import org.teamsparta.orderapi.domain.order.event.InventoryConfirmRequestedEvent;
+import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmFailedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservationExpiredResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReserveFailedResult;
@@ -218,12 +221,13 @@ public class OrderSagaServiceTest {
     void onInventoryReservationExpired_success(){
         // given
         ReflectionTestUtils.setField(sagaState, "reservationId", RESERVATION_ID);
-        ReflectionTestUtils.setField(sagaState, "state", SagaState.PAYMENT_COMPLETED);
+        ReflectionTestUtils.setField(sagaState, "state", SagaState.PAYMENT_REQUESTED);
+        order.updateStatus(Status.RESERVED);
 
         InventoryReservationExpiredResult event = new InventoryReservationExpiredResult(
                 UUID.randomUUID(), "inventory.expired", ORDER_ID, SAGA_ID, RESERVATION_ID
         );
-        given(orderRepository.findById(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
         given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
 
         // when
@@ -234,5 +238,75 @@ public class OrderSagaServiceTest {
         assertThat(order.getStatus()).isEqualTo(Status.EXPIRED);
         assertThat(sagaState.getLastError()).isEqualTo("TTL_EXPIRED");
         verify(outboxEventRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("재고 만료 - PAID 주문은 상태를 유지하고 확정 결과를 기다린다")
+    void onInventoryReservationExpired_paidOrder_keepsPaid(){
+        // given
+        ReflectionTestUtils.setField(sagaState, "reservationId", RESERVATION_ID);
+        ReflectionTestUtils.setField(sagaState, "state", SagaState.PAYMENT_COMPLETED);
+        order.updateStatus(Status.PAID);
+
+        InventoryReservationExpiredResult event = new InventoryReservationExpiredResult(
+                UUID.randomUUID(), "inventory.expired", ORDER_ID, SAGA_ID, RESERVATION_ID
+        );
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
+
+        // when
+        orderSagaService.onInventoryExpired(event);
+
+        // then
+        assertThat(order.getStatus()).isEqualTo(Status.PAID);
+        assertThat(sagaState.getState()).isEqualTo(SagaState.PAYMENT_COMPLETED);
+        assertThat(sagaState.getLastError()).isNull();
+    }
+
+    @Test
+    @DisplayName("확정 실패 - PAID 주문은 FAILED로 전이하고 실패 사유를 저장한다")
+    void onInventoryConfirmFailed_paidOrder_movesToFailed(){
+        // given
+        ReflectionTestUtils.setField(sagaState, "reservationId", RESERVATION_ID);
+        ReflectionTestUtils.setField(sagaState, "state", SagaState.PAYMENT_COMPLETED);
+        order.updateStatus(Status.PAID);
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
+
+        // when
+        orderSagaService.onInventoryConfirmFailed(confirmFailedEvent());
+
+        // then
+        assertThat(order.getStatus()).isEqualTo(Status.FAILED);
+        assertThat(order.getFailureReason()).isEqualTo("RESERVATION_EXPIRED_AFTER_PAYMENT");
+        assertThat(sagaState.getState()).isEqualTo(SagaState.FAILED);
+        assertThat(sagaState.getLastError()).isEqualTo("RESERVATION_EXPIRED_AFTER_PAYMENT");
+        assertThat(sagaState.getReservationId()).isEqualTo(RESERVATION_ID);
+        verify(outboxEventRepository, never()).save(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Status.class, names = {"CREATED", "RESERVED", "COMPLETED", "EXPIRED", "CANCELED", "FAILED"})
+    @DisplayName("확정 실패 - PAID가 아닌 주문의 상태와 사유, saga는 바꾸지 않는다")
+    void onInventoryConfirmFailed_notPaid_changesNothing(Status status){
+        // given
+        ReflectionTestUtils.setField(sagaState, "state", SagaState.PAYMENT_REQUESTED);
+        order.updateStatus(status);
+        given(orderRepository.findByIdForUpdate(ORDER_ID)).willReturn(Optional.of(order));
+        given(orderSagaStateRepository.findById(SAGA_ID)).willReturn(Optional.of(sagaState));
+
+        // when
+        orderSagaService.onInventoryConfirmFailed(confirmFailedEvent());
+
+        // then
+        assertThat(order.getStatus()).isEqualTo(status);
+        assertThat(order.getFailureReason()).isNull();
+        assertThat(sagaState.getState()).isEqualTo(SagaState.PAYMENT_REQUESTED);
+    }
+
+    private InventoryConfirmFailedResult confirmFailedEvent(){
+        return new InventoryConfirmFailedResult(
+                UUID.randomUUID(), "inventory.confirm.failed", ORDER_ID, SAGA_ID, RESERVATION_ID, "EXPIRED"
+        );
     }
 }

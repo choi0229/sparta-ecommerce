@@ -12,6 +12,7 @@ import org.teamsparta.orderapi.domain.order.entity.Orders;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
 import org.teamsparta.orderapi.domain.order.event.InventoryConfirmRequestedEvent;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
+import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmFailedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservationExpiredResult;
 import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
@@ -37,6 +38,8 @@ public class OrderSagaService {
     private final OrderEventPublisher orderEventPublisher;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
+
+    private static final String RESERVATION_EXPIRED_AFTER_PAYMENT = "RESERVATION_EXPIRED_AFTER_PAYMENT";
 
     @Transactional
     public void onInventoryReserved(InventoryReservedResult event){
@@ -143,14 +146,44 @@ public class OrderSagaService {
     }
 
     @Transactional
+    public void onInventoryConfirmFailed(InventoryConfirmFailedResult event) {
+        Orders order = orderRepository.findByIdForUpdate(event.orderId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
+        OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
+                .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
+
+        if (order.getStatus() == Status.FAILED) {
+            log.info("Duplicate inventory-confirm-failed-event ignored. orderId={}, sagaId={}",
+                    event.orderId(), event.sagaId());
+            return;
+        }
+        if (order.getStatus() != Status.PAID) {
+            log.warn("inventory-confirm-failed-event ignored: order is not PAID. orderId={}, sagaId={}, status={}",
+                    event.orderId(), event.sagaId(), order.getStatus());
+            return;
+        }
+
+        // TODO: 결제가 끝난 주문이므로 환불·결제 취소 보상이 필요하다
+        saga.updateState(SagaState.FAILED, RESERVATION_EXPIRED_AFTER_PAYMENT, saga.getReservationId());
+        order.markFailed(RESERVATION_EXPIRED_AFTER_PAYMENT);
+    }
+
+    @Transactional
     public void onInventoryExpired(InventoryReservationExpiredResult event){
-        Orders order = orderRepository.findById(event.orderId())
+        Orders order = orderRepository.findByIdForUpdate(event.orderId())
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_ORDER));
 
         OrderSagaState saga = orderSagaStateRepository.findById(event.sagaId())
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.NOT_FOUND_SAGA));
 
         if(saga.getState() == SagaState.COMPLETED || saga.getState() == SagaState.FAILED || saga.getState() == SagaState.EXPIRED){
+            return;
+        }
+
+        // 결제가 끝난 주문은 확정 요청이 이미 나갔으므로, 확정 성공 또는 확정 실패 이벤트로 결과가 정해진다
+        if(order.getStatus() == Status.PAID){
+            log.info("inventory-expired-event ignored: waiting for confirm result. orderId={}, sagaId={}",
+                    event.orderId(), event.sagaId());
             return;
         }
 
