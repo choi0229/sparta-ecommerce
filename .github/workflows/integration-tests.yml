@@ -49,7 +49,7 @@ jobs:
 
       - name: Run service tests — ${{ matrix.service }}
         run: |
-          if [[ "${{ matrix.service }}" == "order-api" || "${{ matrix.service }}" == "logistics-api" ]]; then
+          if [[ "${{ matrix.service }}" == "order-api" || "${{ matrix.service }}" == "inventory-api" || "${{ matrix.service }}" == "logistics-api" ]]; then
             echo "[INFO] integrationTest 실행"
             ./gradlew integrationTest
           else
