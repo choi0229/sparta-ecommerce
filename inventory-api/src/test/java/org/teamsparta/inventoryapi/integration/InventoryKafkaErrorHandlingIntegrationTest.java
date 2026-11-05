@@ -126,6 +126,27 @@ class InventoryKafkaErrorHandlingIntegrationTest extends InventoryIntegrationTes
         assertThat(stock.getReservedQuantity()).isZero();
     }
 
+    @Test
+    @DisplayName("order-api가 발행하는 실제 형식(배송지 필드 포함)의 이벤트로 재고를 예약하고 DLT로 보내지 않는다")
+    void orderCreatedEventWithShippingFields_isReserved() throws Exception {
+        String sku = "SKU-" + UUID.randomUUID().toString().substring(0, 8);
+        inventoryStockRepository.save(InventoryStock.create(sku, 5));
+        // order-api OrderCreatedEvent의 직렬화 결과와 같은 필드
+        String payload = """
+                {"eventId":"%s","eventType":"order.created","orderId":3,"sagaId":"%s","userId":1,
+                 "items":[{"sku":"%s","quantity":2}],"recipientName":"홍길동","recipientAddress":"서울시 강남구"}
+                """.formatted(UUID.randomUUID(), UUID.randomUUID(), sku);
+
+        try (Consumer<String, String> dlt = dltConsumer("order-create-event")) {
+            kafkaTemplate.send("order-create-event", "3", payload).get(5, TimeUnit.SECONDS);
+
+            Awaitility.await().atMost(15, TimeUnit.SECONDS).untilAsserted(() ->
+                    assertThat(inventoryStockRepository.findById(sku).orElseThrow().getReservedQuantity()).isEqualTo(2));
+
+            assertThat(KafkaTestUtils.getRecords(dlt, Duration.ofSeconds(2)).count()).isZero();
+        }
+    }
+
     private String orderCreated(long orderId, String sku, int quantity) {
         return """
                 {"eventId":"%s","eventType":"order.created","orderId":%d,"sagaId":"%s","userId":1,
