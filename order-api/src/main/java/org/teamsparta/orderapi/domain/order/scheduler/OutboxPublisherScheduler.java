@@ -12,7 +12,8 @@ public class OutboxPublisherScheduler {
 
     private final OutboxPublisherJob outboxPublisherJob;
 
-    @Scheduled(fixedDelay = 500)
+    // 실행 주기: scheduler.outbox.fixed-delay-ms (이전 실행이 끝난 뒤 기다리는 시간, 기본 500ms)
+    @Scheduled(fixedDelayString = "${scheduler.outbox.fixed-delay-ms:500}")
     public void run() {
         outboxPublisherJob.publish();
     }

@@ -3,6 +3,7 @@ package org.teamsparta.orderapi.domain.order.scheduler;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,11 +25,16 @@ public class OutboxPublisherJob {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final Counter publishSentCounter;
     private final Counter publishFailedCounter;
+    private final int batchSize;
 
     public OutboxPublisherJob(OutboxQueryRepository outboxQueryRepository,
                               OutboxStatusUpdater outboxStatusUpdater,
                               KafkaTemplate<String, String> kafkaTemplate,
-                              MeterRegistry meterRegistry) {
+                              MeterRegistry meterRegistry,
+                              @Value("${scheduler.outbox.batch-size:50}") int batchSize) {
+        if (batchSize < 1) {
+            throw new IllegalArgumentException("scheduler.outbox.batch-size must be at least 1: " + batchSize);
+        }
         this.outboxQueryRepository = outboxQueryRepository;
         this.outboxStatusUpdater = outboxStatusUpdater;
         this.kafkaTemplate = kafkaTemplate;
@@ -36,11 +42,12 @@ public class OutboxPublisherJob {
                 .tag("result", "sent").register(meterRegistry);
         this.publishFailedCounter = Counter.builder("order.outbox.publish")
                 .tag("result", "failed").register(meterRegistry);
+        this.batchSize = batchSize;
     }
 
     @Transactional
     public void publish() {
-        List<OutboxEvent> batch = outboxQueryRepository.findBatchForPublish(ZonedDateTime.now(), 50);
+        List<OutboxEvent> batch = outboxQueryRepository.findBatchForPublish(ZonedDateTime.now(), batchSize);
         for (OutboxEvent event : batch) {
             try {
                 String topicName = switch (event.getEventType()) {

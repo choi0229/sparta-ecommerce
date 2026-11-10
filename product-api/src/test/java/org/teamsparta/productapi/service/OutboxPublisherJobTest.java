@@ -1,9 +1,9 @@
 package org.teamsparta.productapi.service;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -33,7 +33,6 @@ import static org.mockito.Mockito.verify;
 @ExtendWith(MockitoExtension.class)
 public class OutboxPublisherJobTest {
 
-    @InjectMocks
     private OutboxPublisherJob outboxPublisherJob;
 
     @Mock
@@ -42,6 +41,11 @@ public class OutboxPublisherJobTest {
     private OutboxEventRepository outboxEventRepository;
     @Mock
     private KafkaTemplate<String, String> kafkaTemplate;
+
+    @BeforeEach
+    void setUp() {
+        outboxPublisherJob = new OutboxPublisherJob(outboxQueryRepository, outboxEventRepository, kafkaTemplate, 50);
+    }
 
     @Test
     @DisplayName("성공: 보류 중인 이벤트를 Kafka로 전송하고 완료 상태로 변경한다")

@@ -1,7 +1,7 @@
 package org.teamsparta.productapi.domain.product.scheduler;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -19,18 +19,32 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class OutboxPublisherJob {
 
     private final OutboxQueryRepository outboxQueryRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final int batchSize;
 
-    @Scheduled(fixedDelay = 500)
+    public OutboxPublisherJob(OutboxQueryRepository outboxQueryRepository,
+                              OutboxEventRepository outboxEventRepository,
+                              KafkaTemplate<String, String> kafkaTemplate,
+                              @Value("${scheduler.outbox.batch-size:50}") int batchSize) {
+        if (batchSize < 1) {
+            throw new IllegalArgumentException("scheduler.outbox.batch-size must be at least 1: " + batchSize);
+        }
+        this.outboxQueryRepository = outboxQueryRepository;
+        this.outboxEventRepository = outboxEventRepository;
+        this.kafkaTemplate = kafkaTemplate;
+        this.batchSize = batchSize;
+    }
+
+    // 실행 주기: scheduler.outbox.fixed-delay-ms (이전 실행이 끝난 뒤 기다리는 시간, 기본 500ms)
+    @Scheduled(fixedDelayString = "${scheduler.outbox.fixed-delay-ms:500}")
     @Transactional
     public void publish() {
-        List<OutboxEvent> batch = outboxQueryRepository.findBatchForPublish(ZonedDateTime.now(), 50);
+        List<OutboxEvent> batch = outboxQueryRepository.findBatchForPublish(ZonedDateTime.now(), batchSize);
         for (OutboxEvent event : batch) {
             try{
                 String topicName = switch(event.getEventType()){

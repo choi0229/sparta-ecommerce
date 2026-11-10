@@ -168,7 +168,7 @@ RUN_ID=rps10 PROFILE=constant RATE=10 DURATION=2m ./run.sh e2e
 
 - **E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.** 실제 완료 후 다음 폴링까지 기다린 시간이 더해지므로, 1초 미만의 차이는 의미를 두지 않습니다. `order_e2e_duration`은 타임아웃 건을 포함하지 않으므로 `orders_timeout`과 함께 봅니다.
 - **`maxVUs`는 `목표 RPS × (15초 + 여유 5초)`이고, 기본적으로 그만큼 VU를 미리 만듭니다.** 주문마다 VU가 최종 상태까지 점유되므로 처리가 늦어질수록 필요한 VU가 늘어납니다. k6는 측정 중에 VU를 새로 만들 때 그사이 도착한 반복을 버리므로(`dropped_iterations`), 미리 만드는 VU를 줄이면 E2E 시간이 길어질 때 결과가 무효가 될 수 있습니다. 그래도 `dropped_iterations`가 발생하면 부하 발생기나 서버가 한계입니다.
-- **코드상 Outbox 처리 상한:** order-api Publisher는 500ms마다 최대 50건을 순차 발행하므로 최대 약 100건/초입니다. 성공 주문 1건당 5건을 발행해 약 20주문/초가 상한입니다(계산값이며 측정값이 아닙니다). 이를 넘는 구간에서는 적체와 `orders_timeout` 증가가 예상됩니다.
+- **Outbox 처리 상한:** order-api Publisher는 한 번 실행에 최대 `scheduler.outbox.batch-size`(기본 50)건을 순차 발행하고, 실행이 끝난 뒤 `scheduler.outbox.fixed-delay-ms`(기본 500ms)를 기다립니다. 기본값에서 상한은 약 92건/초(약 18주문/초, 주문당 5건)로 측정됐습니다. 500ms 외에 조회·전송·커밋에 주기당 약 45ms가 더 걸리기 때문입니다. 이를 넘는 구간에서는 적체와 `orders_timeout`이 늘어납니다. 두 설정은 세 서비스 모두 같은 이름이며, 측정 때는 `bench/app.sh start order SCHEDULER_OUTBOX_BATCH_SIZE=200 SCHEDULER_OUTBOX_FIXED_DELAY_MS=100`처럼 서비스별로 줍니다.
 - 결과 보고 형식: 접수 건수, 최종 성공·실패·타임아웃 건수, E2E p50/p95/p99, `dropped_iterations`, 정합성 검증 결과.
 
 # DB 정합성 검증

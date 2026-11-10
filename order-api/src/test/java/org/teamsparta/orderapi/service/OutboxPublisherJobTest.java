@@ -45,7 +45,7 @@ public class OutboxPublisherJobTest {
     @BeforeEach
     void setUp() {
         outboxPublisherJob = new OutboxPublisherJob(
-                outboxQueryRepository, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry());
+                outboxQueryRepository, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry(), 50);
         event = OutboxEvent.pending("Orders", AGGREGATE_ID, "order-create-event", "{}");
         ReflectionTestUtils.setField(event, "id", 1L);
         ReflectionTestUtils.setField(event, "retryCount", 0);

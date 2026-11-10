@@ -3,6 +3,7 @@ package org.teamsparta.inventoryapi.domain.inventory.scheduler;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -36,7 +37,6 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class OutboxPublisherJob {
 
-    private static final int BATCH_SIZE = 50;
     private static final long STALE_PROCESSING_TIMEOUT_MINUTES = 5;
 
     private final OutboxEventClaimer outboxEventClaimer;
@@ -44,11 +44,16 @@ public class OutboxPublisherJob {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final Counter publishSentCounter;
     private final Counter publishFailedCounter;
+    private final int batchSize;
 
     public OutboxPublisherJob(OutboxEventClaimer outboxEventClaimer,
                               OutboxStatusUpdater outboxStatusUpdater,
                               KafkaTemplate<String, String> kafkaTemplate,
-                              MeterRegistry meterRegistry) {
+                              MeterRegistry meterRegistry,
+                              @Value("${scheduler.outbox.batch-size:50}") int batchSize) {
+        if (batchSize < 1) {
+            throw new IllegalArgumentException("scheduler.outbox.batch-size must be at least 1: " + batchSize);
+        }
         this.outboxEventClaimer = outboxEventClaimer;
         this.outboxStatusUpdater = outboxStatusUpdater;
         this.kafkaTemplate = kafkaTemplate;
@@ -56,18 +61,20 @@ public class OutboxPublisherJob {
                 .tag("result", "sent").register(meterRegistry);
         this.publishFailedCounter = Counter.builder("inventory.outbox.publish")
                 .tag("result", "failed").register(meterRegistry);
+        this.batchSize = batchSize;
     }
 
-    @Scheduled(fixedDelay = 500)
+    // 실행 주기: scheduler.outbox.fixed-delay-ms (이전 실행이 끝난 뒤 기다리는 시간, 기본 500ms)
+    @Scheduled(fixedDelayString = "${scheduler.outbox.fixed-delay-ms:500}")
     public void publish() {
         ZonedDateTime now = ZonedDateTime.now();
 
         // 1. Publisher 크래시로 고착된 stale PROCESSING 이벤트를 PENDING으로 복구
         outboxEventClaimer.recoverStaleProcessing(
-                now.minusMinutes(STALE_PROCESSING_TIMEOUT_MINUTES), BATCH_SIZE);
+                now.minusMinutes(STALE_PROCESSING_TIMEOUT_MINUTES), batchSize);
 
         // 2. PENDING → PROCESSING claim (짧은 트랜잭션, Kafka 호출 없음)
-        List<OutboxEvent> batch = outboxEventClaimer.claimBatch(now, BATCH_SIZE);
+        List<OutboxEvent> batch = outboxEventClaimer.claimBatch(now, batchSize);
         if (batch.isEmpty()) {
             return;
         }
