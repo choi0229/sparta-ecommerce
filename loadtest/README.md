@@ -241,3 +241,107 @@ INTERVAL=5 ./loadtest/outbox-watch.sh > loadtest/results/rps10-outbox.csv
 
 요청 본문에는 현재 API가 요구하는 `shippingAddress`가 포함됩니다. 폴링으로 VU 점유 시간이 길어지므로 `maxVUs`는 `목표 RPS × (15초 + 여유 5초)`이고, `preAllocatedVUs`도 기본적으로 같은 값입니다. `dropped_iterations`가 0보다 크면 threshold 실패입니다. E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.
 
+
+# 레벨별 측정 절차 (격리 환경)
+
+고정 부하(10 → 20 → 30 → 50 RPS 등)를 레벨마다 같은 절차로 측정하고, 결과를 `results/<RUN_ID>/`에 남깁니다. 스크립트는 `bench/`에 있고, 모든 경로는 저장소 기준입니다. 결과와 실행 중 상태(`results/.runtime/`: 서비스 pid, 앱 로그)는 git 추적에서 제외됩니다.
+
+| 파일 | 역할 |
+|---|---|
+| `env/compose.yml` | 측정 전용 격리 환경(프로젝트 `sparta-loadtest`). PostgreSQL 16 ×3, Kafka 7.3.0. 익명 볼륨이라 기본 환경의 데이터와 섞이지 않습니다 |
+| `bench/env.sh` | 공통 경로와 DB·Kafka 명령. `ORDER_PSQL` 등을 export하므로 `verify.sh`, `outbox-watch.sh`도 격리 환경을 봅니다 |
+| `bench/app.sh` | 서비스 jar를 `loadtest` 프로필로 격리 환경에 붙여 실행·종료합니다. 추가 설정은 `NAME=VALUE`로 넘깁니다 |
+| `bench/measure.sh` | 한 레벨 측정: 사전 조건 확인 → 재고 스냅샷 → 수집기 시작 → k6 → 완료 대기 → `verify.sh` |
+| `bench/analyze.sh` | 측정 직후 DB에서 서버 기준 E2E, 이벤트별 발행 대기, 초당 발행량, Outbox 행을 저장하고 요약합니다 |
+| `bench/analyze.py` | 저장된 결과 파일만 읽어 `summary.txt`를 만듭니다. DB 없이 다시 실행할 수 있습니다 |
+| `bench/lag-watch.sh`, `bench/jvm-metrics-watch.sh`, `bench/docker-stats-watch.sh` | 토픽별 Consumer Lag, actuator 지표(CPU·힙·GC·Hikari), 컨테이너·JVM 프로세스 자원을 CSV로 기록합니다 |
+| `sql/server-e2e.sql`, `sql/outbox-delay.sql`, `sql/outbox-throughput.sql`, `sql/db-stats.sql` | 서버 기준 E2E, 이벤트별 발행 대기, 초당 발행량, Outbox 접근 통계 |
+
+필요한 도구: Docker, Java 17, k6, `curl`, `jq`, `python3`. psql은 컨테이너 안의 것을 쓰므로 호스트에 설치하지 않아도 됩니다.
+
+## 1. 환경 기동
+
+```bash
+# 서비스 jar 빌드 (코드가 바뀌었을 때)
+./gradlew :product-api:bootJar :inventory-api:bootJar :order-api:bootJar
+
+docker compose -f loadtest/env/compose.yml up -d
+loadtest/bench/app.sh start product
+loadtest/bench/app.sh start inventory
+loadtest/bench/app.sh start order PAYMENT_MOCK_SUCCESS_RATE=100
+```
+
+logistics-api는 실행하지 않습니다. 추가 설정(예: `SCHEDULER_OUTBOX_BATCH_SIZE=200`)은 `app.sh start` 뒤에 붙이면 해당 서비스에만 적용되고, `measure.sh`가 `service-config.txt`에 기록합니다.
+
+기동 후 모든 컨슈머에 파티션이 할당됐는지 로그로 확인합니다. 현재 기준 order 11, inventory 3, product 2개입니다.
+
+```bash
+for s in order inventory product; do
+  grep -o 'partitions assigned: \[[^]]*\]' loadtest/results/.runtime/$s-api.log | grep -v '\[\]' | sort -u | wc -l
+done
+```
+
+## 2. 시드
+
+측정할 모든 레벨의 `RATE × 지속 시간(초)` 합에 워밍업과 여유를 더해 SKU당 재고를 준비합니다. 예: 10·20·30·50 RPS × 2분 = 13,200건.
+
+```bash
+PRODUCT_API=http://localhost:8081 STOCK=30000 loadtest/seed/seed-products.sh
+```
+
+## 3. 워밍업
+
+JIT와 커넥션 풀을 데우고 `dropped_iterations`가 0인지 확인합니다. 집계에서 제외합니다.
+
+```bash
+mkdir -p loadtest/results/warmup
+k6 run -e BASE_URL=http://localhost:8083/api -e RUN_ID=warmup -e PROFILE=constant -e RATE=2 -e DURATION=30s \
+  --summary-export loadtest/results/warmup/k6-summary.json loadtest/k6/scripts/create-order-e2e.js
+```
+
+## 4. 레벨별 측정과 분석
+
+레벨마다 새 `RUN_ID`를 쓰고, 측정 직후 분석합니다. `measure.sh`는 처리 중 주문, 미발행 Outbox, Consumer Lag, 남은 `RESERVED` 예약이 모두 0일 때만 시작합니다(아니면 종료 코드 3).
+
+```bash
+loadtest/bench/measure.sh rps20 20 && loadtest/bench/analyze.sh rps20
+```
+
+| 종료 코드 | 뜻 | 다음 행동 |
+|---|---|---|
+| 0 | 모든 주문 완료, 정합성 PASS | 다음 레벨 |
+| 1 | 정합성 FAIL | 다음 레벨로 넘어가지 않고 원인 분석 |
+| 2 | verify WAIT | 잠시 후 `verify.sh <RUN_ID>` 재실행 |
+| 3 | 사전 조건 미충족 | 앞 레벨의 적체가 끝났는지 확인 |
+| 4 | `DRAIN_TIMEOUT_S`(기본 600초) 안에 끝나지 않음 | `drain.txt`의 남은 주문 상태 분포 확인 |
+
+`MAX_VUS`, `PRE_ALLOCATED_VUS`를 환경 변수로 주면 k6에 그대로 전달됩니다. 높은 레벨에서 VU가 부족하면 `dropped_iterations`가 생기므로 `k6-stdout.txt`에서 0인지 확인합니다.
+
+## 5. 결과 파일
+
+| 파일 | 내용 |
+|---|---|
+| `summary.txt` | 레벨 요약: k6, 서버 E2E, 초당 발행량, 적체와 증가 기울기, 토픽별 Lag, JVM·Hikari, 컨테이너 자원, Outbox 주기 분석, DB 통계 차이 |
+| `k6-summary.json`, `k6-stdout.txt` | k6 결과 |
+| `server-e2e-result.txt` | 서버 기준 E2E(접수 시각 → 주문 `COMPLETED` 시각) p50/p95/p99 |
+| `outbox-delay-result.txt`, `outbox-throughput-<service>.txt`, `outbox-rows-<service>.csv` | 이벤트별 발행 대기, 초당 발행량, 주기 분석용 Outbox 행 |
+| `outbox-watch.csv`, `consumer-lag.csv`, `jvm-metrics.csv`, `docker-stats.csv` | 측정 중 시계열 |
+| `db-stats-before.txt`, `db-stats-after.txt` | Outbox 테이블·인덱스 스캔 수와 트랜잭션 수(측정 전후) |
+| `precheck.txt`, `before-snapshot.txt`, `timing.txt`, `drain.txt`, `verify.txt`, `service-config.txt` | 사전 조건, 재고 스냅샷, 완료 시간, 정합성 검증, 서비스 추가 설정 |
+| `logs/<service>-api-window.log` | 측정 구간의 서비스 로그 |
+
+해석할 때 주의할 점:
+
+- **k6 E2E는 15초까지만 관측합니다.** 적체가 생기면 15초 안에 끝난 주문만 집계되므로, 지연 비교는 서버 기준 E2E로 합니다. `orders_timeout`은 주문 실패가 아닙니다.
+- **Outbox 주기 분석의 주기 시작은 추정입니다.** inventory-api는 `claimed_at`(실측)을 쓰고, order-api와 product-api는 배치의 첫 `sent_at`을 씁니다. 실제 조회 시각보다 수 ms 늦습니다.
+- **`db-stats`의 인덱스 스캔 수에는 Publisher 조회 외의 쿼리도 섞입니다.** `outbox-watch.sh` 집계와 PK 갱신이 포함되므로 조회 빈도의 근사값입니다.
+- **저장된 결과만 다시 요약:** `python3 loadtest/bench/analyze.py loadtest/results/<RUN_ID>`. 측정한 머신에서 실행해야 CSV 시각과 CPU 코어 수가 맞습니다.
+
+## 6. 정리
+
+이번 측정으로 만든 리소스만 지웁니다. 기본 `docker compose` 환경의 컨테이너와 볼륨은 건드리지 않습니다.
+
+```bash
+for s in order inventory product; do loadtest/bench/app.sh stop $s; done
+docker compose -f loadtest/env/compose.yml down -v
+```
