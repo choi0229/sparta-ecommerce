@@ -138,6 +138,10 @@ RUN_ID=rps10 PROFILE=constant RATE=10 DURATION=2m ./run.sh e2e
 | `SKUS` / `QUANTITY` | `LOADTEST-SKU-A,LOADTEST-SKU-B` / `1` | 주문 항목. `QUANTITY`를 재고보다 크게 하면 재고 부족 시나리오입니다 |
 | `DUPLICATE_SEND` | `false` | `true`면 같은 키로 동시에 2건을 보내 두 응답을 비교합니다 |
 | `E2E_BASE_URL` | `http://localhost:8083/api` | order-api 주소 |
+| `MAX_VUS` | `ramp` 1000, `constant` `RATE × 20` | 최대 VU 수 |
+| `PRE_ALLOCATED_VUS` | `MAX_VUS`와 같음 | 시작 전에 미리 만드는 VU 수. `MAX_VUS`보다 클 수 없습니다 |
+
+`MAX_VUS`와 `PRE_ALLOCATED_VUS`는 `run.sh`를 거쳐도 환경 변수로 그대로 전달됩니다(k6가 시스템 환경 변수를 읽습니다). 예: `PRE_ALLOCATED_VUS=100 RUN_ID=rps10 PROFILE=constant RATE=10 ./run.sh e2e`
 
 ## 시나리오
 
@@ -163,7 +167,7 @@ RUN_ID=rps10 PROFILE=constant RATE=10 DURATION=2m ./run.sh e2e
 ## 결과 해석
 
 - **E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.** 실제 완료 후 다음 폴링까지 기다린 시간이 더해지므로, 1초 미만의 차이는 의미를 두지 않습니다. `order_e2e_duration`은 타임아웃 건을 포함하지 않으므로 `orders_timeout`과 함께 봅니다.
-- **`maxVUs`는 `목표 RPS × (15초 + 여유 5초)`입니다.** 주문마다 VU가 최종 상태까지 점유되므로, 처리가 늦어질수록 필요한 VU가 늘어납니다. 그래도 `dropped_iterations`가 발생하면 부하 발생기나 서버가 한계입니다.
+- **`maxVUs`는 `목표 RPS × (15초 + 여유 5초)`이고, 기본적으로 그만큼 VU를 미리 만듭니다.** 주문마다 VU가 최종 상태까지 점유되므로 처리가 늦어질수록 필요한 VU가 늘어납니다. k6는 측정 중에 VU를 새로 만들 때 그사이 도착한 반복을 버리므로(`dropped_iterations`), 미리 만드는 VU를 줄이면 E2E 시간이 길어질 때 결과가 무효가 될 수 있습니다. 그래도 `dropped_iterations`가 발생하면 부하 발생기나 서버가 한계입니다.
 - **코드상 Outbox 처리 상한:** order-api Publisher는 500ms마다 최대 50건을 순차 발행하므로 최대 약 100건/초입니다. 성공 주문 1건당 5건을 발행해 약 20주문/초가 상한입니다(계산값이며 측정값이 아닙니다). 이를 넘는 구간에서는 적체와 `orders_timeout` 증가가 예상됩니다.
 - 결과 보고 형식: 접수 건수, 최종 성공·실패·타임아웃 건수, E2E p50/p95/p99, `dropped_iterations`, 정합성 검증 결과.
 
@@ -235,5 +239,5 @@ INTERVAL=5 ./loadtest/outbox-watch.sh > loadtest/results/rps10-outbox.csv
 
 ## 부하 테스트 본문과 VU 설정
 
-요청 본문에는 현재 API가 요구하는 `shippingAddress`가 포함됩니다. 폴링으로 VU 점유 시간이 길어지므로 `maxVUs`는 `목표 RPS × (15초 + 여유 5초)`이고, `dropped_iterations`가 0보다 크면 threshold 실패입니다. E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.
+요청 본문에는 현재 API가 요구하는 `shippingAddress`가 포함됩니다. 폴링으로 VU 점유 시간이 길어지므로 `maxVUs`는 `목표 RPS × (15초 + 여유 5초)`이고, `preAllocatedVUs`도 기본적으로 같은 값입니다. `dropped_iterations`가 0보다 크면 threshold 실패입니다. E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.
 

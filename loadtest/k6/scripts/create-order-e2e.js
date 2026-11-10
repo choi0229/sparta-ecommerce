@@ -20,14 +20,20 @@ const POLL_MAX_SECONDS = 15;
 const VU_MARGIN_SECONDS = 5; // 접수 응답 시간과 폴링 지연을 고려한 여유
 
 const MAX_RPS = PROFILE === 'constant' ? RATE : 50;
-const maxVUs = MAX_RPS * (POLL_MAX_SECONDS + VU_MARGIN_SECONDS);
+const maxVUs = Number(__ENV.MAX_VUS || MAX_RPS * (POLL_MAX_SECONDS + VU_MARGIN_SECONDS));
+// 측정 중 VU를 새로 만들면 그사이 도착한 반복이 dropped_iterations로 버려지므로, 기본값은 maxVUs만큼 미리 만든다
+const preAllocatedVUs = Number(__ENV.PRE_ALLOCATED_VUS || maxVUs);
+
+if (preAllocatedVUs > maxVUs) {
+    throw new Error(`PRE_ALLOCATED_VUS(${preAllocatedVUs}) must not exceed MAX_VUS(${maxVUs})`);
+}
 
 const scenarios = {
     ramp: {
         executor: 'ramping-arrival-rate',
         timeUnit: '1s',
         startRate: 0,
-        preAllocatedVUs: 50,
+        preAllocatedVUs,
         maxVUs,
         // create-order2.js와 같은 부하 단계
         stages: [
@@ -43,7 +49,7 @@ const scenarios = {
         timeUnit: '1s',
         rate: RATE,
         duration: DURATION,
-        preAllocatedVUs: Math.max(RATE * 2, 10),
+        preAllocatedVUs,
         maxVUs,
     },
 };
