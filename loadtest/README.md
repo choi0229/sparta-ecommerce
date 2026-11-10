@@ -334,6 +334,7 @@ loadtest/bench/measure.sh rps20 20 && loadtest/bench/analyze.sh rps20
 
 - **k6 E2E는 15초까지만 관측합니다.** 적체가 생기면 15초 안에 끝난 주문만 집계되므로, 지연 비교는 서버 기준 E2E로 합니다. `orders_timeout`은 주문 실패가 아닙니다.
 - **Outbox 주기 분석의 주기 시작은 추정입니다.** inventory-api는 `claimed_at`(실측)을 쓰고, order-api와 product-api는 배치의 첫 `sent_at`을 씁니다. 실제 조회 시각보다 수 ms 늦습니다.
+- **Publisher 주기가 짧으면 주기 구분 기준을 낮춥니다.** order-api와 product-api는 `sent_at` 간격이 `CYCLE_GAP_S`(기본 0.2초)보다 긴 곳을 주기 경계로 봅니다. `scheduler.outbox.fixed-delay-ms`가 이 값보다 짧으면(예: 100ms) 여러 주기가 하나로 합쳐져 배치 크기와 대기 분류가 틀립니다. 이때는 실행 간격의 절반 정도로 낮춰 다시 요약합니다: `CYCLE_GAP_S=0.05 python3 loadtest/bench/analyze.py loadtest/results/<RUN_ID>`. 사용한 기준은 `summary.txt`의 주기 분석 머리줄에 표시됩니다. inventory-api는 `claimed_at`으로 묶으므로 영향이 없습니다.
 - **`db-stats`의 인덱스 스캔 수에는 Publisher 조회 외의 쿼리도 섞입니다.** `outbox-watch.sh` 집계와 PK 갱신이 포함되므로 조회 빈도의 근사값입니다.
 - **저장된 결과만 다시 요약:** `python3 loadtest/bench/analyze.py loadtest/results/<RUN_ID>`. 측정한 머신에서 실행해야 CSV 시각과 CPU 코어 수가 맞습니다.
 

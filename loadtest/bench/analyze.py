@@ -2,7 +2,7 @@
 """측정 결과 디렉터리(loadtest/results/<RUN_ID>)의 파일만 읽어 레벨 요약과 Outbox 주기 분석을 출력한다.
 
 DB에 접속하지 않으므로, 환경을 정리한 뒤에도 저장된 결과로 다시 실행할 수 있다.
-사용법: python3 analyze.py loadtest/results/<RUN_ID>
+사용법: [CYCLE_GAP_S=0.05] python3 analyze.py loadtest/results/<RUN_ID>
 
 입력 파일: load-start-utc.txt, load-duration-s.txt(없으면 120초), k6-summary.json, server-e2e-result.txt,
 outbox-throughput-<service>.txt, outbox-watch.csv, consumer-lag.csv, jvm-metrics.csv, docker-stats.csv,
@@ -11,6 +11,9 @@ CSV의 HH:MM:SS 시각은 측정한 머신의 로컬 시간대로 해석한다.
 
 주기 분석에서 각 서비스의 첫 발행 주기에 실린 이벤트는 비교할 직전 주기가 없어 분류에서 제외한다.
 그래서 이벤트 종류별 n이 주문 수보다 조금 작을 수 있다. 발행 대기 평균은 outbox-delay-result.txt(SQL)가 기준이다.
+
+order-api·product-api 주기는 sent_at 간격이 CYCLE_GAP_S(기본 0.2초) 이하인 이벤트를 한 주기로 묶어 추정한다.
+Publisher 실행 간격(fixed-delay)이 이 값보다 짧으면 여러 주기가 하나로 합쳐지므로, 간격의 절반 정도로 낮춰 실행한다.
 """
 import csv, json, sys, statistics as st, datetime as dt, os
 from collections import defaultdict
@@ -21,6 +24,9 @@ T0 = start.timestamp()
 DURATION_S = float(open(f"{D}/load-duration-s.txt").read()) if os.path.exists(f"{D}/load-duration-s.txt") else 120.0
 LOAD_END = T0 + DURATION_S
 LOCAL_TZ = dt.datetime.now().astimezone().tzinfo
+CYCLE_GAP_S = float(os.environ.get("CYCLE_GAP_S", "0.2"))
+if CYCLE_GAP_S <= 0:
+    sys.exit("CYCLE_GAP_S must be > 0")
 CORES = os.cpu_count() or 1  # actuator CPU 비율을 코어 수로 환산한다. 측정한 머신에서 실행해야 맞다
 
 
@@ -182,7 +188,7 @@ def load_rows(s):
     return rows
 
 
-def cycles_from_sent(rows, gap=0.2):
+def cycles_from_sent(rows, gap=CYCLE_GAP_S):
     ss = sorted(r["s"] for r in rows)
     cyc = []
     for x in ss:
@@ -201,7 +207,7 @@ def cycles_from_claim(rows):
 
 
 import bisect
-P("[Outbox 주기 분석]  cycle start: order/product=배치 첫 sent_at(추정, select 시간만큼 늦음), inventory=claimed_at(실측)")
+P(f"[Outbox 주기 분석]  cycle start: order/product=배치 첫 sent_at(추정, select 시간만큼 늦음, 주기 구분 sent_at 간격>{CYCLE_GAP_S * 1000:.0f}ms), inventory=claimed_at(실측)")
 P("  분류: during=직전 발행 주기가 진행 중일 때 생성(그 주기에 못 실림) / idle=주기 사이 대기 구간에 생성 / skipped=직전 주기 시작 전에 생성됐는데도 직전 주기에 안 실림(적체·배치 한도·커밋 지연)")
 all_rows = {}
 for s in ("order", "inventory", "product"):
