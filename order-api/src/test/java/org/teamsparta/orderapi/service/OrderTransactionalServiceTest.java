@@ -15,6 +15,7 @@ import org.teamsparta.orderapi.domain.order.entity.Orders;
 import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
 import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult;
 import org.teamsparta.orderapi.domain.order.repository.*;
+import org.teamsparta.orderapi.domain.order.scheduler.OutboxEventRecorder;
 import org.teamsparta.orderapi.domain.order.service.IdempotencyService;
 import org.teamsparta.orderapi.domain.order.service.OrderTransactionalService;
 import org.teamsparta.orderapi.domain.order.service.ProductSnapshotPendingStore;
@@ -42,7 +43,7 @@ class OrderTransactionalServiceTest {
     @Mock ObjectMapper objectMapper;
     @Mock IdempotencyService idempotencyService;
     @Mock OutboxQueryRepository outboxQueryRepository;
-    @Mock OutboxEventRepository outboxEventRepository;
+    @Mock OutboxEventRecorder outboxEventRecorder;
     @Mock ProductSnapshotPendingStore productSnapshotPendingStore;
     @Mock KafkaTemplate<String, String> kafkaTemplate;
 

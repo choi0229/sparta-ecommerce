@@ -28,7 +28,7 @@ import org.teamsparta.inventoryapi.domain.inventory.event.dto.VariantCreatResult
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationItemRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryStockRepository;
-import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxEventRepository;
+import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventRecorder;
 import org.teamsparta.inventoryapi.domain.inventory.service.InventoryService;
 import org.teamsparta.inventoryapi.global.enums.ReservationStatus;
 
@@ -59,7 +59,7 @@ public class InventoryServiceTest {
     @Mock
     private InventoryReservationItemRepository inventoryReservationItemRepository;
     @Mock
-    private OutboxEventRepository outboxEventRepository;
+    private OutboxEventRecorder outboxEventRecorder;
     @Mock
     private ObjectMapper objectMapper;
 
@@ -80,7 +80,7 @@ public class InventoryServiceTest {
         then(inventoryStockRepository).should(times(1)).save(any(InventoryStock.class));
 
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
-        then(outboxEventRepository).should(times(1)).save(captor.capture());
+        then(outboxEventRecorder).should(times(1)).save(captor.capture());
 
         OutboxEvent outbox = captor.getValue();
         assertThat(outbox.getAggregateType()).isEqualTo("Inventory");
@@ -102,7 +102,7 @@ public class InventoryServiceTest {
 
         // then: SKU 중복이면 stock save 없이 return → outbox도 발행하지 않는다
         then(inventoryStockRepository).should(never()).save(any(InventoryStock.class));
-        then(outboxEventRepository).should(never()).save(any(OutboxEvent.class));
+        then(outboxEventRecorder).should(never()).save(any(OutboxEvent.class));
     }
 
     @Test
@@ -141,7 +141,7 @@ public class InventoryServiceTest {
         then(inventoryReservationRepository).should(times(1)).save(any(InventoryReservation.class));
 
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
-        then(outboxEventRepository).should(times(1)).save(captor.capture());
+        then(outboxEventRecorder).should(times(1)).save(captor.capture());
         OutboxEvent outbox = captor.getValue();
 
         assertThat(outbox.getAggregateType()).isEqualTo("Inventory");
@@ -173,7 +173,7 @@ public class InventoryServiceTest {
         then(inventoryReservationRepository).should(times(1)).findByOrderId(100L);
         then(inventoryReservationRepository).should(never()).save(any());
         then(inventoryReservationItemRepository).should(never()).saveAll(anyList());
-        then(outboxEventRepository).should(never()).save(any());
+        then(outboxEventRecorder).should(never()).save(any());
     }
 
     @Test
@@ -202,7 +202,7 @@ public class InventoryServiceTest {
         then(inventoryReservationItemRepository).should(never()).saveAll(anyList());
 
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
-        then(outboxEventRepository).should(times(1)).save(captor.capture());
+        then(outboxEventRecorder).should(times(1)).save(captor.capture());
 
         OutboxEvent outbox = captor.getValue();
         assertThat(outbox.getEventType()).isEqualTo("inventory-failed-event");
@@ -224,7 +224,7 @@ public class InventoryServiceTest {
         assertThatThrownBy(() -> inventoryService.reserveInventory(req))
                 .isInstanceOf(CannotAcquireLockException.class);
 
-        then(outboxEventRepository).shouldHaveNoInteractions();
+        then(outboxEventRecorder).shouldHaveNoInteractions();
     }
 
     @Test
@@ -246,7 +246,7 @@ public class InventoryServiceTest {
                 .satisfies(ex -> assertThat(((DomainException) ex).getCode())
                         .isEqualTo(DomainExceptionCode.EVENT_PUBLISH_ERROR.name()));
 
-        then(outboxEventRepository).shouldHaveNoInteractions();
+        then(outboxEventRecorder).shouldHaveNoInteractions();
     }
 
     @Test
@@ -289,7 +289,7 @@ public class InventoryServiceTest {
         assertThat(stock.getReservedQuantity()).isEqualTo(0);
 
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
-        then(outboxEventRepository).should(times(1)).save(captor.capture());
+        then(outboxEventRecorder).should(times(1)).save(captor.capture());
 
         OutboxEvent outbox = captor.getValue();
         assertThat(outbox.getEventType()).isEqualTo("inventory-confirm-event");

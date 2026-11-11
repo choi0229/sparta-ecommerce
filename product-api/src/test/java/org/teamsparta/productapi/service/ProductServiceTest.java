@@ -21,7 +21,7 @@ import org.teamsparta.productapi.domain.product.entity.Product;
 import org.teamsparta.productapi.domain.product.entity.ProductImage;
 import org.teamsparta.productapi.domain.product.entity.ProductVariant;
 import org.teamsparta.productapi.domain.product.event.ProductVariantPublisher;
-import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
+import org.teamsparta.productapi.domain.product.scheduler.OutboxEventRecorder;
 import org.teamsparta.productapi.domain.product.repository.ProductRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
 import org.teamsparta.productapi.domain.product.service.ProductService;
@@ -56,7 +56,7 @@ public class ProductServiceTest {
     @Mock
     private ProductVariantRepository productVariantRepository;
     @Mock
-    private OutboxEventRepository outboxEventRepository;
+    private OutboxEventRecorder outboxEventRecorder;
     @Mock
     private ObjectMapper objectMapper;
     @Mock
@@ -107,7 +107,7 @@ public class ProductServiceTest {
                 .containsExactlyInAnyOrder("SKU-1", "SKU-2");
 
         ArgumentCaptor<List<OutboxEvent>> outboxCaptor = ArgumentCaptor.forClass(List.class);
-        then(outboxEventRepository).should(times(1)).saveAll(outboxCaptor.capture());
+        then(outboxEventRecorder).should(times(1)).saveAll(outboxCaptor.capture());
         assertThat(outboxCaptor.getValue()).hasSize(4);
         List<OutboxEvent> capturedEvents = outboxCaptor.getValue();
         assertThat(capturedEvents)
@@ -135,7 +135,7 @@ public class ProductServiceTest {
         // then
         then(productRepository).should(times(1)).save(any(Product.class));
         then(productVariantRepository).should(never()).saveAll(any());
-        then(outboxEventRepository).should(never()).saveAll(any());
+        then(outboxEventRecorder).should(never()).saveAll(any());
     }
 
     @Test
@@ -152,7 +152,7 @@ public class ProductServiceTest {
 
         then(productRepository).shouldHaveNoInteractions();
         then(productVariantRepository).should(never()).saveAll(any());
-        then(outboxEventRepository).should(never()).saveAll(any());
+        then(outboxEventRecorder).should(never()).saveAll(any());
     }
 
     @Test
@@ -188,7 +188,7 @@ public class ProductServiceTest {
                 productService.createProduct(request));
         assertThat(exception.getMessage()).isEqualTo(DomainExceptionCode.EVENT_PUBLISH_ERROR.getMessage());
 
-        then(outboxEventRepository).should(never()).saveAll(any());
+        then(outboxEventRecorder).should(never()).saveAll(any());
     }
 
     @Test

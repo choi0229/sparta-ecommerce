@@ -23,7 +23,7 @@ import org.teamsparta.productapi.domain.product.entity.ProductVariant;
 import org.teamsparta.productapi.domain.product.event.ProductInventoryEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantEvent;
 import org.teamsparta.productapi.domain.product.event.ProductVariantPublisher;
-import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
+import org.teamsparta.productapi.domain.product.scheduler.OutboxEventRecorder;
 import org.teamsparta.productapi.domain.product.repository.ProductQueryRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductRepository;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
@@ -46,7 +46,7 @@ public class ProductService {
     private final ProductQueryRepository productQueryRepository;
     private final ProductVariantPublisher productVariantPublisher;
     private final ObjectMapper objectMapper;
-    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxEventRecorder outboxEventRecorder;
 
     @Transactional
     public void createProduct(ProductCreateRequest request) {
@@ -105,7 +105,7 @@ public class ProductService {
             productVariantRepository.saveAll(product.getProductVariants());
         }
         if (!outboxEvents.isEmpty()) {
-            outboxEventRepository.saveAll(outboxEvents);
+            outboxEventRecorder.saveAll(outboxEvents);
         }
     }
 

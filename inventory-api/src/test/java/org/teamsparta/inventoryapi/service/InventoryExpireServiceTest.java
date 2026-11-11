@@ -16,7 +16,7 @@ import org.teamsparta.inventoryapi.domain.inventory.event.InventoryReservationEx
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationItemRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryStockRepository;
-import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxEventRepository;
+import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventRecorder;
 import org.teamsparta.inventoryapi.domain.inventory.service.InventoryExpireService;
 import org.teamsparta.inventoryapi.global.enums.ReservationStatus;
 
@@ -43,7 +43,7 @@ public class InventoryExpireServiceTest {
     @Mock
     private InventoryStockRepository inventoryStockRepository;
     @Mock
-    private OutboxEventRepository outboxEventRepository;
+    private OutboxEventRecorder outboxEventRecorder;
     @Mock
     private ObjectMapper objectMapper;
 
@@ -75,7 +75,7 @@ public class InventoryExpireServiceTest {
         assertThat(stock.getReservedQuantity()).isEqualTo(0);
 
         // Outbox 이벤트 발행 확인
-        verify(outboxEventRepository).save(any(OutboxEvent.class));
+        verify(outboxEventRecorder).save(any(OutboxEvent.class));
     }
 
     @Test
@@ -90,6 +90,6 @@ public class InventoryExpireServiceTest {
 
         // then
         verify(inventoryStockRepository, never()).findAllSkuInForUpdate(anyList());
-        verify(outboxEventRepository, never()).save(any());
+        verify(outboxEventRecorder, never()).save(any());
     }
 }

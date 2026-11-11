@@ -13,6 +13,7 @@ import org.springframework.scheduling.config.ScheduledTaskHolder;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.teamsparta.productapi.domain.product.scheduler.OutboxEventClaimer;
+import org.teamsparta.productapi.domain.product.scheduler.OutboxEventSender;
 import org.teamsparta.productapi.domain.product.scheduler.OutboxPublisherJob;
 import org.teamsparta.productapi.domain.product.scheduler.OutboxStatusUpdater;
 
@@ -47,6 +48,7 @@ class OutboxPublisherSettingsTest {
                 .withBean(OutboxEventClaimer.class, () -> outboxEventClaimer)
                 .withBean(OutboxStatusUpdater.class, () -> mock(OutboxStatusUpdater.class))
                 .withBean(KafkaTemplate.class, () -> mock(KafkaTemplate.class))
+                .withBean(OutboxEventSender.class)
                 .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
                 .withBean(OutboxPublisherJob.class);
     }

@@ -14,7 +14,7 @@ import org.teamsparta.inventoryapi.domain.inventory.event.InventoryReservationEx
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationItemRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryStockRepository;
-import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxEventRepository;
+import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventRecorder;
 import org.teamsparta.inventoryapi.global.enums.ReservationStatus;
 import org.teamsparta.inventoryapi.global.exception.DomainException;
 import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
@@ -32,7 +32,7 @@ public class InventoryExpireService {
     private final InventoryReservationRepository inventoryReservationRepository;
     private final InventoryReservationItemRepository inventoryReservationItemRepository;
     private final InventoryStockRepository inventoryStockRepository;
-    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxEventRecorder outboxEventRecorder;
     private final ObjectMapper objectMapper;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -69,7 +69,7 @@ public class InventoryExpireService {
 
         try{
             String payload = objectMapper.writeValueAsString(event);
-            outboxEventRepository.save(OutboxEvent.pending("Inventory", reservation.getId().toString(), "inventory-expired-event", payload));
+            outboxEventRecorder.save(OutboxEvent.pending("Inventory", reservation.getId().toString(), "inventory-expired-event", payload));
         }catch (Exception e){
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }

@@ -7,11 +7,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.ApplicationContext;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
 import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxEventRepository;
 import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventClaimer;
+import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventRecorder;
+import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxImmediatePublisher;
 import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxPublisherJob;
 import org.teamsparta.inventoryapi.global.enums.OutboxStatus;
 
@@ -68,6 +73,15 @@ class OutboxClaimIntegrationTest extends InventoryIntegrationTestSupport {
 
     @Autowired
     private OutboxEventRepository outboxEventRepository;
+
+    @Autowired
+    private OutboxEventRecorder outboxEventRecorder;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private ApplicationContext applicationContext;
 
     @MockBean
     private KafkaTemplate<String, String> kafkaTemplate;
@@ -219,6 +233,25 @@ class OutboxClaimIntegrationTest extends InventoryIntegrationTestSupport {
         assertThat(recovered.getStatus()).isEqualTo(OutboxStatus.SENT);
         assertThat(recovered.getRetryCount()).as("publisher 중단은 전송 실패가 아니다").isZero();
         assertThat(find(inFlight).getStatus()).as("timeout 전 PROCESSING은 그대로").isEqualTo(OutboxStatus.PROCESSING);
+    }
+
+    @Test
+    @DisplayName("즉시 발행 플래그가 꺼져 있으면(기본값) 커밋 후에도 발행하지 않고 폴러만 발행한다")
+    void immediatePublishDisabled_onlyPollerPublishes() throws Exception {
+        assertThat(applicationContext.getBeansOfType(OutboxImmediatePublisher.class)).isEmpty();
+        given(kafkaTemplate.send(eq(TOPIC), anyString(), anyString()))
+                .willReturn(CompletableFuture.completedFuture(null));
+
+        Long id = new TransactionTemplate(transactionManager).execute(status ->
+                outboxEventRecorder.save(OutboxEvent.pending("Inventory", "poll-only", TOPIC, PAYLOAD)).getId());
+        Thread.sleep(1000);
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), anyString());
+        assertThat(find(id).getStatus()).isEqualTo(OutboxStatus.PENDING);
+
+        outboxPublisherJob.publish();
+
+        assertThat(find(id).getStatus()).isEqualTo(OutboxStatus.SENT);
+        verify(kafkaTemplate, times(1)).send(TOPIC, "poll-only", PAYLOAD);
     }
 
     private OutboxEvent savePending(String aggregateId) {

@@ -13,6 +13,7 @@ import org.springframework.scheduling.config.FixedDelayTask;
 import org.springframework.scheduling.config.ScheduledTask;
 import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventClaimer;
+import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventSender;
 import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxPublisherJob;
 import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxStatusUpdater;
 
@@ -47,6 +48,7 @@ class OutboxPublisherSettingsTest {
                 .withBean(OutboxEventClaimer.class, () -> outboxEventClaimer)
                 .withBean(OutboxStatusUpdater.class, () -> mock(OutboxStatusUpdater.class))
                 .withBean(KafkaTemplate.class, () -> mock(KafkaTemplate.class))
+                .withBean(OutboxEventSender.class)
                 .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
                 .withBean(OutboxPublisherJob.class);
     }

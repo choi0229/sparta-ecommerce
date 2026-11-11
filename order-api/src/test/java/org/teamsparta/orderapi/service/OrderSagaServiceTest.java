@@ -23,7 +23,7 @@ import org.teamsparta.orderapi.domain.order.event.dto.InventoryReserveFailedResu
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservedResult;
 import org.teamsparta.orderapi.domain.order.repository.OrderRepository;
 import org.teamsparta.orderapi.domain.order.repository.OrderSagaStateRepository;
-import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
+import org.teamsparta.orderapi.domain.order.scheduler.OutboxEventRecorder;
 import org.teamsparta.orderapi.domain.order.service.OrderSagaService;
 import org.teamsparta.orderapi.domain.payment.event.PaymentFailedEvent;
 import org.teamsparta.orderapi.domain.payment.event.PaymentRequestedEvent;
@@ -53,7 +53,7 @@ public class OrderSagaServiceTest {
     @Mock
     private OrderSagaStateRepository orderSagaStateRepository;
     @Mock
-    private OutboxEventRepository outboxEventRepository;
+    private OutboxEventRecorder outboxEventRecorder;
     @Mock
     private OrderRepository orderRepository;
     @Mock
@@ -89,7 +89,7 @@ public class OrderSagaServiceTest {
 
         // then
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
-        verify(outboxEventRepository).save(captor.capture());
+        verify(outboxEventRecorder).save(captor.capture());
         OutboxEvent outbox = captor.getValue();
 
         assertThat(outbox.getAggregateType()).isEqualTo("Orders");
@@ -118,7 +118,7 @@ public class OrderSagaServiceTest {
         // then
         assertThat(sagaState.getState()).isEqualTo(SagaState.FAILED);
         assertThat(order.getStatus()).isEqualTo(Status.FAILED);
-        verify(outboxEventRepository, never()).save(any());
+        verify(outboxEventRecorder, never()).save(any());
     }
 
     @Test
@@ -139,7 +139,7 @@ public class OrderSagaServiceTest {
 
         // then
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
-        verify(outboxEventRepository).save(captor.capture());
+        verify(outboxEventRecorder).save(captor.capture());
         OutboxEvent outbox = captor.getValue();
 
         assertThat(outbox.getEventType()).isEqualTo("order-confirm-event");
@@ -168,7 +168,7 @@ public class OrderSagaServiceTest {
         // then
         assertThat(sagaState.getState()).isEqualTo(SagaState.FAILED);
         assertThat(order.getStatus()).isEqualTo(Status.FAILED);
-        verify(outboxEventRepository, never()).save(any());
+        verify(outboxEventRecorder, never()).save(any());
     }
 
     @Test
@@ -192,7 +192,7 @@ public class OrderSagaServiceTest {
         // then
         assertThat(sagaState.getState()).isEqualTo(SagaState.COMPLETED);
         assertThat(order.getStatus()).isEqualTo(Status.COMPLETED);
-        verify(outboxEventRepository, never()).save(any());
+        verify(outboxEventRecorder, never()).save(any());
     }
 
     @Test
@@ -216,7 +216,7 @@ public class OrderSagaServiceTest {
         // then
         assertThat(order.getStatus()).isEqualTo(Status.COMPLETED);
         assertThat(sagaState.getState()).isEqualTo(SagaState.COMPLETED);
-        verify(outboxEventRepository, never()).save(any());
+        verify(outboxEventRecorder, never()).save(any());
     }
 
     @Test
@@ -240,7 +240,7 @@ public class OrderSagaServiceTest {
         assertThat(sagaState.getState()).isEqualTo(SagaState.EXPIRED);
         assertThat(order.getStatus()).isEqualTo(Status.EXPIRED);
         assertThat(sagaState.getLastError()).isEqualTo("TTL_EXPIRED");
-        verify(outboxEventRepository, never()).save(any());
+        verify(outboxEventRecorder, never()).save(any());
     }
 
     @Test
@@ -285,7 +285,7 @@ public class OrderSagaServiceTest {
         assertThat(sagaState.getState()).isEqualTo(SagaState.FAILED);
         assertThat(sagaState.getLastError()).isEqualTo("RESERVATION_EXPIRED_AFTER_PAYMENT");
         assertThat(sagaState.getReservationId()).isEqualTo(RESERVATION_ID);
-        verify(outboxEventRepository, never()).save(any());
+        verify(outboxEventRecorder, never()).save(any());
     }
 
     @ParameterizedTest

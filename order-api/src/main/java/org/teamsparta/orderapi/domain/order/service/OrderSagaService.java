@@ -15,7 +15,7 @@ import org.teamsparta.orderapi.domain.order.event.OrderEventPublisher;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmFailedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryConfirmedResult;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReservationExpiredResult;
-import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
+import org.teamsparta.orderapi.domain.order.scheduler.OutboxEventRecorder;
 import org.teamsparta.orderapi.domain.payment.event.PaymentFailedEvent;
 import org.teamsparta.orderapi.domain.payment.event.PaymentRequestedEvent;
 import org.teamsparta.orderapi.domain.order.event.dto.InventoryReserveFailedResult;
@@ -39,7 +39,7 @@ public class OrderSagaService {
     private final OrderRepository orderRepository;
     private final OrderSagaStateRepository orderSagaStateRepository;
     private final OrderEventPublisher orderEventPublisher;
-    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxEventRecorder outboxEventRecorder;
     private final ObjectMapper objectMapper;
 
     private static final String RESERVATION_EXPIRED_AFTER_PAYMENT = "RESERVATION_EXPIRED_AFTER_PAYMENT";
@@ -81,7 +81,7 @@ public class OrderSagaService {
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
 
-        outboxEventRepository.save(OutboxEvent.pending("Orders", order.getId().toString(), "payment-request-event", payload));
+        outboxEventRecorder.save(OutboxEvent.pending("Orders", order.getId().toString(), "payment-request-event", payload));
     }
 
     @Transactional
@@ -120,7 +120,7 @@ public class OrderSagaService {
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
 
-        outboxEventRepository.save(OutboxEvent.pending("Orders", order.getId().toString(), "order-confirm-event", payload));
+        outboxEventRecorder.save(OutboxEvent.pending("Orders", order.getId().toString(), "order-confirm-event", payload));
     }
 
     @Transactional

@@ -8,7 +8,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
-import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
+import org.teamsparta.orderapi.domain.order.scheduler.OutboxEventRecorder;
 import org.teamsparta.orderapi.domain.payment.repository.PaymentMockResultRepository;
 import org.teamsparta.orderapi.domain.payment.service.MockPaymentJudge;
 
@@ -19,7 +19,7 @@ public class PaymentEventConsumer {
 
     private final ObjectMapper objectMapper;
     private final PaymentEventPublisher paymentEventPublisher;
-    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxEventRecorder outboxEventRecorder;
     private final PaymentMockResultRepository paymentMockResultRepository;
     private final MockPaymentJudge mockPaymentJudge;
 
@@ -59,6 +59,6 @@ public class PaymentEventConsumer {
             eventType = "payment-failed-event";
             payload = objectMapper.writeValueAsString(PaymentFailedEvent.from(paymentRequestedEvent, failureReason));
         }
-        outboxEventRepository.save(OutboxEvent.pending("Payment", orderId.toString(), eventType, payload));
+        outboxEventRecorder.save(OutboxEvent.pending("Payment", orderId.toString(), eventType, payload));
     }
 }

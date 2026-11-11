@@ -276,6 +276,15 @@ loadtest/bench/app.sh start order PAYMENT_MOCK_SUCCESS_RATE=100
 
 logistics-api는 실행하지 않습니다. 추가 설정(예: `SCHEDULER_OUTBOX_BATCH_SIZE=200`)은 `app.sh start` 뒤에 붙이면 해당 서비스에만 적용되고, `measure.sh`가 `service-config.txt`에 기록합니다.
 
+커밋 직후 발행(B안)을 켜려면 `OUTBOX_IMMEDIATEPUBLISH_ENABLED=true`를 줍니다. 꺼져 있으면(기본값) 폴링만으로 발행합니다. 켰을 때 폴러는 안전망이므로 주기를 늘려 둡니다.
+
+```bash
+loadtest/bench/app.sh start order PAYMENT_MOCK_SUCCESS_RATE=100 OUTBOX_IMMEDIATEPUBLISH_ENABLED=true \
+  SCHEDULER_OUTBOX_BATCH_SIZE=200 SCHEDULER_OUTBOX_FIXED_DELAY_MS=1000
+```
+
+즉시 발행 건수는 actuator의 `<service>_outbox_immediate_total{result=sent|failed|skipped|missed}`, 폴러 발행 건수는 `<service>_outbox_publish_total{result=sent|failed}`로 셉니다. `skipped`는 실행기 큐가 가득 차 폴러에 넘긴 건, `missed`는 폴러가 먼저 claim한 건입니다.
+
 기동 후 모든 컨슈머에 파티션이 할당됐는지 로그로 확인합니다. 현재 기준 order 11, inventory 3, product 2개입니다.
 
 ```bash

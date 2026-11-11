@@ -3,6 +3,7 @@ package org.teamsparta.orderapi.domain.order.scheduler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
 import org.teamsparta.orderapi.domain.order.repository.OutboxEventRepository;
@@ -10,6 +11,7 @@ import org.teamsparta.orderapi.domain.order.repository.OutboxQueryRepository;
 
 import java.time.ZonedDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * PENDING → PROCESSING claim 과 stale PROCESSING → PENDING 복구를 담당한다. (inventory-api와 같은 구조)
@@ -68,5 +70,18 @@ public class OutboxEventClaimer {
             event.resetStaledProcessingToPending();
         }
         outboxEventRepository.saveAll(staleEvents);
+    }
+
+    /**
+     * 즉시 발행용 단건 claim. 새 트랜잭션에서 PENDING일 때만 PROCESSING으로 바꾸고 커밋한다.
+     *
+     * @return claim에 성공한 이벤트. 폴러가 먼저 가져갔거나 재시도 대기 중이면 empty
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Optional<OutboxEvent> claimIfPending(Long id, ZonedDateTime now) {
+        if (outboxEventRepository.claimIfPending(id, now) != 1) {
+            return Optional.empty();
+        }
+        return outboxEventRepository.findById(id);
     }
 }

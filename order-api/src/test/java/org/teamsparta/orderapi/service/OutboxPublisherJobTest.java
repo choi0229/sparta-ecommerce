@@ -13,6 +13,7 @@ import org.springframework.kafka.support.SendResult;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
 import org.teamsparta.orderapi.domain.order.scheduler.OutboxEventClaimer;
+import org.teamsparta.orderapi.domain.order.scheduler.OutboxEventSender;
 import org.teamsparta.orderapi.domain.order.scheduler.OutboxPublisherJob;
 import org.teamsparta.orderapi.domain.order.scheduler.OutboxStatusUpdater;
 import org.teamsparta.orderapi.global.enums.OutboxStatus;
@@ -45,7 +46,7 @@ public class OutboxPublisherJobTest {
     @BeforeEach
     void setUp() {
         outboxPublisherJob = new OutboxPublisherJob(
-                outboxEventClaimer, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry(), 50, 300_000L);
+                outboxEventClaimer, outboxStatusUpdater, new OutboxEventSender(kafkaTemplate), new SimpleMeterRegistry(), 50, 300_000L);
         event = OutboxEvent.pending("Orders", AGGREGATE_ID, "order-create-event", "{}");
         ReflectionTestUtils.setField(event, "id", 1L);
         ReflectionTestUtils.setField(event, "retryCount", 0);

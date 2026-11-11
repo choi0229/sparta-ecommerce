@@ -13,6 +13,7 @@ import org.springframework.kafka.support.SendResult;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.productapi.domain.product.entity.OutboxEvent;
 import org.teamsparta.productapi.domain.product.scheduler.OutboxEventClaimer;
+import org.teamsparta.productapi.domain.product.scheduler.OutboxEventSender;
 import org.teamsparta.productapi.domain.product.scheduler.OutboxPublisherJob;
 import org.teamsparta.productapi.domain.product.scheduler.OutboxStatusUpdater;
 import org.teamsparta.productapi.global.enums.OutboxStatus;
@@ -44,7 +45,7 @@ public class OutboxPublisherJobTest {
     @BeforeEach
     void setUp() {
         outboxPublisherJob = new OutboxPublisherJob(
-                outboxEventClaimer, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry(), 50, 300_000L);
+                outboxEventClaimer, outboxStatusUpdater, new OutboxEventSender(kafkaTemplate), new SimpleMeterRegistry(), 50, 300_000L);
     }
 
     private OutboxEvent processing(String eventType) {

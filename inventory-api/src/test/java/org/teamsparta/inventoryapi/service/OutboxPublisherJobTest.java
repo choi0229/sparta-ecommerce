@@ -13,6 +13,7 @@ import org.springframework.kafka.support.SendResult;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
 import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventClaimer;
+import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventSender;
 import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxPublisherJob;
 import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxStatusUpdater;
 import org.teamsparta.inventoryapi.global.enums.OutboxStatus;
@@ -45,7 +46,7 @@ public class OutboxPublisherJobTest {
     @BeforeEach
     void setUp() {
         outboxPublisherJob = new OutboxPublisherJob(
-                outboxEventClaimer, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry(), 50, 300_000L);
+                outboxEventClaimer, outboxStatusUpdater, new OutboxEventSender(kafkaTemplate), new SimpleMeterRegistry(), 50, 300_000L);
         // claimBatch()가 반환하는 이벤트는 이미 PROCESSING 상태
         event = OutboxEvent.pending("Inventory", AGGREGATE_ID, "inventory-created-event", "{}");
         ReflectionTestUtils.setField(event, "id", 1L);

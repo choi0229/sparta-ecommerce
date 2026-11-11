@@ -4,17 +4,13 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
-import org.teamsparta.inventoryapi.global.exception.DomainException;
-import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
 
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Outbox 이벤트를 Kafka로 발행하는 스케줄러.
@@ -30,6 +26,9 @@ import java.util.concurrent.TimeUnit;
  * <p>중복 발행 방지: PROCESSING claim이 단일 트랜잭션 안에서 FOR UPDATE SKIP LOCKED + 상태 전이를
  * 함께 처리하므로 멀티 인스턴스 환경에서 같은 이벤트가 중복 claim되지 않는다.
  *
+ * <p>outbox.immediate-publish.enabled=true면 대부분의 행은 커밋 직후 OutboxImmediatePublisher가 발행하고,
+ * 이 폴러는 즉시 발행이 실패(재시도 예약)했거나 건너뛴 행, stale PROCESSING을 처리하는 안전망이 된다.
+ *
  * <p>@Transactional 없음: Kafka send는 DB 트랜잭션 밖에서 수행된다.
  * 각 상태 전이(claimBatch, markSent, markFailed)는 OutboxEventClaimer·OutboxStatusUpdater의
  * 개별 REQUIRES_NEW 트랜잭션으로 처리된다.
@@ -40,7 +39,7 @@ public class OutboxPublisherJob {
 
     private final OutboxEventClaimer outboxEventClaimer;
     private final OutboxStatusUpdater outboxStatusUpdater;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final OutboxEventSender outboxEventSender;
     private final Counter publishSentCounter;
     private final Counter publishFailedCounter;
     private final int batchSize;
@@ -48,7 +47,7 @@ public class OutboxPublisherJob {
 
     public OutboxPublisherJob(OutboxEventClaimer outboxEventClaimer,
                               OutboxStatusUpdater outboxStatusUpdater,
-                              KafkaTemplate<String, String> kafkaTemplate,
+                              OutboxEventSender outboxEventSender,
                               MeterRegistry meterRegistry,
                               @Value("${scheduler.outbox.batch-size:50}") int batchSize,
                               @Value("${scheduler.outbox.stale-processing-timeout-ms:300000}") long staleProcessingTimeoutMs) {
@@ -61,7 +60,7 @@ public class OutboxPublisherJob {
         }
         this.outboxEventClaimer = outboxEventClaimer;
         this.outboxStatusUpdater = outboxStatusUpdater;
-        this.kafkaTemplate = kafkaTemplate;
+        this.outboxEventSender = outboxEventSender;
         this.publishSentCounter = Counter.builder("inventory.outbox.publish")
                 .tag("result", "sent").register(meterRegistry);
         this.publishFailedCounter = Counter.builder("inventory.outbox.publish")
@@ -88,17 +87,7 @@ public class OutboxPublisherJob {
         for (OutboxEvent event : batch) {
             // 3-1. topic resolve + Kafka send — 실패 시 markFailed()
             try {
-                String topicName = switch (event.getEventType()) {
-                    case "inventory-reserved-event" -> "inventory-reserved-event";
-                    case "inventory-failed-event" -> "inventory-failed-event";
-                    case "inventory-confirm-event" -> "inventory-confirm-event";
-                    case "inventory-confirm-failed-event" -> "inventory-confirm-failed-event";
-                    case "inventory-created-event" -> "inventory-created-event";
-                    case "inventory-expired-event" -> "inventory-expired-event";
-                    default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
-                };
-                kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())
-                        .get(2, TimeUnit.SECONDS);
+                outboxEventSender.send(event);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.error("Outbox publish interrupted. id={}, eventType={}", event.getId(), event.getEventType(), e);

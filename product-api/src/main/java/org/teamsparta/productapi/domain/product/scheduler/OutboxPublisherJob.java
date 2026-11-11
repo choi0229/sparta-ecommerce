@@ -4,17 +4,13 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.teamsparta.productapi.domain.product.entity.OutboxEvent;
-import org.teamsparta.productapi.global.exception.DomainException;
-import org.teamsparta.productapi.global.exception.DomainExceptionCode;
 
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Outbox 이벤트를 Kafka로 발행한다. (inventory-api·order-api와 같은 claim 구조)
@@ -26,6 +22,9 @@ import java.util.concurrent.TimeUnit;
  *   <li>상태 전이: 성공 시 SENT, 실패 시 PENDING(재시도 예약) 또는 FAILED — 건마다 별도 트랜잭션</li>
  * </ol>
  *
+ * <p>outbox.immediate-publish.enabled=true면 대부분의 행은 커밋 직후 OutboxImmediatePublisher가 발행하고,
+ * 이 폴러는 즉시 발행이 실패(재시도 예약)했거나 건너뛴 행, stale PROCESSING을 처리하는 안전망이 된다.
+ *
  * <p>@Transactional 없음: 각 단계는 OutboxEventClaimer·OutboxStatusUpdater의 개별 트랜잭션으로 처리된다.
  */
 @Component
@@ -34,7 +33,7 @@ public class OutboxPublisherJob {
 
     private final OutboxEventClaimer outboxEventClaimer;
     private final OutboxStatusUpdater outboxStatusUpdater;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final OutboxEventSender outboxEventSender;
     private final Counter publishSentCounter;
     private final Counter publishFailedCounter;
     private final int batchSize;
@@ -42,7 +41,7 @@ public class OutboxPublisherJob {
 
     public OutboxPublisherJob(OutboxEventClaimer outboxEventClaimer,
                               OutboxStatusUpdater outboxStatusUpdater,
-                              KafkaTemplate<String, String> kafkaTemplate,
+                              OutboxEventSender outboxEventSender,
                               MeterRegistry meterRegistry,
                               @Value("${scheduler.outbox.batch-size:50}") int batchSize,
                               @Value("${scheduler.outbox.stale-processing-timeout-ms:300000}") long staleProcessingTimeoutMs) {
@@ -55,7 +54,7 @@ public class OutboxPublisherJob {
         }
         this.outboxEventClaimer = outboxEventClaimer;
         this.outboxStatusUpdater = outboxStatusUpdater;
-        this.kafkaTemplate = kafkaTemplate;
+        this.outboxEventSender = outboxEventSender;
         this.publishSentCounter = Counter.builder("product.outbox.publish")
                 .tag("result", "sent").register(meterRegistry);
         this.publishFailedCounter = Counter.builder("product.outbox.publish")
@@ -78,15 +77,7 @@ public class OutboxPublisherJob {
         // 3. Kafka send (DB 트랜잭션 밖에서 수행)
         for (OutboxEvent event : batch) {
             try {
-                String topicName = switch (event.getEventType()) {
-                    case "variant-created-event" -> "variant-created-event";
-                    case "product-variant-event" -> "product-variant-event";
-                    case "productSnapshot-reply-event" -> "productSnapshot-reply-event";
-                    case "inventory-init-event" -> "inventory-init-event";
-                    default -> throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
-                };
-                kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())
-                        .get(2, TimeUnit.SECONDS);
+                outboxEventSender.send(event);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.error("Outbox publish interrupted. id={}, eventType={}", event.getId(), event.getEventType(), e);

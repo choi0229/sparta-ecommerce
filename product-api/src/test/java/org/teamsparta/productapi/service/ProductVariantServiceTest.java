@@ -14,7 +14,7 @@ import org.teamsparta.productapi.domain.product.entity.Product;
 import org.teamsparta.productapi.domain.product.entity.ProductVariant;
 import org.teamsparta.productapi.domain.product.event.ProductSnapShotReplyEvent;
 import org.teamsparta.productapi.domain.product.event.dto.ProductSnapshotRequestResult;
-import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
+import org.teamsparta.productapi.domain.product.scheduler.OutboxEventRecorder;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
 
 import java.math.BigDecimal;
@@ -37,7 +37,7 @@ class ProductVariantServiceTest {
     @Mock
     private ProductVariantRepository productVariantRepository;
     @Mock
-    private OutboxEventRepository outboxEventRepository;
+    private OutboxEventRecorder outboxEventRecorder;
 
     private final ObjectMapper realObjectMapper = new ObjectMapper();
 
@@ -62,11 +62,11 @@ class ProductVariantServiceTest {
         given(productVariantRepository.findBySkuIn(any())).willReturn(List.of());
 
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
-        then(outboxEventRepository).should(times(0)).save(any()); // 아직 저장 전
+        then(outboxEventRecorder).should(times(0)).save(any()); // 아직 저장 전
 
         productVariantService.replyProductSnapshot(event);
 
-        then(outboxEventRepository).should(times(1)).save(captor.capture());
+        then(outboxEventRecorder).should(times(1)).save(captor.capture());
         String payload = captor.getValue().getPayload();
         ProductSnapShotReplyEvent reply = realObjectMapper.readValue(payload, ProductSnapShotReplyEvent.class);
 
@@ -90,7 +90,7 @@ class ProductVariantServiceTest {
         productVariantService.replyProductSnapshot(event);
 
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
-        then(outboxEventRepository).should(times(1)).save(captor.capture());
+        then(outboxEventRecorder).should(times(1)).save(captor.capture());
         String payload = captor.getValue().getPayload();
         ProductSnapShotReplyEvent reply = realObjectMapper.readValue(payload, ProductSnapShotReplyEvent.class);
 
@@ -120,7 +120,7 @@ class ProductVariantServiceTest {
         productVariantService.replyProductSnapshot(event);
 
         ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
-        then(outboxEventRepository).should(times(1)).save(captor.capture());
+        then(outboxEventRecorder).should(times(1)).save(captor.capture());
         String payload = captor.getValue().getPayload();
         ProductSnapShotReplyEvent reply = realObjectMapper.readValue(payload, ProductSnapShotReplyEvent.class);
 

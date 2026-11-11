@@ -16,6 +16,7 @@ import org.teamsparta.orderapi.domain.order.event.ProductSnapShotRequestEvent;
 import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult;
 import org.teamsparta.orderapi.domain.order.event.dto.ProductSnapshotReplyResult.ProductSnapshotItem;
 import org.teamsparta.orderapi.domain.order.repository.*;
+import org.teamsparta.orderapi.domain.order.scheduler.OutboxEventRecorder;
 import org.teamsparta.orderapi.domain.productProjection.entity.ProductProjection;
 import org.teamsparta.orderapi.domain.productProjection.repository.ProductProjectionRepository;
 import org.teamsparta.orderapi.global.enums.IdempotencyStatus;
@@ -43,7 +44,7 @@ public class OrderTransactionalService {
     private final ObjectMapper objectMapper;
     private final IdempotencyService idempotencyService;
     private final OutboxQueryRepository outboxQueryRepository;
-    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxEventRecorder outboxEventRecorder;
     private final ProductSnapshotPendingStore productSnapshotPendingStore;
     private final KafkaTemplate<String, String> kafkaTemplate;
 
@@ -51,7 +52,7 @@ public class OrderTransactionalService {
     @Transactional
     public void acceptOrder(String idemKey, String requestHash, String snapshotRequestPayload) {
         idempotencyService.start(idemKey, requestHash);
-        outboxEventRepository.save(OutboxEvent.pending("Orders", UUID.randomUUID().toString(), "productSnapshot-requested-event", snapshotRequestPayload));
+        outboxEventRecorder.save(OutboxEvent.pending("Orders", UUID.randomUUID().toString(), "productSnapshot-requested-event", snapshotRequestPayload));
     }
 
     @Transactional
@@ -117,7 +118,7 @@ public class OrderTransactionalService {
         }catch(Exception e){
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
-        outboxEventRepository.save(OutboxEvent.pending("Orders", savedOrder.getId().toString(), "order-create-event", payload));
+        outboxEventRecorder.save(OutboxEvent.pending("Orders", savedOrder.getId().toString(), "order-create-event", payload));
         idempotencyService.complete(idemKey, savedOrder.getId());
     }
 

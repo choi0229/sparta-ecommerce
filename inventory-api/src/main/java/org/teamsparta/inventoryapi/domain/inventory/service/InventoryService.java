@@ -18,7 +18,7 @@ import org.teamsparta.inventoryapi.domain.inventory.event.dto.VariantCreatResult
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationItemRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryReservationRepository;
 import org.teamsparta.inventoryapi.domain.inventory.repository.InventoryStockRepository;
-import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxEventRepository;
+import org.teamsparta.inventoryapi.domain.inventory.scheduler.OutboxEventRecorder;
 import org.teamsparta.inventoryapi.global.enums.ReservationStatus;
 import org.teamsparta.inventoryapi.global.exception.DomainException;
 import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
@@ -40,7 +40,7 @@ public class InventoryService {
     private final InventoryReservationRepository inventoryReservationRepository;
     private final InventoryReservationItemRepository inventoryReservationItemRepository;
     private final InventoryEventPublisher inventoryEventPublisher;
-    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxEventRecorder outboxEventRecorder;
     private final ObjectMapper objectMapper;
 
     /** 재고 변경 전에 판별되는 예약 실패. 주문을 FAILED로 끝내야 하므로 재시도하지 않는다. */
@@ -66,7 +66,7 @@ public class InventoryService {
         String payload;
         try{
             payload = objectMapper.writeValueAsString(inventoryCreatedEvent);
-            outboxEventRepository.save(OutboxEvent.pending("Inventory", request.sku(), "inventory-created-event", payload));
+            outboxEventRecorder.save(OutboxEvent.pending("Inventory", request.sku(), "inventory-created-event", payload));
         }catch(Exception e){
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
@@ -156,7 +156,7 @@ public class InventoryService {
                 throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
             }
 
-            outboxEventRepository.save(OutboxEvent.pending("Inventory", event.getOrderId().toString(), "inventory-reserved-event", payload));
+            outboxEventRecorder.save(OutboxEvent.pending("Inventory", event.getOrderId().toString(), "inventory-reserved-event", payload));
         }catch (DomainException e){
             // 잠금 대기·DB 장애 등 시스템 예외는 여기서 잡지 않는다. 트랜잭션이 이미 중단되었을 수 있고, 재시도 대상이다.
             if(!RESERVE_BUSINESS_FAILURES.contains(e.getCode())){
@@ -170,7 +170,7 @@ public class InventoryService {
             }catch(Exception ex){
                 throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
             }
-            outboxEventRepository.save(OutboxEvent.pending("Inventory", failedEvent.getOrderId().toString(), "inventory-failed-event", payload));
+            outboxEventRecorder.save(OutboxEvent.pending("Inventory", failedEvent.getOrderId().toString(), "inventory-failed-event", payload));
         }
     }
 
@@ -216,7 +216,7 @@ public class InventoryService {
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
 
-        outboxEventRepository.save(OutboxEvent.pending("Inventory", inventoryConfirmedEvent.getOrderId().toString(), "inventory-confirm-event", payload));
+        outboxEventRecorder.save(OutboxEvent.pending("Inventory", inventoryConfirmedEvent.getOrderId().toString(), "inventory-confirm-event", payload));
     }
 
     private void saveConfirmFailedEvent(OrderConfirmResult event, ReservationStatus reservationStatus) {
@@ -230,6 +230,6 @@ public class InventoryService {
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
 
-        outboxEventRepository.save(OutboxEvent.pending("Inventory", event.orderId().toString(), "inventory-confirm-failed-event", payload));
+        outboxEventRecorder.save(OutboxEvent.pending("Inventory", event.orderId().toString(), "inventory-confirm-failed-event", payload));
     }
 }

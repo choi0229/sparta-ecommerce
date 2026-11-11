@@ -11,7 +11,7 @@ import org.teamsparta.productapi.domain.product.entity.ProductVariant;
 import org.teamsparta.productapi.domain.product.event.ProductSnapShotReplyEvent;
 import org.teamsparta.productapi.domain.product.event.dto.InventoryCreateResult;
 import org.teamsparta.productapi.domain.product.event.dto.ProductSnapshotRequestResult;
-import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository;
+import org.teamsparta.productapi.domain.product.scheduler.OutboxEventRecorder;
 import org.teamsparta.productapi.domain.product.repository.ProductVariantRepository;
 import org.teamsparta.productapi.global.enums.Status;
 import org.teamsparta.productapi.global.exception.DomainException;
@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
 public class ProductVariantService {
 
     private final ProductVariantRepository productVariantRepository;
-    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxEventRecorder outboxEventRecorder;
     private final ObjectMapper objectMapper;
 
     // TODO: Variant만 따로 추가 및 업데이트 로직 생성
@@ -91,7 +91,7 @@ public class ProductVariantService {
     private void saveReplyOutbox(ProductSnapShotReplyEvent event){
         try{
             String payload = objectMapper.writeValueAsString(event);
-            outboxEventRepository.save(OutboxEvent.pending("ProductSnapshot", event.getRequestId().toString(), "productSnapshot-reply-event", payload));
+            outboxEventRecorder.save(OutboxEvent.pending("ProductSnapshot", event.getRequestId().toString(), "productSnapshot-reply-event", payload));
         }catch (Exception ex){
             throw new DomainException(DomainExceptionCode.EVENT_PUBLISH_ERROR);
         }
