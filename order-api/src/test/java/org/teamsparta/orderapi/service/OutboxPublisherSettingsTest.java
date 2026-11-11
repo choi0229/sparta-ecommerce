@@ -12,7 +12,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.config.FixedDelayTask;
 import org.springframework.scheduling.config.ScheduledTask;
 import org.springframework.scheduling.config.ScheduledTaskHolder;
-import org.teamsparta.orderapi.domain.order.repository.OutboxQueryRepository;
+import org.teamsparta.orderapi.domain.order.scheduler.OutboxEventClaimer;
 import org.teamsparta.orderapi.domain.order.scheduler.OutboxPublisherJob;
 import org.teamsparta.orderapi.domain.order.scheduler.OutboxPublisherScheduler;
 import org.teamsparta.orderapi.domain.order.scheduler.OutboxStatusUpdater;
@@ -39,13 +39,13 @@ class OutboxPublisherSettingsTest {
     static class SchedulingConfig {
     }
 
-    private final OutboxQueryRepository outboxQueryRepository = mock(OutboxQueryRepository.class);
+    private final OutboxEventClaimer outboxEventClaimer = mock(OutboxEventClaimer.class);
 
     @SuppressWarnings("unchecked")
     private ApplicationContextRunner contextRunner() {
         return new ApplicationContextRunner()
                 .withUserConfiguration(SchedulingConfig.class)
-                .withBean(OutboxQueryRepository.class, () -> outboxQueryRepository)
+                .withBean(OutboxEventClaimer.class, () -> outboxEventClaimer)
                 .withBean(OutboxStatusUpdater.class, () -> mock(OutboxStatusUpdater.class))
                 .withBean(KafkaTemplate.class, () -> mock(KafkaTemplate.class))
                 .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
@@ -54,13 +54,14 @@ class OutboxPublisherSettingsTest {
     }
 
     @Test
-    @DisplayName("설정한 주기로 스케줄되고, 설정한 배치 크기로 조회한다")
+    @DisplayName("설정한 주기로 스케줄되고, 설정한 배치 크기로 claim과 stale 복구를 한다")
     void configuredValues_areApplied() {
         contextRunner()
                 .withPropertyValues("scheduler.outbox.batch-size=7", "scheduler.outbox.fixed-delay-ms=123")
                 .run(context -> {
                     assertThat(publishInterval(context)).isEqualTo(Duration.ofMillis(123));
-                    verify(outboxQueryRepository, timeout(3000).atLeastOnce()).findBatchForPublish(any(), eq(7));
+                    verify(outboxEventClaimer, timeout(3000).atLeastOnce()).claimBatch(any(), eq(7));
+                    verify(outboxEventClaimer, atLeastOnce()).recoverStaleProcessing(any(), eq(7));
                 });
     }
 
@@ -69,7 +70,8 @@ class OutboxPublisherSettingsTest {
     void defaults_keepPreviousBehavior() {
         contextRunner().run(context -> {
             assertThat(publishInterval(context)).isEqualTo(Duration.ofMillis(500));
-            verify(outboxQueryRepository, timeout(3000).atLeastOnce()).findBatchForPublish(any(), eq(50));
+            verify(outboxEventClaimer, timeout(3000).atLeastOnce()).claimBatch(any(), eq(50));
+            verify(outboxEventClaimer, atLeastOnce()).recoverStaleProcessing(any(), eq(50));
         });
     }
 
@@ -80,6 +82,15 @@ class OutboxPublisherSettingsTest {
                 .withPropertyValues("scheduler.outbox.batch-size=0")
                 .run(context -> assertThat(context).hasFailed()
                         .getFailure().rootCause().hasMessageContaining("scheduler.outbox.batch-size"));
+    }
+
+    @Test
+    @DisplayName("stale 복구 기준 시간이 1보다 작으면 기동하지 않는다")
+    void invalidStaleTimeout_failsStartup() {
+        contextRunner()
+                .withPropertyValues("scheduler.outbox.stale-processing-timeout-ms=0")
+                .run(context -> assertThat(context).hasFailed()
+                        .getFailure().rootCause().hasMessageContaining("scheduler.outbox.stale-processing-timeout-ms"));
     }
 
     private static Duration publishInterval(AssertableApplicationContext context) {

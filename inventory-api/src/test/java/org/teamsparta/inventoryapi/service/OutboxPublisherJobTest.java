@@ -45,7 +45,7 @@ public class OutboxPublisherJobTest {
     @BeforeEach
     void setUp() {
         outboxPublisherJob = new OutboxPublisherJob(
-                outboxEventClaimer, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry(), 50);
+                outboxEventClaimer, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry(), 50, 300_000L);
         // claimBatch()가 반환하는 이벤트는 이미 PROCESSING 상태
         event = OutboxEvent.pending("Inventory", AGGREGATE_ID, "inventory-created-event", "{}");
         ReflectionTestUtils.setField(event, "id", 1L);

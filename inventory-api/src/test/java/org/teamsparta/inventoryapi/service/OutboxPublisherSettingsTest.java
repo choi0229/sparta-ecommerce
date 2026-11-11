@@ -82,6 +82,15 @@ class OutboxPublisherSettingsTest {
                         .getFailure().rootCause().hasMessageContaining("scheduler.outbox.batch-size"));
     }
 
+    @Test
+    @DisplayName("stale 복구 기준 시간이 1보다 작으면 기동하지 않는다")
+    void invalidStaleTimeout_failsStartup() {
+        contextRunner()
+                .withPropertyValues("scheduler.outbox.stale-processing-timeout-ms=0")
+                .run(context -> assertThat(context).hasFailed()
+                        .getFailure().rootCause().hasMessageContaining("scheduler.outbox.stale-processing-timeout-ms"));
+    }
+
     private static Duration publishInterval(AssertableApplicationContext context) {
         List<FixedDelayTask> tasks = context.getBean(ScheduledTaskHolder.class).getScheduledTasks().stream()
                 .map(ScheduledTask::getTask)

@@ -13,11 +13,11 @@ import org.teamsparta.orderapi.global.exception.DomainExceptionCode;
 import java.time.Duration;
 
 /**
- * Outbox 상태 전이(SENT / FAILED)를 담당하는 Bean.
+ * Outbox 상태 전이(SENT / 재시도 예약)를 담당하는 Bean.
  *
- * <p>REQUIRED로 Publisher 트랜잭션에 합류한다. Publisher가 FOR UPDATE로 행을 잠근 상태에서
- * REQUIRES_NEW로 같은 행을 수정하면, 내부 트랜잭션은 바깥의 잠금 해제를 기다리고 바깥은 내부 종료를
- * 기다려 Publisher가 끝나지 않는다. DB는 이를 교착으로 감지하지 못한다.
+ * <p>Publisher는 claim 트랜잭션을 커밋한 뒤 트랜잭션 밖에서 Kafka로 전송하고, 결과를 건마다 별도 트랜잭션
+ * (REQUIRES_NEW)으로 기록한다. 그래서 같은 배치의 다른 이벤트 처리가 실패해도 이미 기록한 SENT나
+ * 재시도 횟수가 롤백되지 않는다. 행 잠금을 잡은 바깥 트랜잭션이 없으므로 자기 잠금 대기도 생기지 않는다.
  */
 @Component
 @RequiredArgsConstructor
@@ -29,7 +29,7 @@ public class OutboxStatusUpdater {
 
     private final OutboxEventRepository outboxEventRepository;
 
-    @Transactional(propagation = Propagation.REQUIRED)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markSent(Long id) {
         OutboxEvent event = outboxEventRepository.findById(id)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
@@ -37,7 +37,7 @@ public class OutboxStatusUpdater {
         outboxEventRepository.save(event);
     }
 
-    @Transactional(propagation = Propagation.REQUIRED)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markFailed(Long id) {
         OutboxEvent event = outboxEventRepository.findById(id)
                 .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));

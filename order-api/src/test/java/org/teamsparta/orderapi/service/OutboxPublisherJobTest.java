@@ -12,7 +12,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.teamsparta.orderapi.domain.order.entity.OutboxEvent;
-import org.teamsparta.orderapi.domain.order.repository.OutboxQueryRepository;
+import org.teamsparta.orderapi.domain.order.scheduler.OutboxEventClaimer;
 import org.teamsparta.orderapi.domain.order.scheduler.OutboxPublisherJob;
 import org.teamsparta.orderapi.domain.order.scheduler.OutboxStatusUpdater;
 import org.teamsparta.orderapi.global.enums.OutboxStatus;
@@ -33,7 +33,7 @@ public class OutboxPublisherJobTest {
     private OutboxPublisherJob outboxPublisherJob;
 
     @Mock
-    private OutboxQueryRepository outboxQueryRepository;
+    private OutboxEventClaimer outboxEventClaimer;
     @Mock
     private OutboxStatusUpdater outboxStatusUpdater;
     @Mock
@@ -45,7 +45,7 @@ public class OutboxPublisherJobTest {
     @BeforeEach
     void setUp() {
         outboxPublisherJob = new OutboxPublisherJob(
-                outboxQueryRepository, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry(), 50);
+                outboxEventClaimer, outboxStatusUpdater, kafkaTemplate, new SimpleMeterRegistry(), 50, 300_000L);
         event = OutboxEvent.pending("Orders", AGGREGATE_ID, "order-create-event", "{}");
         ReflectionTestUtils.setField(event, "id", 1L);
         ReflectionTestUtils.setField(event, "retryCount", 0);
@@ -56,7 +56,7 @@ public class OutboxPublisherJobTest {
     @DisplayName("성공: Kafka 전송 성공 시 OutboxStatusUpdater.markSent(id)가 호출된다")
     @SuppressWarnings("unchecked")
     void publish_Success_callsMarkSent() throws Exception {
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
+        given(outboxEventClaimer.claimBatch(any(), anyInt()))
                 .willReturn(List.of(event));
 
         CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
@@ -75,7 +75,7 @@ public class OutboxPublisherJobTest {
     @DisplayName("실패: Kafka 전송 실패 시 OutboxStatusUpdater.markFailed(id)가 호출된다")
     @SuppressWarnings("unchecked")
     void publish_Fail_callsMarkFailed() throws Exception {
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
+        given(outboxEventClaimer.claimBatch(any(), anyInt()))
                 .willReturn(List.of(event));
 
         CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
@@ -95,7 +95,7 @@ public class OutboxPublisherJobTest {
         OutboxEvent paymentSucceeded = OutboxEvent.pending("Payment", AGGREGATE_ID, "payment-succeeded-event", "{}");
         ReflectionTestUtils.setField(paymentSucceeded, "id", 2L);
 
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
+        given(outboxEventClaimer.claimBatch(any(), anyInt()))
                 .willReturn(List.of(paymentSucceeded));
 
         CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
@@ -117,7 +117,7 @@ public class OutboxPublisherJobTest {
         OutboxEvent paymentFailed = OutboxEvent.pending("Payment", AGGREGATE_ID, "payment-failed-event", "{}");
         ReflectionTestUtils.setField(paymentFailed, "id", 3L);
 
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
+        given(outboxEventClaimer.claimBatch(any(), anyInt()))
                 .willReturn(List.of(paymentFailed));
 
         CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
@@ -138,7 +138,7 @@ public class OutboxPublisherJobTest {
         OutboxEvent unknown = OutboxEvent.pending("Orders", AGGREGATE_ID, "unknown-event", "{}");
         ReflectionTestUtils.setField(unknown, "id", 4L);
 
-        given(outboxQueryRepository.findBatchForPublish(any(), anyInt()))
+        given(outboxEventClaimer.claimBatch(any(), anyInt()))
                 .willReturn(List.of(unknown));
 
         outboxPublisherJob.publish();
@@ -146,5 +146,41 @@ public class OutboxPublisherJobTest {
         then(kafkaTemplate).should(never()).send(anyString(), anyString(), anyString());
         then(outboxStatusUpdater).should(times(1)).markFailed(4L);
         then(outboxStatusUpdater).should(never()).markSent(anyLong());
+    }
+
+    @Test
+    @DisplayName("Kafka 전송 성공 후 markSent()가 실패해도 markFailed()는 호출되지 않고 남은 배치는 중단한다")
+    @SuppressWarnings("unchecked")
+    void publish_markSentFailsAfterKafkaSuccess_doesNotMarkFailed() throws Exception {
+        OutboxEvent second = OutboxEvent.pending("Orders", "200", "order-create-event", "{}");
+        ReflectionTestUtils.setField(second, "id", 5L);
+        given(outboxEventClaimer.claimBatch(any(), anyInt())).willReturn(List.of(event, second));
+
+        CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
+        given(kafkaTemplate.send(eq("order-create-event"), eq(AGGREGATE_ID), anyString())).willReturn(future);
+        given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
+        Mockito.doThrow(new RuntimeException("DB down")).when(outboxStatusUpdater).markSent(1L);
+
+        outboxPublisherJob.publish();
+
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(kafkaTemplate).should(never()).send(anyString(), eq("200"), anyString());
+    }
+
+    @Test
+    @DisplayName("매 실행마다 claim 전에 stale PROCESSING 복구를 설정한 timeout 기준으로 호출한다")
+    void publish_recoversStaleProcessingBeforeClaim() {
+        given(outboxEventClaimer.claimBatch(any(), anyInt())).willReturn(List.of());
+        java.time.ZonedDateTime before = java.time.ZonedDateTime.now();
+
+        outboxPublisherJob.publish();
+
+        org.mockito.InOrder inOrder = Mockito.inOrder(outboxEventClaimer);
+        org.mockito.ArgumentCaptor<java.time.ZonedDateTime> threshold =
+                org.mockito.ArgumentCaptor.forClass(java.time.ZonedDateTime.class);
+        inOrder.verify(outboxEventClaimer).recoverStaleProcessing(threshold.capture(), eq(50));
+        inOrder.verify(outboxEventClaimer).claimBatch(any(), eq(50));
+        org.assertj.core.api.Assertions.assertThat(threshold.getValue())
+                .isBetween(before.minusMinutes(5).minusSeconds(1), java.time.ZonedDateTime.now().minusMinutes(5));
     }
 }

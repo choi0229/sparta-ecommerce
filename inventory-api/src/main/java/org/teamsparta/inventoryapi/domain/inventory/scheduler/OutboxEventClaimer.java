@@ -14,15 +14,15 @@ import java.util.List;
 /**
  * PENDING → PROCESSING claim 과 stale PROCESSING → PENDING 복구를 담당한다.
  *
- * <p>claimBatch()는 짧은 단일 트랜잭션 안에서 PESSIMISTIC_WRITE 락 획득 → PROCESSING 전이 →
- * 커밋까지 완료한다. Kafka 전송은 이 트랜잭션 밖에서 OutboxPublisherJob이 처리한다.
+ * <p>claimBatch()는 짧은 단일 트랜잭션 안에서 FOR UPDATE SKIP LOCKED 조회 → PROCESSING 전이 →
+ * 커밋까지 완료한다. 다른 Publisher가 잠근 행은 기다리지 않고 건너뛴다. Kafka 전송은 이 트랜잭션 밖에서 OutboxPublisherJob이 처리한다.
  *
  * <p>stale PROCESSING recovery: publisher 크래시로 인해 PROCESSING 상태가 고착되면
  * claimed_at 기준 timeout 이후 recoverStaleProcessing()이 PENDING으로 재설정한다.
  * 이때 retryCount는 건드리지 않는다(전송 실패가 아닌 publisher 장애이므로).
  *
- * <p>알려진 한계: PROCESSING 전이 직후 publisher 인스턴스가 크래시되면 timeout(기본 5분)
- * 만큼 이벤트 발행이 지연될 수 있다. 이 지연을 줄이려면 timeout을 줄이거나
+ * <p>알려진 한계: PROCESSING 전이 직후 publisher 인스턴스가 크래시되면 timeout
+ * (scheduler.outbox.stale-processing-timeout-ms, 기본 5분)만큼 이벤트 발행이 지연될 수 있다. 이 지연을 줄이려면 timeout을 줄이거나
  * claimed_at heartbeat 갱신 로직을 추가해야 한다(현재 PR 범위 밖).
  */
 @Component
@@ -37,7 +37,7 @@ public class OutboxEventClaimer {
      * PENDING 이벤트를 PROCESSING으로 claim한다.
      *
      * <p>조회 ~ 상태 전이 ~ 저장이 단일 트랜잭션 안에서 끝난다.
-     * PESSIMISTIC_WRITE 락은 이 트랜잭션이 커밋될 때 해제된다.
+     * FOR UPDATE SKIP LOCKED 잠금은 이 트랜잭션이 커밋될 때 해제된다.
      * Kafka 전송은 호출부(OutboxPublisherJob)에서 트랜잭션 밖에서 수행한다.
      *
      * @param now       조회 기준 시각 (nextRetryAt 비교에 사용)

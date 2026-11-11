@@ -11,6 +11,7 @@ import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
 import org.teamsparta.inventoryapi.global.exception.DomainException;
 import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
 
+import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -26,7 +27,7 @@ import java.util.concurrent.TimeUnit;
  *   <li>상태 전이: 성공 시 SENT, 실패 시 PENDING(재시도) 또는 FAILED(최대 재시도 초과)</li>
  * </ol>
  *
- * <p>중복 발행 방지: PROCESSING claim이 단일 트랜잭션 안에서 PESSIMISTIC_WRITE + 상태 전이를
+ * <p>중복 발행 방지: PROCESSING claim이 단일 트랜잭션 안에서 FOR UPDATE SKIP LOCKED + 상태 전이를
  * 함께 처리하므로 멀티 인스턴스 환경에서 같은 이벤트가 중복 claim되지 않는다.
  *
  * <p>@Transactional 없음: Kafka send는 DB 트랜잭션 밖에서 수행된다.
@@ -37,22 +38,26 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class OutboxPublisherJob {
 
-    private static final long STALE_PROCESSING_TIMEOUT_MINUTES = 5;
-
     private final OutboxEventClaimer outboxEventClaimer;
     private final OutboxStatusUpdater outboxStatusUpdater;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final Counter publishSentCounter;
     private final Counter publishFailedCounter;
     private final int batchSize;
+    private final Duration staleProcessingTimeout;
 
     public OutboxPublisherJob(OutboxEventClaimer outboxEventClaimer,
                               OutboxStatusUpdater outboxStatusUpdater,
                               KafkaTemplate<String, String> kafkaTemplate,
                               MeterRegistry meterRegistry,
-                              @Value("${scheduler.outbox.batch-size:50}") int batchSize) {
+                              @Value("${scheduler.outbox.batch-size:50}") int batchSize,
+                              @Value("${scheduler.outbox.stale-processing-timeout-ms:300000}") long staleProcessingTimeoutMs) {
         if (batchSize < 1) {
             throw new IllegalArgumentException("scheduler.outbox.batch-size must be at least 1: " + batchSize);
+        }
+        if (staleProcessingTimeoutMs < 1) {
+            throw new IllegalArgumentException(
+                    "scheduler.outbox.stale-processing-timeout-ms must be at least 1: " + staleProcessingTimeoutMs);
         }
         this.outboxEventClaimer = outboxEventClaimer;
         this.outboxStatusUpdater = outboxStatusUpdater;
@@ -62,6 +67,7 @@ public class OutboxPublisherJob {
         this.publishFailedCounter = Counter.builder("inventory.outbox.publish")
                 .tag("result", "failed").register(meterRegistry);
         this.batchSize = batchSize;
+        this.staleProcessingTimeout = Duration.ofMillis(staleProcessingTimeoutMs);
     }
 
     // 실행 주기: scheduler.outbox.fixed-delay-ms (이전 실행이 끝난 뒤 기다리는 시간, 기본 500ms)
@@ -70,8 +76,7 @@ public class OutboxPublisherJob {
         ZonedDateTime now = ZonedDateTime.now();
 
         // 1. Publisher 크래시로 고착된 stale PROCESSING 이벤트를 PENDING으로 복구
-        outboxEventClaimer.recoverStaleProcessing(
-                now.minusMinutes(STALE_PROCESSING_TIMEOUT_MINUTES), batchSize);
+        outboxEventClaimer.recoverStaleProcessing(now.minus(staleProcessingTimeout), batchSize);
 
         // 2. PENDING → PROCESSING claim (짧은 트랜잭션, Kafka 호출 없음)
         List<OutboxEvent> batch = outboxEventClaimer.claimBatch(now, batchSize);

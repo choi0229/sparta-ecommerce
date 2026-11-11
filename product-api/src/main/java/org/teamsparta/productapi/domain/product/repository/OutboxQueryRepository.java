@@ -17,8 +17,14 @@ import static org.teamsparta.productapi.domain.product.entity.QOutboxEvent.outbo
 @RequiredArgsConstructor
 public class OutboxQueryRepository {
 
+    private static final int SKIP_LOCKED = -2;
+
     private final JPAQueryFactory queryFactory;
 
+    /**
+     * 발행 대상(PENDING이고 재시도 시각이 된 행)을 오래된 순으로 잠그며 조회한다.
+     * 호출부(OutboxEventClaimer.claimBatch)의 트랜잭션 안에서만 의미가 있다.
+     */
     public List<OutboxEvent> findBatchForPublish(ZonedDateTime now, int batchSize) {
         return queryFactory
                 .selectFrom(outboxEvent)
@@ -29,8 +35,8 @@ public class OutboxQueryRepository {
                 .orderBy(outboxEvent.createdAt.asc())
                 .limit(batchSize)
                 .setLockMode(LockModeType.PESSIMISTIC_WRITE)
-                // TODO: ? '3000' 대신 '-2'를 넣으면 대부분의 dialect에서 'SKIP LOCKED'로 해석
-                .setHint("javax.persistence.lock.timeout", 3000)
+                // -2 = LockOptions.SKIP_LOCKED: 다른 Publisher가 잠근 행은 기다리지 않고 건너뛴다 (FOR UPDATE SKIP LOCKED)
+                .setHint("jakarta.persistence.lock.timeout", SKIP_LOCKED)
                 .fetch();
     }
 

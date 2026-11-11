@@ -83,5 +83,6 @@ FROM run_orders o JOIN payment_mock_result p ON p.order_id = o.id WHERE p.succes
 SELECT 'order.outbox_failed', CASE WHEN count(*) = 0 THEN 'PASS' ELSE 'FAIL' END, count(*)
 FROM outbox_event WHERE status = 'FAILED' AND created_at >= (SELECT min(created_at) FROM run_requests);
 
+-- PROCESSING: claim 후 아직 SENT로 기록되지 않은 행(발행 중이거나 stale 복구 대기)
 SELECT 'order.outbox_backlog', CASE WHEN count(*) = 0 THEN 'PASS' ELSE 'WAIT' END, count(*)
-FROM outbox_event WHERE status = 'PENDING';
+FROM outbox_event WHERE status IN ('PENDING', 'PROCESSING');
