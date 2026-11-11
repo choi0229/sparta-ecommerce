@@ -56,7 +56,7 @@ public class OutboxPublisherJobTest {
     }
 
     @Test
-    @DisplayName("성공: claim한 이벤트를 Kafka로 전송하고 markSent(id)를 호출한다")
+    @DisplayName("성공: claim한 이벤트를 Kafka로 전송하고 markSent(ids, claimedAt)를 호출한다")
     @SuppressWarnings("unchecked")
     void publish_success() throws Exception {
         given(outboxEventClaimer.claimBatch(any(), eq(50))).willReturn(List.of(processing("variant-created-event")));
@@ -67,7 +67,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(kafkaTemplate).should(times(1)).send("variant-created-event", "SKU-1", "{}");
-        then(outboxStatusUpdater).should(times(1)).markSent(1L);
+        then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L)), any());
         then(outboxStatusUpdater).should(never()).markFailed(anyLong());
     }
 
@@ -83,7 +83,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(outboxStatusUpdater).should(times(1)).markFailed(1L);
-        then(outboxStatusUpdater).should(never()).markSent(anyLong());
+        then(outboxStatusUpdater).should(never()).markSent(anyCollection(), any());
     }
 
     @Test
@@ -119,7 +119,7 @@ public class OutboxPublisherJobTest {
         CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
         given(kafkaTemplate.send(anyString(), anyString(), anyString())).willReturn(future);
         given(future.get(2, TimeUnit.SECONDS)).willReturn(null);
-        Mockito.doThrow(new RuntimeException("DB down")).when(outboxStatusUpdater).markSent(1L);
+        Mockito.doThrow(new RuntimeException("DB down")).when(outboxStatusUpdater).markSent(eq(List.of(1L)), any());
 
         outboxPublisherJob.publish();
 

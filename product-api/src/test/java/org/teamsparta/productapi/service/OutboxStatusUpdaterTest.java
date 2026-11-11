@@ -15,11 +15,14 @@ import org.teamsparta.productapi.global.exception.DomainException;
 import org.teamsparta.productapi.global.exception.DomainExceptionCode;
 
 import java.time.Duration;
+import java.time.ZonedDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
@@ -41,16 +44,16 @@ class OutboxStatusUpdaterTest {
     }
 
     @Test
-    @DisplayName("markSent() — 이벤트를 SENT 상태로 변경하고 저장한다")
-    void markSent_setsStatusToSentAndSaves() {
-        OutboxEvent event = pendingEvent();
-        given(outboxEventRepository.findById(1L)).willReturn(Optional.of(event));
+    @DisplayName("markSent() — 조회 없이 자신의 claim 시각을 조건으로 한 UPDATE 하나로 SENT 처리하고 갱신 행 수를 돌려준다")
+    void markSent_updatesClaimedRowsWithoutSelect() {
+        ZonedDateTime claimedAt = ZonedDateTime.now();
+        given(outboxEventRepository.markSentIfClaimed(eq(List.of(1L, 2L)), eq(claimedAt), any())).willReturn(1);
 
-        outboxStatusUpdater.markSent(1L);
+        int updated = outboxStatusUpdater.markSent(List.of(1L, 2L), claimedAt);
 
-        assertThat(event.getStatus()).isEqualTo(OutboxStatus.SENT);
-        assertThat(event.getSentAt()).isNotNull();
-        then(outboxEventRepository).should(times(1)).save(event);
+        assertThat(updated).isEqualTo(1);
+        then(outboxEventRepository).should(never()).findById(any());
+        then(outboxEventRepository).should(never()).save(any());
     }
 
     @Test
@@ -68,16 +71,11 @@ class OutboxStatusUpdaterTest {
     }
 
     @Test
-    @DisplayName("markSent() — 존재하지 않는 id면 DomainException(EVENT_NOT_FOUND)이 발생한다")
-    void markSent_notFound_throwsDomainException() {
-        given(outboxEventRepository.findById(999L)).willReturn(Optional.empty());
+    @DisplayName("markSent() — 빈 목록이면 쿼리하지 않는다")
+    void markSent_emptyIds_noQuery() {
+        assertThat(outboxStatusUpdater.markSent(List.of(), ZonedDateTime.now())).isZero();
 
-        assertThatThrownBy(() -> outboxStatusUpdater.markSent(999L))
-                .isInstanceOf(DomainException.class)
-                .satisfies(ex -> assertThat(((DomainException) ex).getCode())
-                        .isEqualTo(DomainExceptionCode.EVENT_NOT_FOUND.name()));
-
-        then(outboxEventRepository).should(never()).save(any());
+        then(outboxEventRepository).shouldHaveNoInteractions();
     }
 
     @Test

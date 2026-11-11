@@ -13,6 +13,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import org.teamsparta.productapi.domain.product.entity.OutboxEvent;
 
 import java.time.ZonedDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -30,7 +31,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li>실행기 큐가 가득 차면 기다리지 않고 건너뛴다(skipped). 행은 PENDING으로 남아 폴러가 발행한다.</li>
  *   <li>실행기 스레드에서 새 트랜잭션으로 조건부 claim한다(PENDING일 때만 PROCESSING). 폴러가 먼저 가져갔으면
  *       갱신 행이 0건이므로 아무것도 하지 않는다(missed).</li>
- *   <li>트랜잭션 밖에서 Kafka로 전송하고, 성공하면 SENT, 실패하면 폴러와 같은 재시도 예약을 별도 트랜잭션으로 기록한다.</li>
+ *   <li>트랜잭션 밖에서 Kafka로 전송하고, 성공하면 SENT(자신의 claim인 행에만), 실패하면 폴러와 같은 재시도 예약을
+ *       별도 트랜잭션으로 기록한다.</li>
  * </ol>
  *
  * <p>outbox.immediate-publish.enabled=true일 때만 등록된다. false면 기존처럼 폴링만으로 발행한다.
@@ -130,7 +132,10 @@ public class OutboxImmediatePublisher implements DisposableBean {
 
         // 전송 성공 후 상태 전이 — 실패해도 재시도 예약을 하지 않는다(중복 발행 방지). PROCESSING은 stale 복구가 되돌린다
         try {
-            outboxStatusUpdater.markSent(event.getId());
+            if (outboxStatusUpdater.markSent(List.of(event.getId()), event.getClaimedAt()) == 0) {
+                // stale 복구 후 다른 쪽이 다시 claim한 행: 그쪽 claim의 기록을 덮어쓰지 않는다
+                log.warn("Outbox event was re-claimed before SENT was recorded. id={}", event.getId());
+            }
             sentCounter.increment();
         } catch (Exception e) {
             failedCounter.increment();

@@ -54,7 +54,7 @@ public class OutboxPublisherJobTest {
     }
 
     @Test
-    @DisplayName("성공: Kafka 전송 성공 시 OutboxStatusUpdater.markSent(id)가 호출된다")
+    @DisplayName("성공: Kafka 전송 성공 시 OutboxStatusUpdater.markSent(ids, claimedAt)가 호출된다")
     @SuppressWarnings("unchecked")
     void publish_Success_callsMarkSent() throws Exception {
         given(outboxEventClaimer.claimBatch(any(), anyInt()))
@@ -67,7 +67,7 @@ public class OutboxPublisherJobTest {
 
         outboxPublisherJob.publish();
 
-        then(outboxStatusUpdater).should(times(1)).markSent(1L);
+        then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L)), any());
         then(outboxStatusUpdater).should(never()).markFailed(anyLong());
         then(kafkaTemplate).should(times(1)).send("order-create-event", AGGREGATE_ID, "{}");
     }
@@ -86,7 +86,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(outboxStatusUpdater).should(times(1)).markFailed(1L);
-        then(outboxStatusUpdater).should(never()).markSent(anyLong());
+        then(outboxStatusUpdater).should(never()).markSent(anyCollection(), any());
     }
 
     @Test
@@ -107,7 +107,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(kafkaTemplate).should(times(1)).send("payment-succeeded-event", AGGREGATE_ID, "{}");
-        then(outboxStatusUpdater).should(times(1)).markSent(2L);
+        then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(2L)), any());
         then(outboxStatusUpdater).should(never()).markFailed(anyLong());
     }
 
@@ -129,7 +129,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(kafkaTemplate).should(times(1)).send("payment-failed-event", AGGREGATE_ID, "{}");
-        then(outboxStatusUpdater).should(times(1)).markSent(3L);
+        then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(3L)), any());
         then(outboxStatusUpdater).should(never()).markFailed(anyLong());
     }
 
@@ -146,11 +146,11 @@ public class OutboxPublisherJobTest {
 
         then(kafkaTemplate).should(never()).send(anyString(), anyString(), anyString());
         then(outboxStatusUpdater).should(times(1)).markFailed(4L);
-        then(outboxStatusUpdater).should(never()).markSent(anyLong());
+        then(outboxStatusUpdater).should(never()).markSent(anyCollection(), any());
     }
 
     @Test
-    @DisplayName("Kafka 전송 성공 후 markSent()가 실패해도 markFailed()는 호출되지 않고 남은 배치는 중단한다")
+    @DisplayName("Kafka 전송 성공 후 SENT 일괄 기록이 실패해도 markFailed()는 호출되지 않는다")
     @SuppressWarnings("unchecked")
     void publish_markSentFailsAfterKafkaSuccess_doesNotMarkFailed() throws Exception {
         OutboxEvent second = OutboxEvent.pending("Orders", "200", "order-create-event", "{}");
@@ -158,14 +158,40 @@ public class OutboxPublisherJobTest {
         given(outboxEventClaimer.claimBatch(any(), anyInt())).willReturn(List.of(event, second));
 
         CompletableFuture<SendResult<String, String>> future = Mockito.mock(CompletableFuture.class);
-        given(kafkaTemplate.send(eq("order-create-event"), eq(AGGREGATE_ID), anyString())).willReturn(future);
+        given(kafkaTemplate.send(eq("order-create-event"), anyString(), anyString())).willReturn(future);
         given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
-        Mockito.doThrow(new RuntimeException("DB down")).when(outboxStatusUpdater).markSent(1L);
+        Mockito.doThrow(new RuntimeException("DB down")).when(outboxStatusUpdater).markSent(eq(List.of(1L, 5L)), any());
 
         outboxPublisherJob.publish();
 
+        // 이미 발행된 이벤트를 재시도 대상으로 되돌리면 중복 발행된다 — PROCESSING은 stale 복구가 되돌린다
         then(outboxStatusUpdater).should(never()).markFailed(anyLong());
-        then(kafkaTemplate).should(never()).send(anyString(), eq("200"), anyString());
+        then(kafkaTemplate).should(times(1)).send("order-create-event", "200", "{}");
+    }
+
+    @Test
+    @DisplayName("배치 중 성공한 행만 모아 한 번에 SENT 처리하고, 실패한 행은 건별로 재시도를 예약한다")
+    @SuppressWarnings("unchecked")
+    void publish_mixedBatch_marksSentOnceAndFailedPerEvent() throws Exception {
+        OutboxEvent failing = OutboxEvent.pending("Orders", "200", "order-create-event", "{}");
+        ReflectionTestUtils.setField(failing, "id", 5L);
+        OutboxEvent third = OutboxEvent.pending("Orders", "300", "order-create-event", "{}");
+        ReflectionTestUtils.setField(third, "id", 6L);
+        given(outboxEventClaimer.claimBatch(any(), anyInt())).willReturn(List.of(event, failing, third));
+
+        CompletableFuture<SendResult<String, String>> ok = Mockito.mock(CompletableFuture.class);
+        CompletableFuture<SendResult<String, String>> fail = Mockito.mock(CompletableFuture.class);
+        given(kafkaTemplate.send(eq("order-create-event"), anyString(), anyString())).willReturn(ok);
+        given(kafkaTemplate.send("order-create-event", "200", "{}")).willReturn(fail);
+        given(ok.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
+        given(fail.get(2, TimeUnit.SECONDS)).willThrow(new RuntimeException("Kafka Down"));
+
+        outboxPublisherJob.publish();
+
+        then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L, 6L)), any());
+        then(outboxStatusUpdater).should(times(1)).markFailed(5L);
+        then(outboxStatusUpdater).should(never()).markFailed(1L);
+        then(outboxStatusUpdater).should(never()).markFailed(6L);
     }
 
     @Test

@@ -10,6 +10,7 @@ import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
 
 import java.time.Duration;
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -20,7 +21,8 @@ import java.util.List;
  *   <li>Stale PROCESSING 복구: publisher 크래시로 고착된 PROCESSING → PENDING (별도 트랜잭션)</li>
  *   <li>PENDING claim: PENDING 이벤트를 PROCESSING으로 전이하고 커밋 (짧은 트랜잭션, DB 락 빠른 해제)</li>
  *   <li>Kafka send: 트랜잭션 밖에서 수행 — DB 락을 잡은 채 블로킹하지 않음</li>
- *   <li>상태 전이: 성공 시 SENT, 실패 시 PENDING(재시도) 또는 FAILED(최대 재시도 초과)</li>
+ *   <li>상태 전이: 실패 시 PENDING(재시도) 또는 FAILED(최대 재시도 초과) — 건마다 별도 트랜잭션.
+ *       성공한 행은 배치 끝에 한 번의 UPDATE로 SENT — 자신의 claim(claimed_at)인 행에만 적용</li>
  * </ol>
  *
  * <p>중복 발행 방지: PROCESSING claim이 단일 트랜잭션 안에서 FOR UPDATE SKIP LOCKED + 상태 전이를
@@ -83,35 +85,51 @@ public class OutboxPublisherJob {
             return;
         }
 
-        // 3. Kafka send (DB 트랜잭션 밖에서 수행)
-        for (OutboxEvent event : batch) {
-            // 3-1. topic resolve + Kafka send — 실패 시 markFailed()
-            try {
-                outboxEventSender.send(event);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.error("Outbox publish interrupted. id={}, eventType={}", event.getId(), event.getEventType(), e);
-                outboxStatusUpdater.markFailed(event.getId());
-                publishFailedCounter.increment();
-                break; // interrupt 플래그 복원 후 루프 종료
-            } catch (Exception e) {
-                log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
-                outboxStatusUpdater.markFailed(event.getId());
-                publishFailedCounter.increment();
-                continue; // 다음 이벤트로 — markSent 블록은 건너뜀
+        // 3. Kafka send (DB 트랜잭션 밖에서 수행). 실패한 행은 건마다 재시도를 예약하고, 성공한 행은 모아 둔다
+        List<Long> sentIds = new ArrayList<>(batch.size());
+        try {
+            for (OutboxEvent event : batch) {
+                try {
+                    outboxEventSender.send(event);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.error("Outbox publish interrupted. id={}, eventType={}", event.getId(), event.getEventType(), e);
+                    outboxStatusUpdater.markFailed(event.getId());
+                    publishFailedCounter.increment();
+                    break; // interrupt 플래그 복원 후 루프 종료 — 남은 PROCESSING은 stale 복구가 되돌린다
+                } catch (Exception e) {
+                    log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
+                    outboxStatusUpdater.markFailed(event.getId());
+                    publishFailedCounter.increment();
+                    continue;
+                }
+                sentIds.add(event.getId());
             }
+        } finally {
+            // 4. 전송에 성공한 행을 한 번의 UPDATE로 SENT 처리 (재시도 예약 중 예외가 나도 이미 보낸 행은 기록한다)
+            recordSent(sentIds, batch.get(0).getClaimedAt());
+        }
+    }
 
-            // 3-2. Kafka send 성공 후 DB 상태 전이 — markFailed() 호출 금지
-            // 이미 발행된 이벤트를 재시도 대상으로 되돌리면 중복 발행이 발생한다.
-            try {
-                outboxStatusUpdater.markSent(event.getId());
-                publishSentCounter.increment();
-            } catch (Exception e) {
-                log.error("Status update failed after successful Kafka publish. id={}, eventType={}",
-                        event.getId(), event.getEventType(), e);
-                publishFailedCounter.increment();
-                break; // DB 업데이트 불안정 상태 — 남은 배치 처리 중단 (stale recovery가 복구)
+    /**
+     * Kafka 전송 성공 후 상태 전이 — 실패해도 markFailed()를 부르지 않는다
+     * (이미 발행된 이벤트를 재시도 대상으로 되돌리면 중복 발행된다). 남은 PROCESSING은 stale 복구가 다시 발행한다.
+     */
+    private void recordSent(List<Long> sentIds, ZonedDateTime claimedAt) {
+        if (sentIds.isEmpty()) {
+            return;
+        }
+        try {
+            int updated = outboxStatusUpdater.markSent(sentIds, claimedAt);
+            publishSentCounter.increment(updated);
+            if (updated < sentIds.size()) {
+                // stale 복구 후 다른 쪽이 다시 claim한 행: 그쪽 claim의 기록을 덮어쓰지 않는다
+                log.warn("Some sent outbox events were re-claimed before SENT was recorded. sent={}, recorded={}",
+                        sentIds.size(), updated);
             }
+        } catch (Exception e) {
+            log.error("Status update failed after successful Kafka publish. ids={}", sentIds, e);
+            publishFailedCounter.increment(sentIds.size());
         }
     }
 }

@@ -65,7 +65,7 @@ public class OutboxPublisherJobTest {
     }
 
     @Test
-    @DisplayName("Kafka 전송 성공 시 OutboxStatusUpdater.markSent(id)가 호출된다")
+    @DisplayName("Kafka 전송 성공 시 OutboxStatusUpdater.markSent(ids, claimedAt)가 호출된다")
     @SuppressWarnings("unchecked")
     void publish_success_callsMarkSent() throws Exception {
         given(outboxEventClaimer.claimBatch(any(), anyInt())).willReturn(List.of(event));
@@ -76,7 +76,7 @@ public class OutboxPublisherJobTest {
 
         outboxPublisherJob.publish();
 
-        then(outboxStatusUpdater).should(times(1)).markSent(1L);
+        then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L)), any());
         then(outboxStatusUpdater).should(never()).markFailed(anyLong());
         then(kafkaTemplate).should(times(1)).send("inventory-created-event", AGGREGATE_ID, "{}");
     }
@@ -94,7 +94,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(outboxStatusUpdater).should(times(1)).markFailed(1L);
-        then(outboxStatusUpdater).should(never()).markSent(anyLong());
+        then(outboxStatusUpdater).should(never()).markSent(anyCollection(), any());
     }
 
     @Test
@@ -107,12 +107,12 @@ public class OutboxPublisherJobTest {
         given(kafkaTemplate.send(eq("inventory-created-event"), eq(AGGREGATE_ID), anyString())).willReturn(future);
         given(future.get(2, TimeUnit.SECONDS)).willReturn(Mockito.mock(SendResult.class));
         // Kafka send 성공, markSent()는 예외 발생
-        Mockito.doThrow(new RuntimeException("DB connection lost")).when(outboxStatusUpdater).markSent(1L);
+        Mockito.doThrow(new RuntimeException("DB connection lost")).when(outboxStatusUpdater).markSent(eq(List.of(1L)), any());
 
         outboxPublisherJob.publish();
 
         // markFailed()는 절대 호출되면 안 된다 — 이미 발행된 이벤트를 재시도 대상으로 되돌리면 중복 발행
         then(outboxStatusUpdater).should(never()).markFailed(anyLong());
-        then(outboxStatusUpdater).should(times(1)).markSent(1L);
+        then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L)), any());
     }
 }

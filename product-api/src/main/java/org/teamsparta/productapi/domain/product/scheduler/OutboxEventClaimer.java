@@ -10,6 +10,7 @@ import org.teamsparta.productapi.domain.product.repository.OutboxEventRepository
 import org.teamsparta.productapi.domain.product.repository.OutboxQueryRepository;
 
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 
@@ -45,7 +46,8 @@ public class OutboxEventClaimer {
         if (batch.isEmpty()) {
             return batch;
         }
-        ZonedDateTime claimedAt = ZonedDateTime.now();
+        // claimed_at은 SENT 기록 조건(자신의 claim인지)으로 쓰므로 DB 정밀도(마이크로초)에 맞춘다
+        ZonedDateTime claimedAt = ZonedDateTime.now().truncatedTo(ChronoUnit.MICROS);
         for (OutboxEvent event : batch) {
             event.markProcessing(claimedAt);
         }
@@ -74,14 +76,12 @@ public class OutboxEventClaimer {
 
     /**
      * 즉시 발행용 단건 claim. 새 트랜잭션에서 PENDING일 때만 PROCESSING으로 바꾸고 커밋한다.
+     * UPDATE … RETURNING 한 문장으로 claim과 행 조회를 함께 한다.
      *
-     * @return claim에 성공한 이벤트. 폴러가 먼저 가져갔거나 재시도 대기 중이면 empty
+     * @return claim에 성공한 이벤트(claimedAt은 DB에 기록된 claim 시각). 폴러가 먼저 가져갔거나 재시도 대기 중이면 empty
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<OutboxEvent> claimIfPending(Long id, ZonedDateTime now) {
-        if (outboxEventRepository.claimIfPending(id, now) != 1) {
-            return Optional.empty();
-        }
-        return outboxEventRepository.findById(id);
+        return outboxEventRepository.claimIfPending(id, now.truncatedTo(ChronoUnit.MICROS));
     }
 }

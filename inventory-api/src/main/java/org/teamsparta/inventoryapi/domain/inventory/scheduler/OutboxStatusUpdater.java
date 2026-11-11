@@ -11,6 +11,8 @@ import org.teamsparta.inventoryapi.global.exception.DomainException;
 import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
 
 import java.time.Duration;
+import java.time.ZonedDateTime;
+import java.util.Collection;
 
 @Component
 @RequiredArgsConstructor
@@ -22,12 +24,20 @@ public class OutboxStatusUpdater {
 
     private final OutboxEventRepository outboxEventRepository;
 
+    /**
+     * 전송에 성공한 행들을 한 번의 UPDATE로 SENT 처리한다(SELECT 없음).
+     * claimedAt이 같은 PROCESSING 행에만 적용되므로, stale 복구 후 다른 쪽이 다시 claim한 행은 덮어쓰지 않는다.
+     *
+     * @param ids       전송에 성공한 행 ID (같은 claim에 속한 행들)
+     * @param claimedAt 그 행들을 claim할 때 기록한 claimed_at
+     * @return SENT로 바뀐 행 수. ids보다 적으면 나머지는 이미 다른 쪽 claim으로 넘어간 행이다
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markSent(Long id) {
-        OutboxEvent event = outboxEventRepository.findById(id)
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
-        event.markSent();
-        outboxEventRepository.save(event);
+    public int markSent(Collection<Long> ids, ZonedDateTime claimedAt) {
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        return outboxEventRepository.markSentIfClaimed(ids, claimedAt, ZonedDateTime.now());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
