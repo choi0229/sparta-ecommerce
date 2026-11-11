@@ -14,6 +14,7 @@ CSV의 HH:MM:SS 시각은 측정한 머신의 로컬 시간대로 해석한다.
 
 order-api·product-api 주기는 sent_at 간격이 CYCLE_GAP_S(기본 0.2초) 이하인 이벤트를 한 주기로 묶어 추정한다.
 Publisher 실행 간격(fixed-delay)이 이 값보다 짧으면 여러 주기가 하나로 합쳐지므로, 간격의 절반 정도로 낮춰 실행한다.
+배치 한도 도달 횟수(=N hits)의 N은 service-config.txt의 SCHEDULER_OUTBOX_BATCH_SIZE를 따르고, 없으면 기본값 50이다.
 """
 import csv, json, sys, statistics as st, datetime as dt, os
 from collections import defaultdict
@@ -27,6 +28,25 @@ LOCAL_TZ = dt.datetime.now().astimezone().tzinfo
 CYCLE_GAP_S = float(os.environ.get("CYCLE_GAP_S", "0.2"))
 if CYCLE_GAP_S <= 0:
     sys.exit("CYCLE_GAP_S must be > 0")
+DEFAULT_BATCH_SIZE = 50  # scheduler.outbox.batch-size 기본값
+
+
+def batch_sizes():
+    """service-config.txt(measure.sh 기록)에서 서비스별 SCHEDULER_OUTBOX_BATCH_SIZE를 읽는다. 없으면 기본값."""
+    out = {s: DEFAULT_BATCH_SIZE for s in ("order", "inventory", "product")}
+    path = f"{D}/service-config.txt"
+    if os.path.exists(path):
+        for line in open(path):
+            parts = line.split()
+            if not parts or not parts[0].endswith("-api"):
+                continue
+            for kv in parts[1:]:
+                if kv.startswith("SCHEDULER_OUTBOX_BATCH_SIZE="):
+                    out[parts[0][:-4]] = int(kv.split("=", 1)[1])
+    return out
+
+
+BATCH_SIZE = batch_sizes()
 CORES = os.cpu_count() or 1  # actuator CPU 비율을 코어 수로 환산한다. 측정한 머신에서 실행해야 맞다
 
 
@@ -221,7 +241,7 @@ for s in ("order", "inventory", "product"):
     durs = [c[1] - c[0] for c in cyc]
     gaps = [b[0] - a[1] for a, b in zip(cyc, cyc[1:]) if b[0] - a[1] < 2.0]
     P(f"  {s}-api: cycles={len(cyc)} batch size median={st.median(sizes)} p95={pct(sizes, .95):.0f} max={max(sizes)} "
-      f"(=50 hits {sum(1 for x in sizes if x >= 50)}) send span(first→last sent) median={st.median(durs) * 1000:.0f}ms p95={pct(durs, .95) * 1000:.0f}ms max={max(durs) * 1000:.0f}ms "
+      f"(={BATCH_SIZE[s]} hits {sum(1 for x in sizes if x >= BATCH_SIZE[s])}) send span(first→last sent) median={st.median(durs) * 1000:.0f}ms p95={pct(durs, .95) * 1000:.0f}ms max={max(durs) * 1000:.0f}ms "
       f"gap(end→next start) median={st.median(gaps) * 1000 if gaps else 0:.0f}ms")
     stats = defaultdict(lambda: defaultdict(list))
     for r in rows:

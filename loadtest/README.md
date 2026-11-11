@@ -255,6 +255,9 @@ INTERVAL=5 ./loadtest/outbox-watch.sh > loadtest/results/rps10-outbox.csv
 | `bench/analyze.sh` | 측정 직후 DB에서 서버 기준 E2E, 이벤트별 발행 대기, 초당 발행량, Outbox 행을 저장하고 요약합니다 |
 | `bench/analyze.py` | 저장된 결과 파일만 읽어 `summary.txt`를 만듭니다. DB 없이 다시 실행할 수 있습니다 |
 | `bench/lag-watch.sh`, `bench/jvm-metrics-watch.sh`, `bench/docker-stats-watch.sh` | 토픽별 Consumer Lag, actuator 지표(CPU·힙·GC·Hikari), 컨테이너·JVM 프로세스 자원을 CSV로 기록합니다 |
+| `bench/chain-export.sh` | 측정 직후(격리 환경이 살아 있을 때) 주문별 접수 시각, 첫 이벤트, 완료 시각을 `orders-chain.csv`로 저장합니다(읽기 전용 조회) |
+| `bench/hops.py` | `orders-chain.csv`와 `outbox-rows-<service>.csv`로 주문 하나의 서버 E2E를 Outbox 발행 대기 8개와 처리 구간 9개로 나눕니다. DB 없이 다시 실행할 수 있습니다 |
+| `bench/host-watch.sh` | 측정 중 k6 프로세스 CPU(1코어=100%)와 호스트 전체 CPU 사용률을 CSV로 기록합니다 |
 | `sql/server-e2e.sql`, `sql/outbox-delay.sql`, `sql/outbox-throughput.sql`, `sql/db-stats.sql` | 서버 기준 E2E, 이벤트별 발행 대기, 초당 발행량, Outbox 접근 통계 |
 
 필요한 도구: Docker, Java 17, k6, `curl`, `jq`, `python3`. psql은 컨테이너 안의 것을 쓰므로 호스트에 설치하지 않아도 됩니다.
@@ -307,6 +310,15 @@ k6 run -e BASE_URL=http://localhost:8083/api -e RUN_ID=warmup -e PROFILE=constan
 loadtest/bench/measure.sh rps20 20 && loadtest/bench/analyze.sh rps20
 ```
 
+주문 단위 구간 분해와 k6·호스트 CPU가 필요하면 함께 실행합니다.
+
+```bash
+loadtest/bench/host-watch.sh > /tmp/host-k6-cpu.csv & HW=$!
+loadtest/bench/measure.sh rps20 20 && loadtest/bench/analyze.sh rps20
+kill $HW; mv /tmp/host-k6-cpu.csv loadtest/results/rps20/
+loadtest/bench/chain-export.sh rps20 && python3 loadtest/bench/hops.py loadtest/results/rps20 > loadtest/results/rps20/hops.txt
+```
+
 | 종료 코드 | 뜻 | 다음 행동 |
 |---|---|---|
 | 0 | 모든 주문 완료, 정합성 PASS | 다음 레벨 |
@@ -329,12 +341,15 @@ loadtest/bench/measure.sh rps20 20 && loadtest/bench/analyze.sh rps20
 | `db-stats-before.txt`, `db-stats-after.txt` | Outbox 테이블·인덱스 스캔 수와 트랜잭션 수(측정 전후) |
 | `precheck.txt`, `before-snapshot.txt`, `timing.txt`, `drain.txt`, `verify.txt`, `service-config.txt` | 사전 조건, 재고 스냅샷, 완료 시간, 정합성 검증, 서비스 추가 설정 |
 | `logs/<service>-api-window.log` | 측정 구간의 서비스 로그 |
+| `orders-chain.csv`, `hops.txt`, `host-k6-cpu.csv` | 주문 단위 연결 정보, 구간 분해 결과, k6·호스트 CPU(위 선택 도구를 실행했을 때) |
 
 해석할 때 주의할 점:
 
 - **k6 E2E는 15초까지만 관측합니다.** 적체가 생기면 15초 안에 끝난 주문만 집계되므로, 지연 비교는 서버 기준 E2E로 합니다. `orders_timeout`은 주문 실패가 아닙니다.
 - **Outbox 주기 분석의 주기 시작은 추정입니다.** inventory-api는 `claimed_at`(실측)을 쓰고, order-api와 product-api는 배치의 첫 `sent_at`을 씁니다. 실제 조회 시각보다 수 ms 늦습니다.
 - **Publisher 주기가 짧으면 주기 구분 기준을 낮춥니다.** order-api와 product-api는 `sent_at` 간격이 `CYCLE_GAP_S`(기본 0.2초)보다 긴 곳을 주기 경계로 봅니다. `scheduler.outbox.fixed-delay-ms`가 이 값보다 짧으면(예: 100ms) 여러 주기가 하나로 합쳐져 배치 크기와 대기 분류가 틀립니다. 이때는 실행 간격의 절반 정도로 낮춰 다시 요약합니다: `CYCLE_GAP_S=0.05 python3 loadtest/bench/analyze.py loadtest/results/<RUN_ID>`. 사용한 기준은 `summary.txt`의 주기 분석 머리줄에 표시됩니다. inventory-api는 `claimed_at`으로 묶으므로 영향이 없습니다.
+- **배치 한도 도달 횟수(`=N hits`)의 N은 `service-config.txt`의 `SCHEDULER_OUTBOX_BATCH_SIZE`를 따릅니다.** 기록이 없으면 기본값 50입니다.
+- **`hops.txt`의 처리 구간은 부모 이벤트 `sent_at` → 자식 이벤트 `created_at`입니다.** Kafka 전달, Consumer 대기, 처리, 커밋이 모두 포함됩니다.
 - **`db-stats`의 인덱스 스캔 수에는 Publisher 조회 외의 쿼리도 섞입니다.** `outbox-watch.sh` 집계와 PK 갱신이 포함되므로 조회 빈도의 근사값입니다.
 - **저장된 결과만 다시 요약:** `python3 loadtest/bench/analyze.py loadtest/results/<RUN_ID>`. 측정한 머신에서 실행해야 CSV 시각과 CPU 코어 수가 맞습니다.
 
