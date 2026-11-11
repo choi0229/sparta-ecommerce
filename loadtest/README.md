@@ -168,7 +168,7 @@ RUN_ID=rps10 PROFILE=constant RATE=10 DURATION=2m ./run.sh e2e
 
 - **E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.** 실제 완료 후 다음 폴링까지 기다린 시간이 더해지므로, 1초 미만의 차이는 의미를 두지 않습니다. `order_e2e_duration`은 타임아웃 건을 포함하지 않으므로 `orders_timeout`과 함께 봅니다.
 - **`maxVUs`는 `목표 RPS × (15초 + 여유 5초)`이고, 기본적으로 그만큼 VU를 미리 만듭니다.** 주문마다 VU가 최종 상태까지 점유되므로 처리가 늦어질수록 필요한 VU가 늘어납니다. k6는 측정 중에 VU를 새로 만들 때 그사이 도착한 반복을 버리므로(`dropped_iterations`), 미리 만드는 VU를 줄이면 E2E 시간이 길어질 때 결과가 무효가 될 수 있습니다. 그래도 `dropped_iterations`가 발생하면 부하 발생기나 서버가 한계입니다.
-- **Outbox 처리 상한:** order-api Publisher는 한 번 실행에 최대 `scheduler.outbox.batch-size`(기본 50)건을 순차 발행하고, 실행이 끝난 뒤 `scheduler.outbox.fixed-delay-ms`(기본 500ms)를 기다립니다. 기본값에서 상한은 약 92건/초(약 18주문/초, 주문당 5건)로 측정됐습니다. 500ms 외에 조회·전송·커밋에 주기당 약 45ms가 더 걸리기 때문입니다. 이를 넘는 구간에서는 적체와 `orders_timeout`이 늘어납니다. 두 설정은 세 서비스 모두 같은 이름이며, 측정 때는 `bench/app.sh start order SCHEDULER_OUTBOX_BATCH_SIZE=200 SCHEDULER_OUTBOX_FIXED_DELAY_MS=100`처럼 서비스별로 줍니다.
+- **Outbox 처리 상한(폴링만 쓸 때):** order-api Publisher는 한 번 실행에 최대 `scheduler.outbox.batch-size`건을 순차 발행하고, 실행이 끝난 뒤 `scheduler.outbox.fixed-delay-ms`를 기다립니다. 이전 기본값(50건 / 500ms)에서 상한은 약 92건/초(약 18주문/초, 주문당 5건)로 측정됐습니다. 500ms 외에 조회·전송·커밋에 주기당 약 45ms가 더 걸리기 때문입니다. 이를 넘는 구간에서는 적체와 `orders_timeout`이 늘어납니다. 두 설정은 세 서비스 모두 같은 이름이며, 측정 때는 `bench/app.sh start order SCHEDULER_OUTBOX_BATCH_SIZE=200 SCHEDULER_OUTBOX_FIXED_DELAY_MS=100`처럼 서비스별로 줍니다.
 - 결과 보고 형식: 접수 건수, 최종 성공·실패·타임아웃 건수, E2E p50/p95/p99, `dropped_iterations`, 정합성 검증 결과.
 
 # DB 정합성 검증
@@ -276,11 +276,11 @@ loadtest/bench/app.sh start order PAYMENT_MOCK_SUCCESS_RATE=100
 
 logistics-api는 실행하지 않습니다. 추가 설정(예: `SCHEDULER_OUTBOX_BATCH_SIZE=200`)은 `app.sh start` 뒤에 붙이면 해당 서비스에만 적용되고, `measure.sh`가 `service-config.txt`에 기록합니다.
 
-커밋 직후 발행(B안)을 켜려면 `OUTBOX_IMMEDIATEPUBLISH_ENABLED=true`를 줍니다. 꺼져 있으면(기본값) 폴링만으로 발행합니다. 켰을 때 폴러는 안전망이므로 주기를 늘려 둡니다.
+커밋 직후 발행(B안)은 기본으로 켜져 있고, 폴러는 안전망으로 배치 200 / 1000ms입니다. 폴링만으로 측정하려면 즉시 발행을 끄고 폴러 주기를 함께 줄입니다(기본값 근거와 되돌리기 절차는 루트 [`README.md`](../README.md)의 "Outbox 발행 기본값과 되돌리기").
 
 ```bash
-loadtest/bench/app.sh start order PAYMENT_MOCK_SUCCESS_RATE=100 OUTBOX_IMMEDIATEPUBLISH_ENABLED=true \
-  SCHEDULER_OUTBOX_BATCH_SIZE=200 SCHEDULER_OUTBOX_FIXED_DELAY_MS=1000
+loadtest/bench/app.sh start order PAYMENT_MOCK_SUCCESS_RATE=100 OUTBOX_IMMEDIATEPUBLISH_ENABLED=false \
+  SCHEDULER_OUTBOX_FIXED_DELAY_MS=100
 ```
 
 즉시 발행 건수는 actuator의 `<service>_outbox_immediate_total{result=sent|failed|skipped|missed}`, 폴러 발행 건수는 `<service>_outbox_publish_total{result=sent|failed}`로 셉니다. `skipped`는 실행기 큐가 가득 차 폴러에 넘긴 건, `missed`는 폴러가 먼저 claim한 건입니다.
@@ -357,7 +357,7 @@ loadtest/bench/chain-export.sh rps20 && python3 loadtest/bench/hops.py loadtest/
 - **k6 E2E는 15초까지만 관측합니다.** 적체가 생기면 15초 안에 끝난 주문만 집계되므로, 지연 비교는 서버 기준 E2E로 합니다. `orders_timeout`은 주문 실패가 아닙니다.
 - **Outbox 주기 분석의 주기 시작은 추정입니다.** inventory-api는 `claimed_at`(실측)을 쓰고, order-api와 product-api는 배치의 첫 `sent_at`을 씁니다. 실제 조회 시각보다 수 ms 늦습니다.
 - **Publisher 주기가 짧으면 주기 구분 기준을 낮춥니다.** order-api와 product-api는 `sent_at` 간격이 `CYCLE_GAP_S`(기본 0.2초)보다 긴 곳을 주기 경계로 봅니다. `scheduler.outbox.fixed-delay-ms`가 이 값보다 짧으면(예: 100ms) 여러 주기가 하나로 합쳐져 배치 크기와 대기 분류가 틀립니다. 이때는 실행 간격의 절반 정도로 낮춰 다시 요약합니다: `CYCLE_GAP_S=0.05 python3 loadtest/bench/analyze.py loadtest/results/<RUN_ID>`. 사용한 기준은 `summary.txt`의 주기 분석 머리줄에 표시됩니다. inventory-api는 `claimed_at`으로 묶으므로 영향이 없습니다.
-- **배치 한도 도달 횟수(`=N hits`)의 N은 `service-config.txt`의 `SCHEDULER_OUTBOX_BATCH_SIZE`를 따릅니다.** 기록이 없으면 기본값 50입니다.
+- **배치 한도 도달 횟수(`=N hits`)의 N은 `service-config.txt`의 `SCHEDULER_OUTBOX_BATCH_SIZE`를 따릅니다.** 기록이 없으면 50으로 표시합니다(즉시 발행 도입 전 기본값. 이전 결과를 다시 요약해도 같게 나오도록 유지). 현재 기본값(200)으로 측정할 때는 `SCHEDULER_OUTBOX_BATCH_SIZE=200`을 명시해 기록합니다.
 - **`hops.txt`의 처리 구간은 부모 이벤트 `sent_at` → 자식 이벤트 `created_at`입니다.** Kafka 전달, Consumer 대기, 처리, 커밋이 모두 포함됩니다.
 - **`db-stats`의 인덱스 스캔 수에는 Publisher 조회 외의 쿼리도 섞입니다.** `outbox-watch.sh` 집계와 PK 갱신이 포함되므로 조회 빈도의 근사값입니다.
 - **저장된 결과만 다시 요약:** `python3 loadtest/bench/analyze.py loadtest/results/<RUN_ID>`. 측정한 머신에서 실행해야 CSV 시각과 CPU 코어 수가 맞습니다.

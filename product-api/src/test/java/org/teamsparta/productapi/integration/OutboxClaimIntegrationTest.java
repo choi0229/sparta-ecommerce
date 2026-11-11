@@ -20,6 +20,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -77,6 +78,7 @@ import static org.mockito.Mockito.verify;
 @SpringBootTest(properties = "spring.kafka.listener.auto-startup=false")
 @Import(OutboxClaimIntegrationTest.DisableScheduling.class)
 @Testcontainers
+@TestPropertySource(properties = "outbox.immediate-publish.enabled=false") // 폴러 단독 경로를 검증한다
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
 class OutboxClaimIntegrationTest {
 
@@ -270,7 +272,7 @@ class OutboxClaimIntegrationTest {
     }
 
     @Test
-    @DisplayName("즉시 발행 플래그가 꺼져 있으면(기본값) 커밋 후에도 발행하지 않고 폴러만 발행한다")
+    @DisplayName("즉시 발행 플래그가 꺼져 있으면 커밋 후에도 발행하지 않고 폴러만 발행한다")
     void immediatePublishDisabled_onlyPollerPublishes() throws Exception {
         assertThat(applicationContext.getBeansOfType(OutboxImmediatePublisher.class)).isEmpty();
         given(kafkaTemplate.send(eq(TOPIC), anyString(), anyString()))

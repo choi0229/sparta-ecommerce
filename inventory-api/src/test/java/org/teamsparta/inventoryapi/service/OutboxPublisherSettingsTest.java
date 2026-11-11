@@ -66,12 +66,12 @@ class OutboxPublisherSettingsTest {
     }
 
     @Test
-    @DisplayName("설정이 없으면 기존 값(500ms, 50건)으로 동작한다")
+    @DisplayName("설정이 없으면 기본값(1000ms, 200건)으로 동작한다")
     void defaults_keepPreviousBehavior() {
         contextRunner().run(context -> {
-            assertThat(publishInterval(context)).isEqualTo(Duration.ofMillis(500));
-            verify(outboxEventClaimer, timeout(3000).atLeastOnce()).claimBatch(any(), eq(50));
-            verify(outboxEventClaimer, atLeastOnce()).recoverStaleProcessing(any(), eq(50));
+            assertThat(publishInterval(context)).isEqualTo(Duration.ofMillis(1000));
+            verify(outboxEventClaimer, timeout(3000).atLeastOnce()).claimBatch(any(), eq(200));
+            verify(outboxEventClaimer, atLeastOnce()).recoverStaleProcessing(any(), eq(200));
         });
     }
 

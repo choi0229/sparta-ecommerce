@@ -45,7 +45,7 @@ public class OutboxPublisherJob {
                               OutboxStatusUpdater outboxStatusUpdater,
                               OutboxEventSender outboxEventSender,
                               MeterRegistry meterRegistry,
-                              @Value("${scheduler.outbox.batch-size:50}") int batchSize,
+                              @Value("${scheduler.outbox.batch-size:200}") int batchSize,
                               @Value("${scheduler.outbox.stale-processing-timeout-ms:300000}") long staleProcessingTimeoutMs) {
         if (batchSize < 1) {
             throw new IllegalArgumentException("scheduler.outbox.batch-size must be at least 1: " + batchSize);
@@ -65,8 +65,8 @@ public class OutboxPublisherJob {
         this.staleProcessingTimeout = Duration.ofMillis(staleProcessingTimeoutMs);
     }
 
-    // 실행 주기: scheduler.outbox.fixed-delay-ms (이전 실행이 끝난 뒤 기다리는 시간, 기본 500ms)
-    @Scheduled(fixedDelayString = "${scheduler.outbox.fixed-delay-ms:500}")
+    // 실행 주기: scheduler.outbox.fixed-delay-ms (이전 실행이 끝난 뒤 기다리는 시간, 기본 1000ms — 즉시 발행의 안전망)
+    @Scheduled(fixedDelayString = "${scheduler.outbox.fixed-delay-ms:1000}")
     public void publish() {
         ZonedDateTime now = ZonedDateTime.now();
 

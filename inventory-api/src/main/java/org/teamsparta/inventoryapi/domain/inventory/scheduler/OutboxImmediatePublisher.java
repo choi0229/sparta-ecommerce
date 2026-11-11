@@ -35,11 +35,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       별도 트랜잭션으로 기록한다.</li>
  * </ol>
  *
- * <p>outbox.immediate-publish.enabled=true일 때만 등록된다. false면 기존처럼 폴링만으로 발행한다.
+ * <p>outbox.immediate-publish.enabled가 true(기본값)일 때 등록된다. false면 폴링만으로 발행한다
+ * (이때는 scheduler.outbox.fixed-delay-ms도 100ms로 함께 줄인다 — README "Outbox 발행 기본값과 되돌리기").
  * 전달 보장은 폴러와 같은 At-Least-Once다(전송 성공 후 SENT 기록 전에 중단되면 stale 복구 후 다시 발행된다).
  */
 @Component
-@ConditionalOnProperty(name = "outbox.immediate-publish.enabled", havingValue = "true")
+@ConditionalOnProperty(name = "outbox.immediate-publish.enabled", havingValue = "true", matchIfMissing = true)
 @Slf4j
 public class OutboxImmediatePublisher implements DisposableBean {
 

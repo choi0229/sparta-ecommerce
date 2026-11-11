@@ -44,7 +44,7 @@ public class OutboxPublisherJob {
                               OutboxStatusUpdater outboxStatusUpdater,
                               OutboxEventSender outboxEventSender,
                               MeterRegistry meterRegistry,
-                              @Value("${scheduler.outbox.batch-size:50}") int batchSize,
+                              @Value("${scheduler.outbox.batch-size:200}") int batchSize,
                               @Value("${scheduler.outbox.stale-processing-timeout-ms:300000}") long staleProcessingTimeoutMs) {
         if (batchSize < 1) {
             throw new IllegalArgumentException("scheduler.outbox.batch-size must be at least 1: " + batchSize);

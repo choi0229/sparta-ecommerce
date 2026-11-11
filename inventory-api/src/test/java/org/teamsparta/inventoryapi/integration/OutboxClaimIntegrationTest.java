@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.ApplicationContext;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.kafka.core.KafkaAdmin;
@@ -59,6 +60,7 @@ import static org.mockito.Mockito.verify;
  *   <li>claim 후 SENT 처리 전에 중단된 행은 stale 복구 후 다시 발행된다 (At-Least-Once)</li>
  * </ul>
  */
+@TestPropertySource(properties = "outbox.immediate-publish.enabled=false") // 폴러 단독 경로를 검증한다
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
 class OutboxClaimIntegrationTest extends InventoryIntegrationTestSupport {
 
@@ -236,7 +238,7 @@ class OutboxClaimIntegrationTest extends InventoryIntegrationTestSupport {
     }
 
     @Test
-    @DisplayName("즉시 발행 플래그가 꺼져 있으면(기본값) 커밋 후에도 발행하지 않고 폴러만 발행한다")
+    @DisplayName("즉시 발행 플래그가 꺼져 있으면 커밋 후에도 발행하지 않고 폴러만 발행한다")
     void immediatePublishDisabled_onlyPollerPublishes() throws Exception {
         assertThat(applicationContext.getBeansOfType(OutboxImmediatePublisher.class)).isEmpty();
         given(kafkaTemplate.send(eq(TOPIC), anyString(), anyString()))

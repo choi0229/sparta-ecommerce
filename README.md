@@ -113,6 +113,26 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 - 따라서 현재 구조는 Exactly-Once가 아니라 At-Least-Once 전달을 전제로 합니다. 중복 이벤트의 비즈니스 효과는 Consumer 멱등성으로 방지해야 하며, 일부 Saga 이벤트 핸들러의 중복 방어는 아직 보강 중입니다.
 - 다중 인스턴스 확장, Claim 기반 발행 구조, Stale Claim 복구는 이 구조의 범위에 포함되지 않습니다.
 
+### Outbox 발행 기본값과 되돌리기
+
+세 서비스(order, inventory, product)가 같은 값을 씁니다. 근거는 격리 환경(서비스 각 1개, 파티션 1)에서 측정한 결과입니다.
+
+| 설정 | 기본값 | 근거 |
+|---|---|---|
+| `outbox.immediate-publish.enabled` | `true` | 커밋 직후 발행. 10 RPS 서버 E2E p50이 폴링만 쓸 때(배치 200 / 100ms) 619ms에서 29ms로 줄었습니다. 100 RPS에서도 p50 44ms, 적체 없음, 정합성 통과 |
+| `outbox.immediate-publish.threads` / `queue-capacity` | `4` / `1000` | 100 RPS에서 큐 포화로 건너뛴 건 0, order Hikari active 최대 7/10, pending 0 |
+| `scheduler.outbox.batch-size` / `fixed-delay-ms` | `200` / `1000` | 즉시 발행이 켜져 있으면 폴러는 안전망입니다. 폴러가 처리한 몫은 0.1% 미만이고, 유휴 Outbox 조회는 세 서비스 합 약 7회/초(100ms 주기의 약 1/8) |
+| `scheduler.outbox.stale-processing-timeout-ms` | `300000` | claim부터 SENT 기록까지 정상적으로 걸릴 수 있는 최대 시간보다 길어야 합니다. 즉시 발행 1건은 최대 약 92초(`max.block.ms` 90초 + 확인 2초) |
+
+**되돌리기:** 즉시 발행을 끄려면 `OUTBOX_IMMEDIATEPUBLISH_ENABLED=false`와 함께 폴러 주기를 반드시 `SCHEDULER_OUTBOX_FIXED_DELAY_MS=100`으로 바꿉니다. 1000ms 그대로 끄면 이벤트마다 최대 1초씩 발행 대기가 생겨, 주문 하나(발행 8번)가 수 초씩 늦어집니다.
+
+### Outbox 발행의 알려진 제약
+
+- **전달 보장은 At-Least-Once입니다.** Exactly-Once를 보장하지 않으며, 중복 이벤트의 비즈니스 효과는 Consumer 멱등성으로 막습니다.
+- **2초 전송 타임아웃은 전송 실패가 아니라 확인 실패입니다.** Publisher는 Kafka 전송 결과를 2초까지 기다리고, 그 안에 확인이 없으면 재시도를 예약합니다(1분 × 2^n, 최대 5회). 하지만 레코드는 프로듀서 버퍼에 남아 있다가 브로커가 돌아오면 전달될 수 있습니다(`delivery.timeout.ms` 120초). 그러면 이후 재발행이 중복이 됩니다. 10 RPS에서 브로커를 약 10초 멈춘 실험에서 20건이 실패로 기록됐고, 원래 레코드는 브로커 재개 직후 전달됐으며, 2분 뒤 재발행 20건은 모두 중복이었습니다. 주문 중복은 order-api의 멱등 처리로 생기지 않았습니다.
+- **배치 SENT 기록 실패 시 중복 범위가 배치 단위입니다.** 폴러는 전송에 성공한 행을 배치 끝에 한 번의 UPDATE로 SENT 처리합니다. 이 UPDATE가 실패하면 그 배치의 전송 성공 행이 모두 PROCESSING으로 남고, stale 복구 후 다시 발행됩니다.
+- **SENT 기록은 자신의 claim에만 적용됩니다.** `claimed_at`이 자신의 claim 시각과 같은 PROCESSING 행만 SENT로 바꾸므로, stale 복구 후 다른 쪽이 다시 claim한 행을 덮어쓰지 않습니다. 이때 앞선 전송은 중복으로 남을 수 있습니다.
+
 ### 주문 E2E 부하 테스트
 
 `loadtest/k6/scripts/create-order-e2e.js`로 접수 성공, 최종 성공·실패, 관측 타임아웃을 구분해 측정합니다. **E2E 지연에는 폴링 간격만큼(최대 약 1초)의 관측 지연이 포함됩니다.** 테스트 후 `loadtest/verify.sh <RUN_ID>`로 주문 DB와 재고 DB의 정합성을 검증합니다. 실행과 결과 해석은 [`loadtest/README.md`](loadtest/README.md)를 참고하세요.
