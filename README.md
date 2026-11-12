@@ -103,15 +103,31 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 
 멱등 기록의 `COMPLETED`는 주문 생성 완료를 뜻하며 최종 성공이 아닙니다. 이 문서의 이후 내용 중 과거 동작을 설명하는 부분은 당시 상태 값을 그대로 적었습니다.
 
-### order-api Outbox 발행 구조의 알려진 제약
+### Outbox 발행 구조 (order, inventory, product)
 
-`order-api`의 Publisher는 하나의 트랜잭션 안에서 Outbox 행을 잠그고(`FOR UPDATE`), Kafka로 전송한 뒤, 같은 트랜잭션에서 상태를 갱신합니다. 이 구조에는 다음 제약이 있습니다.
+세 서비스는 같은 구조로 Outbox 이벤트를 발행합니다. 도메인 변경과 Outbox 행 저장은 같은 트랜잭션에서 커밋하고, Kafka 전송은 어떤 DB 트랜잭션도 열려 있지 않은 상태에서 합니다.
 
-- Kafka 이벤트를 발행하는 동안 Outbox 행 잠금을 보유합니다. 발행 처리 시간이 길어지면 DB 잠금 유지 시간도 늘어납니다.
-- Kafka 전송은 성공했지만 DB 트랜잭션 커밋에 실패하면 동일 이벤트가 다시 발행될 수 있습니다.
-- 배치 처리 중 상태 갱신에서 예외가 발생하면 배치 전체가 롤백되어, 이미 전송한 이벤트도 다시 발행됩니다. 이때 `retry_count`도 함께 롤백되므로 재시도 횟수에 반영되지 않습니다.
-- 따라서 현재 구조는 Exactly-Once가 아니라 At-Least-Once 전달을 전제로 합니다. 중복 이벤트의 비즈니스 효과는 Consumer 멱등성으로 방지해야 하며, 일부 Saga 이벤트 핸들러의 중복 방어는 아직 보강 중입니다.
-- 다중 인스턴스 확장, Claim 기반 발행 구조, Stale Claim 복구는 이 구조의 범위에 포함되지 않습니다.
+```text
+도메인 변경 + outbox_event(PENDING) 저장 ── 커밋
+  ├─ 즉시 발행 (커밋 직후, 기본 경로)
+  │    AFTER_COMMIT 리스너 → 전용 실행기(4 스레드 / 큐 1000)
+  │    → claim: UPDATE … SET status = PROCESSING, claimed_at = now WHERE id = ? AND status = PENDING … RETURNING *
+  │    → Kafka 전송(확인 2초) → 결과 기록
+  └─ 폴러 (안전망, 1000ms 주기)
+       stale 복구 → claim: SELECT … FOR UPDATE SKIP LOCKED 로 최대 200건을 PROCESSING으로 바꾸고 커밋
+       → 건마다 Kafka 전송 → 결과 기록
+```
+
+- **claim:** 행을 `PENDING → PROCESSING`으로 바꾸고 `claimed_at`에 claim 시각을 남긴 뒤 바로 커밋합니다. 즉시 발행과 폴러가 같은 행을 잡으려 해도 claim 조건(`status = PENDING`) 때문에 한쪽만 성공합니다. 전송 중에는 행 잠금도 DB 커넥션도 잡고 있지 않습니다.
+- **결과 기록:** 결과마다 별도 트랜잭션(`REQUIRES_NEW`)에서 기록합니다.
+  - 전송 성공: `SENT`로 바꿉니다. 폴러는 배치에서 성공한 행을 모아 UPDATE 한 번으로 기록합니다.
+  - 전송 실패: 재시도를 예약합니다(`PENDING`, `retry_count + 1`, 다음 시도 1분 × 2^n 뒤, 5회째에 `FAILED`).
+  - 두 기록 모두 `status = PROCESSING`이고 `claimed_at`이 자신의 claim 시각과 같은 행에만 적용됩니다. 그래서 stale 복구 후 다시 claim된 행을 이전 claim의 결과가 덮어쓰지 않습니다.
+- **stale 복구:** 결과를 기록하지 못하고 멈춘 claim(프로세스 중단 등)은 `claimed_at`이 5분 넘게 지나면 폴러가 `PENDING`으로 되돌려 다시 발행합니다. `retry_count`는 바꾸지 않습니다.
+- **즉시 발행을 놓친 이벤트:** 실행기 큐가 가득 찼거나, 프로세스가 claim 전에 종료됐거나, 재시도 시각을 기다리는 행은 폴러가 발행합니다.
+- 다중 인스턴스에서도 claim 조건과 `SKIP LOCKED`로 한 행을 한 쪽만 발행합니다. 다만 측정은 서비스당 1개 인스턴스로만 했습니다.
+
+기본값과 되돌리기 절차는 아래 섹션, 중복 발행이 생기는 경우는 "Outbox 발행의 알려진 제약"을 참고하세요.
 
 ### Outbox 발행 기본값과 되돌리기
 
@@ -131,7 +147,7 @@ Kafka를 통한 상품 정보 획득 시 발생하던 **DB 커넥션 고갈 문�
 - **전달 보장은 At-Least-Once입니다.** Exactly-Once를 보장하지 않으며, 중복 이벤트의 비즈니스 효과는 Consumer 멱등성으로 막습니다.
 - **2초 전송 타임아웃은 전송 실패가 아니라 확인 실패입니다.** Publisher는 Kafka 전송 결과를 2초까지 기다리고, 그 안에 확인이 없으면 재시도를 예약합니다(1분 × 2^n, 최대 5회). 하지만 레코드는 프로듀서 버퍼에 남아 있다가 브로커가 돌아오면 전달될 수 있습니다(`delivery.timeout.ms` 120초). 그러면 이후 재발행이 중복이 됩니다. 10 RPS에서 브로커를 약 10초 멈춘 실험에서 20건이 실패로 기록됐고, 원래 레코드는 브로커 재개 직후 전달됐으며, 2분 뒤 재발행 20건은 모두 중복이었습니다. 주문 중복은 order-api의 멱등 처리로 생기지 않았습니다.
 - **배치 SENT 기록 실패 시 중복 범위가 배치 단위입니다.** 폴러는 전송에 성공한 행을 배치 끝에 한 번의 UPDATE로 SENT 처리합니다. 이 UPDATE가 실패하면 그 배치의 전송 성공 행이 모두 PROCESSING으로 남고, stale 복구 후 다시 발행됩니다.
-- **SENT 기록은 자신의 claim에만 적용됩니다.** `claimed_at`이 자신의 claim 시각과 같은 PROCESSING 행만 SENT로 바꾸므로, stale 복구 후 다른 쪽이 다시 claim한 행을 덮어쓰지 않습니다. 이때 앞선 전송은 중복으로 남을 수 있습니다.
+- **결과 기록은 자신의 claim에만 적용됩니다.** SENT 기록과 재시도 예약 모두 `claimed_at`이 자신의 claim 시각과 같은 PROCESSING 행만 바꾸므로, stale 복구 후 다른 쪽이 다시 claim한 행을 덮어쓰거나 PENDING으로 되돌리지 않습니다. 이때 앞선 전송은 중복으로 남을 수 있습니다.
 
 ### 주문 E2E 부하 테스트
 
@@ -1596,6 +1612,9 @@ curl -s http://localhost:8084/actuator/prometheus | grep "admin_retry"
 - Outbox retry 정책 추가 고도화
   - ~~영구 실패와 재시도 가능 실패의 코드 레벨 구분 검토~~ → 완료 (`NonRetryableOutboxException` 도입 — 미등록 eventType 등 영구 실패는 `markPermanentFailed()`로 retryCount 증가 없이 즉시 FAILED 처리, Kafka 일시 장애 등 재시도 가능 실패는 기존 지수 백오프 유지)
   - DLQ 재검토 기준 도달 시 DB 기반 DLQ 도입
+- Outbox 발행 비용 (order, inventory, product — 격리 환경 100 RPS 측정에서 확인)
+  - 즉시 발행 claim UPDATE의 인덱스 선택: `WHERE id = ? AND status = 'PENDING' …`인데도 실행 계획이 PK 대신 부분 인덱스 `idx_outbox_next_retry`를 탑니다. 100 RPS에서 한 번에 약 23개의 튜플을 읽습니다(`idx_tup_read / idx_scan` = 1,012,378 / 43,912). 트랜잭션 수가 같은 상태에서 order-db CPU를 더 줄일 수 있는 후보입니다. `EXPLAIN (ANALYZE, BUFFERS)`로 PK를 타게 하는 쿼리 형태를 확인한 뒤 바꿉니다.
+  - 건별 Kafka 동기 확인 비용: 폴러는 이벤트마다 전송 확인(`.get`, 최대 2초)을 기다린 뒤 다음 이벤트를 보냅니다. 폴러 경로의 이벤트당 비용 약 0.77ms 중 대부분이 이 대기로 추정되며, 즉시 발행을 껐을 때의 order 처리 상한(약 154주문/초, 외삽)을 정합니다. 배치를 먼저 모두 보내고 확인을 한꺼번에 기다리는 방식이 후보이며, 건별 재시도 예약과 같은 키의 순서를 유지하는지 함께 검증해야 합니다.
 - `logistics_outbox_events` Gauge 부하 고려
   - scrape 간격이 더 짧아지는 환경에서는 전용 스케줄러 기반 캐시 갱신 구조 검토
 - Prometheus alert rule 실제 운영 적용
