@@ -355,8 +355,9 @@ loadtest/bench/chain-export.sh rps20 && python3 loadtest/bench/hops.py loadtest/
 해석할 때 주의할 점:
 
 - **k6 E2E는 15초까지만 관측합니다.** 적체가 생기면 15초 안에 끝난 주문만 집계되므로, 지연 비교는 서버 기준 E2E로 합니다. `orders_timeout`은 주문 실패가 아닙니다.
-- **Outbox 주기 분석의 주기 시작은 추정입니다.** inventory-api는 `claimed_at`(실측)을 쓰고, order-api와 product-api는 배치의 첫 `sent_at`을 씁니다. 실제 조회 시각보다 수 ms 늦습니다.
-- **Publisher 주기가 짧으면 주기 구분 기준을 낮춥니다.** order-api와 product-api는 `sent_at` 간격이 `CYCLE_GAP_S`(기본 0.2초)보다 긴 곳을 주기 경계로 봅니다. `scheduler.outbox.fixed-delay-ms`가 이 값보다 짧으면(예: 100ms) 여러 주기가 하나로 합쳐져 배치 크기와 대기 분류가 틀립니다. 이때는 실행 간격의 절반 정도로 낮춰 다시 요약합니다: `CYCLE_GAP_S=0.05 python3 loadtest/bench/analyze.py loadtest/results/<RUN_ID>`. 사용한 기준은 `summary.txt`의 주기 분석 머리줄에 표시됩니다. inventory-api는 `claimed_at`으로 묶으므로 영향이 없습니다.
+- **Outbox 주기 분석은 `claimed_at`으로 주기를 묶습니다.** 같은 `claimed_at`을 가진 행이 폴러 배치 1회이고, 주기 시작은 claim 시각, 끝은 그 배치의 마지막 `sent_at`입니다. 폴러는 성공한 행을 배치 끝에 한 번에 SENT 처리하므로 `sent_at`이 모두 배치 끝 시각이라, `sent_at`만으로는 배치 안의 전송 구간을 알 수 없습니다. 크기 2 이상인 배치로 배치 크기에 따른 처리 시간 직선(`span per event`, `intercept`, `r2`)도 출력합니다.
+- **즉시 발행이 켜진 측정에서는 주기 분석의 의미가 작습니다.** 즉시 발행 1건도 claim 1회이므로 크기 1인 주기로 잡힙니다. 폴링만 쓰는 측정(`OUTBOX_IMMEDIATEPUBLISH_ENABLED=false`)에서 해석합니다. 경로별 몫은 `outbox-paths.txt`를 봅니다.
+- **`claimed_at`이 없는 이전 결과는 `sent_at` 간격으로 추정합니다.** `outbox-rows-<service>.csv`에 `claimed_at` 열이 없으면(order-api·product-api의 이전 결과) `sent_at` 간격이 `CYCLE_GAP_S`(기본 0.2초)보다 긴 곳을 주기 경계로 봅니다. `scheduler.outbox.fixed-delay-ms`가 이 값보다 짧으면(예: 100ms) 여러 주기가 하나로 합쳐지므로 실행 간격의 절반 정도로 낮춰 다시 요약합니다: `CYCLE_GAP_S=0.05 python3 loadtest/bench/analyze.py loadtest/results/<RUN_ID>`.
 - **배치 한도 도달 횟수(`=N hits`)의 N은 `service-config.txt`의 `SCHEDULER_OUTBOX_BATCH_SIZE`를 따릅니다.** 기록이 없으면 50으로 표시합니다(즉시 발행 도입 전 기본값. 이전 결과를 다시 요약해도 같게 나오도록 유지). 현재 기본값(200)으로 측정할 때는 `SCHEDULER_OUTBOX_BATCH_SIZE=200`을 명시해 기록합니다.
 - **`hops.txt`의 처리 구간은 부모 이벤트 `sent_at` → 자식 이벤트 `created_at`입니다.** Kafka 전달, Consumer 대기, 처리, 커밋이 모두 포함됩니다.
 - **`db-stats`의 인덱스 스캔 수에는 Publisher 조회 외의 쿼리도 섞입니다.** `outbox-watch.sh` 집계와 PK 갱신이 포함되므로 조회 빈도의 근사값입니다.

@@ -22,8 +22,8 @@ for s in order inventory product; do
   echo "== ${s}-api" >> "${D}/outbox-delay-result.txt"
   ${P} -q -X -v since="'${START}'" -v until="'${UNTIL}'" < "${SQL}/outbox-delay.sql" >> "${D}/outbox-delay-result.txt"
   ${P} -q -X -At -F'|' -v since="'${START}'" < "${SQL}/outbox-throughput.sql" > "${D}/outbox-throughput-${s}.txt"
-  cols="id, event_type, aggregate_id, extract(epoch from created_at), extract(epoch from sent_at)"
-  [[ "${s}" == "inventory" ]] && cols="${cols}, extract(epoch from claimed_at)"
+  # claimed_at: 같은 값을 가진 행이 한 번의 claim(폴러 배치 1회 또는 즉시 발행 1건)이다
+  cols="id, event_type, aggregate_id, extract(epoch from created_at), extract(epoch from sent_at), extract(epoch from claimed_at)"
   ${P} -q -X -c "copy (select ${cols} from outbox_event where created_at >= '${START}' and created_at < '${UNTIL}' order by id) to stdout with csv" > "${D}/outbox-rows-${s}.csv"
 done
 

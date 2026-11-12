@@ -12,7 +12,11 @@ CSV의 HH:MM:SS 시각은 측정한 머신의 로컬 시간대로 해석한다.
 주기 분석에서 각 서비스의 첫 발행 주기에 실린 이벤트는 비교할 직전 주기가 없어 분류에서 제외한다.
 그래서 이벤트 종류별 n이 주문 수보다 조금 작을 수 있다. 발행 대기 평균은 outbox-delay-result.txt(SQL)가 기준이다.
 
-order-api·product-api 주기는 sent_at 간격이 CYCLE_GAP_S(기본 0.2초) 이하인 이벤트를 한 주기로 묶어 추정한다.
+발행 주기는 claimed_at이 같은 이벤트를 한 주기(폴러 배치 1회)로 본다. 주기 시작은 claim 시각, 끝은 그 배치의 마지막
+sent_at이다. 폴러는 전송에 성공한 행을 배치 끝에 한 번에 SENT 처리하므로 sent_at이 모두 배치 끝 시각이고, 그래서 sent_at만으로는
+배치 안의 전송 구간을 알 수 없다. 즉시 발행이 켜져 있으면 즉시 발행 1건도 claim 1회이므로 크기 1인 주기로 잡힌다(주기 분석은
+폴러만 쓰는 측정에서 의미가 있다).
+claimed_at 열이 없는 이전 결과(order·product)는 sent_at 간격이 CYCLE_GAP_S(기본 0.2초) 이하인 이벤트를 한 주기로 묶어 추정한다.
 Publisher 실행 간격(fixed-delay)이 이 값보다 짧으면 여러 주기가 하나로 합쳐지므로, 간격의 절반 정도로 낮춰 실행한다.
 배치 한도 도달 횟수(=N hits)의 N은 service-config.txt의 SCHEDULER_OUTBOX_BATCH_SIZE를 따르고, 없으면 기본값 50이다.
 """
@@ -223,11 +227,27 @@ def cycles_from_claim(rows):
     g = defaultdict(list)
     for r in rows:
         g[r["claim"]].append(r["s"])
-    return sorted([[c, max(v), len(v)] for c, v in g.items()])
+    return sorted([[c, max(v), len(v)] for c, v in g.items()])  # [start(claimed_at), end(last sent), size]
+
+
+def fit_line(xs, ys):
+    """최소제곱 직선 y = slope * x + intercept와 r²를 돌려준다(값이 부족하면 None)."""
+    n = len(xs)
+    if n < 3:
+        return None
+    mx, my = st.mean(xs), st.mean(ys)
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx == 0 or syy == 0:
+        return None
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    slope = sxy / sxx
+    return slope, my - slope * mx, sxy * sxy / (sxx * syy)
 
 
 import bisect
-P(f"[Outbox 주기 분석]  cycle start: order/product=배치 첫 sent_at(추정, select 시간만큼 늦음, 주기 구분 sent_at 간격>{CYCLE_GAP_S * 1000:.0f}ms), inventory=claimed_at(실측)")
+P(f"[Outbox 주기 분석]  주기=같은 claimed_at(폴러 배치 1회), 시작=claimed_at, 끝=마지막 sent_at "
+  f"(claimed_at 열이 없는 이전 결과는 첫 sent_at부터, sent_at 간격>{CYCLE_GAP_S * 1000:.0f}ms로 구분해 추정)")
 P("  분류: during=직전 발행 주기가 진행 중일 때 생성(그 주기에 못 실림) / idle=주기 사이 대기 구간에 생성 / skipped=직전 주기 시작 전에 생성됐는데도 직전 주기에 안 실림(적체·배치 한도·커밋 지연)")
 all_rows = {}
 for s in ("order", "inventory", "product"):
@@ -235,19 +255,31 @@ for s in ("order", "inventory", "product"):
     all_rows[s] = rows
     if not rows:
         continue
-    cyc = cycles_from_claim(rows) if s == "inventory" else cycles_from_sent(rows)
+    by_claim = all(r["claim"] is not None for r in rows)
+    cyc = cycles_from_claim(rows) if by_claim else cycles_from_sent(rows)
     starts = [c[0] for c in cyc]
+    start_index = {c: i for i, c in enumerate(starts)}
     sizes = [c[2] for c in cyc]
     durs = [c[1] - c[0] for c in cyc]
     gaps = [b[0] - a[1] for a, b in zip(cyc, cyc[1:]) if b[0] - a[1] < 2.0]
+    span_label = "span(claim→last sent)" if by_claim else "send span(first→last sent)"
     P(f"  {s}-api: cycles={len(cyc)} batch size median={st.median(sizes)} p95={pct(sizes, .95):.0f} max={max(sizes)} "
-      f"(={BATCH_SIZE[s]} hits {sum(1 for x in sizes if x >= BATCH_SIZE[s])}) send span(first→last sent) median={st.median(durs) * 1000:.0f}ms p95={pct(durs, .95) * 1000:.0f}ms max={max(durs) * 1000:.0f}ms "
+      f"(={BATCH_SIZE[s]} hits {sum(1 for x in sizes if x >= BATCH_SIZE[s])}) {span_label} median={st.median(durs) * 1000:.0f}ms p95={pct(durs, .95) * 1000:.0f}ms max={max(durs) * 1000:.0f}ms "
       f"gap(end→next start) median={st.median(gaps) * 1000 if gaps else 0:.0f}ms")
+    if by_claim:
+        # 배치 크기에 따른 처리 시간: 크기 2 이상이고 다음 주기가 2초 안에 시작한 배치만 쓴다(즉시 발행 1건·유휴 직후 제외)
+        multi = [(a, b) for a, b in zip(cyc, cyc[1:]) if a[2] > 1 and b[0] - a[0] < 2.0]
+        fit = fit_line([a[2] for a, _ in multi], [(a[1] - a[0]) * 1000 for a, _ in multi])
+        if fit:
+            periods = [(b[0] - a[0]) * 1000 for a, b in multi]
+            P(f"    batches(n>1)={len(multi)} period(claim→next claim) median={st.median(periods):.1f}ms "
+              f"span per event={fit[0]:.3f}ms intercept={fit[1]:.1f}ms r2={fit[2]:.2f}")
     stats = defaultdict(lambda: defaultdict(list))
     for r in rows:
-        ki = bisect.bisect_right(starts, r["s"] + 1e-6) - 1  # 이 이벤트를 실은 주기
-        if s == "inventory":
-            ki = starts.index(r["claim"])
+        if by_claim:
+            ki = start_index[r["claim"]]  # 이 이벤트를 실은 주기
+        else:
+            ki = bisect.bisect_right(starts, r["s"] + 1e-6) - 1
         if ki <= 0:
             continue
         ps, pe, _ = cyc[ki - 1]
