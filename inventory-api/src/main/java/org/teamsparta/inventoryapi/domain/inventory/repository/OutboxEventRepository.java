@@ -67,4 +67,19 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
     int markSentIfClaimed(@Param("ids") Collection<Long> ids,
                           @Param("claimedAt") ZonedDateTime claimedAt,
                           @Param("sentAt") ZonedDateTime sentAt);
+
+    /**
+     * 자신이 claim한 행만 잠가서 가져온다(재시도 예약용). SENT 기록과 같은 조건(PROCESSING이고 claimed_at이 자신의
+     * claim 시각)을 쓰므로, stale 복구로 PENDING이 되었거나 다른 쪽이 다시 claim한 행은 empty를 반환한다.
+     * 잠금은 호출 트랜잭션이 끝날 때까지 유지되어, 그 사이 stale 복구(SKIP LOCKED)나 재claim이 끼어들지 않는다.
+     * 호출부는 반드시 쓰기 가능한 @Transactional 컨텍스트 안에 있어야 한다.
+     */
+    @Query(value = """
+            SELECT * FROM outbox_event
+            WHERE id = :id
+              AND status = 'PROCESSING'
+              AND claimed_at = :claimedAt
+            FOR UPDATE
+            """, nativeQuery = true)
+    Optional<OutboxEvent> findClaimedForUpdate(@Param("id") Long id, @Param("claimedAt") ZonedDateTime claimedAt);
 }

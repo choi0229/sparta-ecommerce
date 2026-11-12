@@ -62,6 +62,7 @@ import static org.mockito.Mockito.verify;
  * <ul>
  *   <li>폴러 배치에서 전송에 성공한 행만 한 번의 UPDATE로 SENT가 되고, 실패한 행은 건별로 재시도가 예약된다</li>
  *   <li>SENT 기록은 자신의 claim(claimed_at)인 PROCESSING 행에만 적용된다 — stale 복구 후 다시 claim된 행을 덮어쓰지 않는다</li>
+ *   <li>재시도 예약도 같은 조건으로만 적용된다 — 이전 claim의 실패 기록이 다시 claim된 행을 PENDING으로 되돌리지 않는다</li>
  *   <li>즉시 발행용 claim은 별도 조회 없이 claim된 행을 돌려준다</li>
  * </ul>
  */
@@ -188,6 +189,40 @@ class OutboxSentRecordIntegrationTest {
         assertThat(claimed.getPayload()).isEqualTo(find(event).getPayload());
         assertThat(claimed.getClaimedAt().toInstant()).isEqualTo(find(event).getClaimedAt().toInstant());
         assertThat(outboxEventClaimer.claimIfPending(event.getId(), ZonedDateTime.now())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("stale 복구 후 다시 claim된 행에는 이전 claim의 재시도 예약이 적용되지 않는다")
+    void staleReclaimed_previousClaimCannotScheduleRetry() {
+        OutboxEvent event = savePending("reclaimed-failed");
+        // 1차 claim (이 claim의 Publisher가 전송 실패 후 오래 멈춘 상황)
+        OutboxEvent firstClaim = outboxEventClaimer.claimBatch(ZonedDateTime.now(), 10).get(0);
+        ZonedDateTime firstClaimedAt = firstClaim.getClaimedAt();
+
+        // stale 복구로 PENDING이 된 동안에는 이전 claim의 실패 기록이 적용되지 않는다
+        outboxEventClaimer.recoverStaleProcessing(ZonedDateTime.now().plusMinutes(1), 10);
+        assertThat(outboxStatusUpdater.markFailed(event.getId(), firstClaimedAt)).isFalse();
+        OutboxEvent recovered = find(event);
+        assertThat(recovered.getStatus()).isEqualTo(OutboxStatus.PENDING);
+        assertThat(recovered.getRetryCount()).isZero();
+        assertThat(recovered.getNextRetryAt()).isNull();
+
+        // 다른 쪽(즉시 발행)이 다시 claim한 뒤에도 이전 claim의 실패 기록은 그 claim을 PENDING으로 되돌리지 않는다
+        OutboxEvent secondClaim = outboxEventClaimer.claimIfPending(event.getId(), ZonedDateTime.now()).orElseThrow();
+        assertThat(secondClaim.getClaimedAt()).isNotEqualTo(firstClaimedAt);
+        assertThat(outboxStatusUpdater.markFailed(event.getId(), firstClaimedAt)).isFalse();
+        OutboxEvent stillClaimed = find(event);
+        assertThat(stillClaimed.getStatus()).isEqualTo(OutboxStatus.PROCESSING);
+        assertThat(stillClaimed.getRetryCount()).isZero();
+        assertThat(stillClaimed.getNextRetryAt()).isNull();
+        assertThat(stillClaimed.getClaimedAt().toInstant()).isEqualTo(secondClaim.getClaimedAt().toInstant());
+
+        // 현재 claim의 실패 기록만 적용된다
+        assertThat(outboxStatusUpdater.markFailed(event.getId(), secondClaim.getClaimedAt())).isTrue();
+        OutboxEvent retry = find(event);
+        assertThat(retry.getStatus()).isEqualTo(OutboxStatus.PENDING);
+        assertThat(retry.getRetryCount()).isEqualTo(1);
+        assertThat(retry.getNextRetryAt()).isNotNull();
     }
 
     private OutboxEvent savePending(String aggregateId) {

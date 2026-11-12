@@ -68,7 +68,7 @@ public class OutboxPublisherJobTest {
 
         then(kafkaTemplate).should(times(1)).send("variant-created-event", "SKU-1", "{}");
         then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L)), any());
-        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong(), any());
     }
 
     @Test
@@ -82,7 +82,7 @@ public class OutboxPublisherJobTest {
 
         outboxPublisherJob.publish();
 
-        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(times(1)).markFailed(eq(1L), any());
         then(outboxStatusUpdater).should(never()).markSent(anyCollection(), any());
     }
 
@@ -97,7 +97,7 @@ public class OutboxPublisherJobTest {
 
         outboxPublisherJob.publish();
 
-        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(times(1)).markFailed(eq(1L), any());
     }
 
     @Test
@@ -108,7 +108,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(kafkaTemplate).should(never()).send(anyString(), anyString(), anyString());
-        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(times(1)).markFailed(eq(1L), any());
     }
 
     @Test
@@ -123,6 +123,6 @@ public class OutboxPublisherJobTest {
 
         outboxPublisherJob.publish();
 
-        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong(), any());
     }
 }

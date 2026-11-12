@@ -88,12 +88,12 @@ public class OutboxPublisherJob {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     log.error("Outbox publish interrupted. id={}, eventType={}", event.getId(), event.getEventType(), e);
-                    outboxStatusUpdater.markFailed(event.getId());
+                    outboxStatusUpdater.markFailed(event.getId(), event.getClaimedAt());
                     publishFailedCounter.increment();
                     break; // interrupt 플래그 복원 후 루프 종료 — 남은 PROCESSING은 stale 복구가 되돌린다
                 } catch (Exception e) {
                     log.error("Outbox publish failed. id={}, eventType={}", event.getId(), event.getEventType(), e);
-                    outboxStatusUpdater.markFailed(event.getId());
+                    outboxStatusUpdater.markFailed(event.getId(), event.getClaimedAt());
                     publishFailedCounter.increment();
                     continue;
                 }

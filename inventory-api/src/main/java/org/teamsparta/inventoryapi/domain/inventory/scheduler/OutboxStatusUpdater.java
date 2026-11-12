@@ -7,12 +7,11 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.teamsparta.inventoryapi.domain.inventory.entity.OutboxEvent;
 import org.teamsparta.inventoryapi.domain.inventory.repository.OutboxEventRepository;
-import org.teamsparta.inventoryapi.global.exception.DomainException;
-import org.teamsparta.inventoryapi.global.exception.DomainExceptionCode;
 
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.Collection;
+import java.util.Optional;
 
 @Component
 @RequiredArgsConstructor
@@ -40,11 +39,24 @@ public class OutboxStatusUpdater {
         return outboxEventRepository.markSentIfClaimed(ids, claimedAt, ZonedDateTime.now());
     }
 
+    /**
+     * 전송에 실패한 행의 재시도를 예약한다. SENT 기록과 같은 조건(PROCESSING이고 claimed_at이 자신의 claim 시각)인 행만
+     * 잠가서 바꾸므로, stale 복구 후 다시 claim된 행에는 이전 claim의 실패 기록이 적용되지 않는다.
+     *
+     * @param id        전송에 실패한 행 ID
+     * @param claimedAt 그 행을 claim할 때 기록한 claimed_at
+     * @return 재시도를 예약했으면 true, 이미 PENDING으로 되돌려졌거나 다른 쪽 claim으로 넘어간 행이면 false
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markFailed(Long id) {
-        OutboxEvent event = outboxEventRepository.findById(id)
-                .orElseThrow(() -> new DomainException(DomainExceptionCode.EVENT_NOT_FOUND));
+    public boolean markFailed(Long id, ZonedDateTime claimedAt) {
+        Optional<OutboxEvent> claimed = outboxEventRepository.findClaimedForUpdate(id, claimedAt);
+        if (claimed.isEmpty()) {
+            log.warn("Outbox event was re-claimed before retry was scheduled. id={}", id);
+            return false;
+        }
+        OutboxEvent event = claimed.get();
         event.markFailedAndScheduleRetry(MAX_RETRY, BASE_BACKOFF);
         outboxEventRepository.save(event);
+        return true;
     }
 }

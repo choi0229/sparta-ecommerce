@@ -77,7 +77,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L)), any());
-        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong(), any());
         then(kafkaTemplate).should(times(1)).send("inventory-created-event", AGGREGATE_ID, "{}");
     }
 
@@ -93,7 +93,7 @@ public class OutboxPublisherJobTest {
 
         outboxPublisherJob.publish();
 
-        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(times(1)).markFailed(eq(1L), any());
         then(outboxStatusUpdater).should(never()).markSent(anyCollection(), any());
     }
 
@@ -112,7 +112,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         // markFailed()는 절대 호출되면 안 된다 — 이미 발행된 이벤트를 재시도 대상으로 되돌리면 중복 발행
-        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong(), any());
         then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L)), any());
     }
 }

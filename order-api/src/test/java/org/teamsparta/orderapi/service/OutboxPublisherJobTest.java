@@ -68,7 +68,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L)), any());
-        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong(), any());
         then(kafkaTemplate).should(times(1)).send("order-create-event", AGGREGATE_ID, "{}");
     }
 
@@ -85,7 +85,7 @@ public class OutboxPublisherJobTest {
 
         outboxPublisherJob.publish();
 
-        then(outboxStatusUpdater).should(times(1)).markFailed(1L);
+        then(outboxStatusUpdater).should(times(1)).markFailed(eq(1L), any());
         then(outboxStatusUpdater).should(never()).markSent(anyCollection(), any());
     }
 
@@ -108,7 +108,7 @@ public class OutboxPublisherJobTest {
 
         then(kafkaTemplate).should(times(1)).send("payment-succeeded-event", AGGREGATE_ID, "{}");
         then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(2L)), any());
-        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong(), any());
     }
 
     @Test
@@ -130,7 +130,7 @@ public class OutboxPublisherJobTest {
 
         then(kafkaTemplate).should(times(1)).send("payment-failed-event", AGGREGATE_ID, "{}");
         then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(3L)), any());
-        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong(), any());
     }
 
     @Test
@@ -145,7 +145,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(kafkaTemplate).should(never()).send(anyString(), anyString(), anyString());
-        then(outboxStatusUpdater).should(times(1)).markFailed(4L);
+        then(outboxStatusUpdater).should(times(1)).markFailed(eq(4L), any());
         then(outboxStatusUpdater).should(never()).markSent(anyCollection(), any());
     }
 
@@ -165,7 +165,7 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         // 이미 발행된 이벤트를 재시도 대상으로 되돌리면 중복 발행된다 — PROCESSING은 stale 복구가 되돌린다
-        then(outboxStatusUpdater).should(never()).markFailed(anyLong());
+        then(outboxStatusUpdater).should(never()).markFailed(anyLong(), any());
         then(kafkaTemplate).should(times(1)).send("order-create-event", "200", "{}");
     }
 
@@ -189,9 +189,9 @@ public class OutboxPublisherJobTest {
         outboxPublisherJob.publish();
 
         then(outboxStatusUpdater).should(times(1)).markSent(eq(List.of(1L, 6L)), any());
-        then(outboxStatusUpdater).should(times(1)).markFailed(5L);
-        then(outboxStatusUpdater).should(never()).markFailed(1L);
-        then(outboxStatusUpdater).should(never()).markFailed(6L);
+        then(outboxStatusUpdater).should(times(1)).markFailed(eq(5L), any());
+        then(outboxStatusUpdater).should(never()).markFailed(eq(1L), any());
+        then(outboxStatusUpdater).should(never()).markFailed(eq(6L), any());
     }
 
     @Test

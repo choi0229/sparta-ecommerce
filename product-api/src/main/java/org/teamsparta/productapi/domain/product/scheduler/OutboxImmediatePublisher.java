@@ -150,7 +150,7 @@ public class OutboxImmediatePublisher implements DisposableBean {
         log.error("Immediate outbox publish failed, retry scheduled. id={}, eventType={}",
                 event.getId(), event.getEventType(), cause);
         try {
-            outboxStatusUpdater.markFailed(event.getId());
+            outboxStatusUpdater.markFailed(event.getId(), event.getClaimedAt());
         } catch (Exception e) {
             log.error("Retry scheduling failed; stale recovery will reset it. id={}", event.getId(), e);
         }
